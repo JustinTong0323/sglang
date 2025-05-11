@@ -7,6 +7,7 @@ from sglang.srt.managers.multimodal_processors.base_processor import (
     MultimodalSpecialTokens,
 )
 from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
+from sglang.srt.models.gemma3_5_causal import Gemma3p5MatFormerForCausalLM
 from sglang.srt.models.gemma3_mm import Gemma3ForConditionalGeneration
 
 # Copied from: https://github.com/huggingface/transformers/blob/main/src/transformers/models/gemma3/image_processing_gemma3_fast.py
@@ -14,7 +15,7 @@ from sglang.srt.models.gemma3_mm import Gemma3ForConditionalGeneration
 
 
 class Gemma3SGLangImageProcessor(SGLangBaseProcessor):
-    models = [Gemma3ForConditionalGeneration]
+    models = [Gemma3ForConditionalGeneration, Gemma3p5MatFormerForCausalLM]
 
     def __init__(self, hf_config, server_args, _processor):
         super().__init__(hf_config, server_args, _processor)

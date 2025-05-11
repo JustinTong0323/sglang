@@ -21,11 +21,11 @@ from torch import nn
 from transformers import (
     ROPE_INIT_FUNCTIONS,
     AutoModel,
-    Gemma3p5TextConfig,
     PretrainedConfig,
     PreTrainedModel,
 )
 
+from sglang.srt.configs import Gemma3p5TextConfig
 from sglang.srt.distributed import get_tensor_model_parallel_world_size
 from sglang.srt.layers.activation import GeluAndMul
 from sglang.srt.layers.layernorm import Gemma3RMSNorm
@@ -518,6 +518,8 @@ class Gemma3p5MatFormerMLP(Gemma3p5MLP):
 
 
 class Gemma3p5MatFormerForCausalLM(Gemma3p5ForCausalLM):
+    model_type = "gemma3p5_text"
+
     def __init__(self, config):
         super().__init__(config)
         scale_factors = config.matformer_scale_factors

@@ -909,7 +909,7 @@ def match_qwen_chat_ml(model_path: str):
 
 @register_conv_template_matching_function
 def match_gemma3_instruct(model_path: str):
-    if re.search(r"gemma-3.*it", model_path, re.IGNORECASE):
+    if re.search(r"gemma*3.*it", model_path, re.IGNORECASE):
         return "gemma-it"
 
 
