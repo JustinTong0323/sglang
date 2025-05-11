@@ -7,7 +7,6 @@ from sglang.srt.managers.multimodal_processors.base_processor import (
     MultimodalSpecialTokens,
 )
 from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
-from sglang.srt.models.gemma3_5_causal import Gemma3p5MatFormerForCausalLM
 from sglang.srt.models.gemma3_5_mm import Gemma3p5ForConditionalGeneration
 from sglang.srt.models.gemma3_mm import Gemma3ForConditionalGeneration
 

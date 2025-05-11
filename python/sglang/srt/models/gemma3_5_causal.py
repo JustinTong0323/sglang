@@ -444,161 +444,6 @@ class AltUP_Projection(nn.Module):
         return f"{tuple(self.weight.shape)}, eps={self.eps}"
 
 
-class Gemma3p5ForCausalLM(PreTrainedModel):
-    config_class = Gemma3p5TextConfig
-
-    _tied_weights_keys = ["lm_head.weight"]
-    _tp_plan = {"lm_head": "colwise_rep"}
-    _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
-    config_class = Gemma3p5TextConfig
-    base_model_prefix = "language_model"
-
-    # BitandBytes specific attributes
-    default_bitsandbytes_target_modules = [
-        ".gate_proj.",
-        ".down_proj.",
-        ".up_proj.",
-        ".q_proj.",
-        ".k_proj.",
-        ".v_proj.",
-        ".o_proj.",
-    ]
-    bitsandbytes_stacked_params_mapping = {
-        # shard_name, weight_name, index
-        "q_proj": ("qkv_proj", 0),
-        "k_proj": ("qkv_proj", 1),
-        "v_proj": ("qkv_proj", 2),
-        "gate_proj": ("gate_up_proj", 0),
-        "up_proj": ("gate_up_proj", 1),
-    }
-
-    packed_modules_mapping = {
-        "qkv_proj": [
-            "q_proj",
-            "k_proj",
-            "v_proj",
-        ],
-        "gate_up_proj": [
-            "gate_proj",
-            "up_proj",
-        ],
-    }
-
-    # LoRA specific attributes
-    supported_lora_modules = [
-        "qkv_proj",
-        "o_proj",
-        "gate_up_proj",
-        "down_proj",
-    ]
-    # Gemma does not apply LoRA to the embedding layer.
-    embedding_modules = {}
-    embedding_padding_modules = []
-    supports_lora = True
-
-    def __init__(
-        self,
-        config: Gemma3p5Config,
-        quant_config: Optional[QuantizationConfig] = None,
-        prefix: str = "",
-    ) -> None:
-        super().__init__(config=config)
-        self.config = config
-        self.quant_config = quant_config
-        self.model = Gemma3p5TextModel(
-            config=config.text_config,
-            quant_config=quant_config,
-            prefix=add_prefix("model", prefix),
-        )
-        self.logits_processor = LogitsProcessor(config)
-
-        if self.config.tie_word_embeddings:
-            self.lm_head = self.model.embed_tokens
-        else:
-            self.lm_head = ParallelLMHead(
-                config.vocab_size,
-                config.hidden_size,
-                quant_config=quant_config,
-                prefix=add_prefix("lm_head", prefix),
-            )
-        self.post_init()
-
-    def get_input_embeddings(self) -> nn.Embedding:
-        return self.model.embed_tokens
-
-    def get_attention_sliding_window_size(self):
-        return get_attention_sliding_window_size(self.config)
-
-    def dtype(self) -> torch.dtype:
-        return next(self.parameters()).dtype
-
-    @torch.no_grad()
-    def forward(
-        self,
-        input_ids: torch.Tensor,
-        positions: torch.Tensor,
-        forward_batch: ForwardBatch,
-        input_embeds: torch.Tensor = None,
-        **kwargs,
-    ) -> LogitsProcessor:
-        hidden_states = self.model(
-            input_ids, positions, forward_batch, input_embeds, **kwargs
-        )
-
-        return self.logits_processor(
-            input_ids, hidden_states, self.model.embed_tokens, forward_batch
-        )
-
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        stacked_params_mapping = [
-            # (param_name, shard_name, shard_id)
-            ("qkv_proj", "q_proj", "q"),
-            ("qkv_proj", "k_proj", "k"),
-            ("qkv_proj", "v_proj", "v"),
-            ("gate_up_proj", "gate_proj", 0),
-            ("gate_up_proj", "up_proj", 1),
-        ]
-        params_dict = dict(self.named_parameters())
-        loaded_params: Set[str] = set()
-        for name, loaded_weight in weights:
-            for param_name, shard_name, shard_id in stacked_params_mapping:
-                # if param_name in name:
-                # print(f"{param_name} is already in {name}")
-                if shard_name not in name:
-                    continue
-                name = name.replace(shard_name, param_name)
-                # Skip loading extra bias for GPTQ models.
-                if name.endswith(".bias") and name not in params_dict:
-                    continue
-                param = params_dict[name]
-                weight_loader = param.weight_loader
-                weight_loader(param, loaded_weight, shard_id)
-                break
-            else:
-                # lm_head is not used in vllm as it is tied with embed_token.
-                # To prevent errors, skip loading lm_head.weight.
-                if "lm_head.weight" in name:
-                    continue
-                # Skip loading extra bias for GPTQ models.
-                if name.endswith(".bias") and name not in params_dict:
-                    continue
-                # Remapping the name of FP8 kv-scale.
-                name = maybe_remap_kv_scale_name(name, params_dict)
-                if name is None:
-                    continue
-
-                param = params_dict[name]
-                weight_loader = getattr(param, "weight_loader", default_weight_loader)
-                weight_loader(param, loaded_weight)
-            loaded_params.add(name)
-        # unloaded_params = params_dict.keys() - loaded_params
-        # if unloaded_params:
-        #     logger.warning(
-        #         "Some weights are not initialized from checkpoints: %s", unloaded_params
-        #     )
-        return loaded_params
-
-
 # Copied and modified from https://github.com/devvrit/matformer/blob/main/modified_llama.py
 # TODO: not modified for Gemma3p5 yet
 class Gemma3p5MatFormerMLP(Gemma3p5MLP):
@@ -704,11 +549,85 @@ class AltUp(nn.Module):
         return x_new
 
 
-class Gemma3p5MatFormerForCausalLM(Gemma3p5ForCausalLM):
-    model_type = "gemma3p5_text"
+class Gemma3p5ForCausalLM(PreTrainedModel):
+    config_class = Gemma3p5TextConfig
 
-    def __init__(self, config: Gemma3p5Config):
-        super().__init__(config)
+    _tied_weights_keys = ["lm_head.weight"]
+    _tp_plan = {"lm_head": "colwise_rep"}
+    _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
+    config_class = Gemma3p5TextConfig
+    base_model_prefix = "language_model"
+
+    # BitandBytes specific attributes
+    default_bitsandbytes_target_modules = [
+        ".gate_proj.",
+        ".down_proj.",
+        ".up_proj.",
+        ".q_proj.",
+        ".k_proj.",
+        ".v_proj.",
+        ".o_proj.",
+    ]
+    bitsandbytes_stacked_params_mapping = {
+        # shard_name, weight_name, index
+        "q_proj": ("qkv_proj", 0),
+        "k_proj": ("qkv_proj", 1),
+        "v_proj": ("qkv_proj", 2),
+        "gate_proj": ("gate_up_proj", 0),
+        "up_proj": ("gate_up_proj", 1),
+    }
+
+    packed_modules_mapping = {
+        "qkv_proj": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+        ],
+        "gate_up_proj": [
+            "gate_proj",
+            "up_proj",
+        ],
+    }
+
+    # LoRA specific attributes
+    supported_lora_modules = [
+        "qkv_proj",
+        "o_proj",
+        "gate_up_proj",
+        "down_proj",
+    ]
+    # Gemma does not apply LoRA to the embedding layer.
+    embedding_modules = {}
+    embedding_padding_modules = []
+    supports_lora = True
+
+    def __init__(
+        self,
+        config: Gemma3p5Config,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ) -> None:
+        super().__init__(config=config)
+        self.config = config
+        self.quant_config = quant_config
+        self.model = Gemma3p5TextModel(
+            config=config.text_config,
+            quant_config=quant_config,
+            prefix=add_prefix("model", prefix),
+        )
+        self.logits_processor = LogitsProcessor(config)
+
+        if self.config.tie_word_embeddings:
+            self.lm_head = self.model.embed_tokens
+        else:
+            self.lm_head = ParallelLMHead(
+                config.vocab_size,
+                config.hidden_size,
+                quant_config=quant_config,
+                prefix=add_prefix("lm_head", prefix),
+            )
+
+        # config.matformer_scale_factors and config.matformer_flag are not seen in the config file
         scale_factors = config.matformer_scale_factors
 
         # Replace FFN in each layer with ModifiedFFN
@@ -717,10 +636,90 @@ class Gemma3p5MatFormerForCausalLM(Gemma3p5ForCausalLM):
                 config, scale_factors
             )
 
+        self.configure_subnetwork(config.matformer_flag)
+
+        self.post_init()
+
     def configure_subnetwork(self, flag):
         """Configure the subnetwork for all layers based on the flag."""
         for layer_idx in range(len(self.model.layers)):
             self.model.layers[layer_idx].mlp.configure_subnetwork(flag)
 
+    def get_input_embeddings(self) -> nn.Embedding:
+        return self.model.embed_tokens
 
-EntryClass = Gemma3p5MatFormerForCausalLM
+    def get_attention_sliding_window_size(self):
+        return get_attention_sliding_window_size(self.config)
+
+    def dtype(self) -> torch.dtype:
+        return next(self.parameters()).dtype
+
+    @torch.no_grad()
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor,
+        forward_batch: ForwardBatch,
+        input_embeds: torch.Tensor = None,
+        **kwargs,
+    ) -> LogitsProcessor:
+        hidden_states = self.model(
+            input_ids, positions, forward_batch, input_embeds, **kwargs
+        )
+
+        return self.logits_processor(
+            input_ids, hidden_states, self.model.embed_tokens, forward_batch
+        )
+
+    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        stacked_params_mapping = [
+            # (param_name, shard_name, shard_id)
+            ("qkv_proj", "q_proj", "q"),
+            ("qkv_proj", "k_proj", "k"),
+            ("qkv_proj", "v_proj", "v"),
+            ("gate_up_proj", "gate_proj", 0),
+            ("gate_up_proj", "up_proj", 1),
+        ]
+        params_dict = dict(self.named_parameters())
+        loaded_params: Set[str] = set()
+        for name, loaded_weight in weights:
+            for param_name, shard_name, shard_id in stacked_params_mapping:
+                # if param_name in name:
+                # print(f"{param_name} is already in {name}")
+                if shard_name not in name:
+                    continue
+                name = name.replace(shard_name, param_name)
+                # Skip loading extra bias for GPTQ models.
+                if name.endswith(".bias") and name not in params_dict:
+                    continue
+                param = params_dict[name]
+                weight_loader = param.weight_loader
+                weight_loader(param, loaded_weight, shard_id)
+                break
+            else:
+                # lm_head is not used in vllm as it is tied with embed_token.
+                # To prevent errors, skip loading lm_head.weight.
+                if "lm_head.weight" in name:
+                    continue
+                # Skip loading extra bias for GPTQ models.
+                if name.endswith(".bias") and name not in params_dict:
+                    continue
+                # Remapping the name of FP8 kv-scale.
+                name = maybe_remap_kv_scale_name(name, params_dict)
+                if name is None:
+                    continue
+
+                param = params_dict[name]
+                weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                weight_loader(param, loaded_weight)
+            loaded_params.add(name)
+        # unloaded_params = params_dict.keys() - loaded_params
+        # if unloaded_params:
+        #     logger.warning(
+        #         "Some weights are not initialized from checkpoints: %s", unloaded_params
+        #     )
+        return loaded_params
+
+
+EntryClass = Gemma3p5ForCausalLM
+AutoModel.register(Gemma3p5Config, Gemma3p5ForCausalLM, exist_ok=True)
