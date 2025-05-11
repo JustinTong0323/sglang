@@ -1,0 +1,538 @@
+# Copyright 2025 SGLang Team
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+import copy
+from typing import Iterable, Optional, Set, Tuple
+
+import einops
+import torch
+import torch.nn.functional as F
+from torch import nn
+from transformers import (
+    ROPE_INIT_FUNCTIONS,
+    AutoModel,
+    Gemma3p5TextConfig,
+    PretrainedConfig,
+    PreTrainedModel,
+)
+
+from sglang.srt.distributed import get_tensor_model_parallel_world_size
+from sglang.srt.layers.activation import GeluAndMul
+from sglang.srt.layers.layernorm import Gemma3RMSNorm
+from sglang.srt.layers.linear import (
+    MergedColumnParallelLinear,
+    QKVParallelLinear,
+    RowParallelLinear,
+)
+from sglang.srt.layers.logits_processor import LogitsProcessor
+from sglang.srt.layers.quantization.base_config import QuantizationConfig
+from sglang.srt.layers.radix_attention import RadixAttention
+from sglang.srt.layers.rotary_embedding import apply_rotary_pos_emb
+from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
+from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+from sglang.srt.model_loader.weight_utils import (
+    default_weight_loader,
+    maybe_remap_kv_scale_name,
+)
+from sglang.srt.models.gemma3_causal import (
+    Gemma3Attention,
+    Gemma3RotaryEmbedding,
+    Gemma3TextScaledWordEmbedding,
+)
+from sglang.srt.utils import add_prefix, make_layers
+
+
+# Aligned with HF's implementation, using sliding window inclusive with the last token
+# SGLang assumes exclusive
+def get_attention_sliding_window_size(config):
+    return config.sliding_window - 1
+
+
+# Adapted from:
+# https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/gemma3.py
+def extract_layer_index(prefix: str) -> int:
+    """Extract the layer index from a prefix string."""
+    parts = prefix.split(".")
+    for part in parts:
+        if part.startswith("layers."):
+            layer_str = part.split(".")[-1]
+            try:
+                return int(layer_str)
+            except ValueError:
+                continue
+    return -1
+
+
+class Gemma3p5MLP(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        intermediate_size: int,
+        hidden_activation: str,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ) -> None:
+        super().__init__()
+        self.gate_up_proj = MergedColumnParallelLinear(
+            hidden_size,
+            [intermediate_size] * 2,
+            bias=False,
+            quant_config=quant_config,
+            prefix=add_prefix("gate_up_proj", prefix),
+        )
+        self.down_proj = RowParallelLinear(
+            intermediate_size,
+            hidden_size,
+            bias=False,
+            quant_config=quant_config,
+            prefix=add_prefix("down_proj", prefix),
+        )
+        if hidden_activation != "gelu_pytorch_tanh":
+            raise ValueError(
+                "Gemma3p5 uses `gelu_pytorch_tanh` as the hidden activation "
+                "function. Please set `hidden_activation` to "
+                "`gelu_pytorch_tanh`."
+            )
+        self.act_fn = GeluAndMul()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        gate_up, _ = self.gate_up_proj(x)
+        x = self.act_fn(gate_up)
+        x, _ = self.down_proj(x)
+        return x
+
+
+class Gemma3p5DecoderLayer(nn.Module):
+    def __init__(
+        self,
+        layer_id: int,
+        config: PretrainedConfig,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ) -> None:
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.self_attn = Gemma3Attention(
+            layer_id=layer_id,
+            config=config,
+            max_position_embeddings=config.max_position_embeddings,
+            quant_config=quant_config,
+            prefix=add_prefix("self_attn", prefix),
+        )
+        self.hidden_size = config.hidden_size
+        self.mlp = Gemma3p5MatFormerMLP(
+            config=config,
+            scale_factors=config.matformer_scale_factors,
+            quant_config=quant_config,
+            prefix=add_prefix("mlp", prefix),
+        )
+        self.input_layernorm = Gemma3RMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps
+        )
+        self.post_attention_layernorm = Gemma3RMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps
+        )
+        self.pre_feedforward_layernorm = Gemma3RMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps
+        )
+        self.post_feedforward_layernorm = Gemma3RMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps
+        )
+        self.laurel_lr = Gemma3p5LaurelLR(config.hidden_size, config.laurel_rank)
+
+        self.is_sliding = self.self_attn.is_sliding
+        self.layer_id = layer_id
+
+    def forward(
+        self,
+        positions: torch.Tensor,
+        hidden_states: torch.Tensor,
+        position_embeddings_global: torch.Tensor,
+        position_embeddings_local: torch.Tensor,
+        forward_batch: ForwardBatch,
+        **kwargs,
+    ) -> tuple[
+        torch.FloatTensor, Optional[tuple[torch.FloatTensor, torch.FloatTensor]]
+    ]:
+        # TODO: add AltUP, PerLayerEmbedding and ....
+
+        residual = hidden_states
+        hidden_states = self.input_layernorm(hidden_states)
+
+        # apply global RoPE to non-sliding layer only
+        if self.self_attn.is_sliding:
+            position_embeddings = position_embeddings_local
+        else:
+            position_embeddings = position_embeddings_global
+
+        hidden_states = self.self_attn(
+            positions=positions,
+            hidden_states=hidden_states,
+            position_embeddings=position_embeddings,
+            forward_batch=forward_batch,
+            **kwargs,
+        )
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = residual + hidden_states + self.laurel_lr(residual)
+
+        residual = hidden_states
+        hidden_states = self.pre_feedforward_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = self.post_feedforward_layernorm(hidden_states)
+        hidden_states = residual + hidden_states + self.laurel_lr(residual)
+
+        outputs = (hidden_states,)
+
+        return outputs
+
+
+class Gemma3p5LaurelLR(nn.Module):
+    def __init__(self, hidden_size: int, laurel_rank: int):
+        super().__init__()
+        # Linear layer for down-projection A: D -> r
+        # Weight shape: (laurel_rank, hidden_size) -> (64, 2048)
+        self.linear_left = nn.Linear(hidden_size, laurel_rank, bias=False)
+
+        # Linear layer for up-projection B: r -> D
+        # Weight shape: (hidden_size, laurel_rank) -> (2048, 64)
+        self.linear_right = nn.Linear(laurel_rank, hidden_size, bias=False)
+
+    def forward(self, x_i: torch.Tensor) -> torch.Tensor:
+        """
+        Computes the LAUREL-LR modification term: B(A(x_i)).
+
+        Args:
+            x_i (torch.Tensor): Input tensor, shape (..., hidden_size).
+                                This is x_i in the paper's equation.
+
+        Returns:
+            torch.Tensor: The LAUREL modification (BAx_i), shape (..., hidden_size).
+        """
+        # Project down: A(x_i)
+        # x_i shape: (..., 2048) -> temp shape: (..., 64)
+        temp = self.linear_left(x_i)
+
+        # Project up: B(A(x_i))
+        # temp shape: (..., 64) -> output shape: (..., 2048)
+        output = self.linear_right(temp)
+
+        return output
+
+
+# TODO: add modules
+class Gemma3p5AltUP(nn.Module):
+    pass
+
+
+class Gemma3p5PerLayerEmbedding(nn.Module):
+    pass
+
+
+class Gemma3p5TextModel(PreTrainedModel):
+    def __init__(
+        self,
+        config: Gemma3p5TextConfig,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ) -> None:
+        super().__init__(config=config)
+        self.config = config
+        self.quant_config = quant_config
+
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+
+        # Gemma3 downcasts the below to float16, causing sqrt(3072)=55.4256 to become 55.5. See https://github.com/huggingface/transformers/pull/29402
+        self.embed_tokens = Gemma3TextScaledWordEmbedding(
+            config.vocab_size,
+            config.hidden_size,
+            self.padding_idx,
+            embed_scale=self.config.hidden_size**0.5,
+        )
+
+        self.norm = Gemma3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.rotary_emb = Gemma3RotaryEmbedding(config=config)
+        self.gradient_checkpointing = False
+
+        # when we want to create a local RoPE layer. Config defaults should hold values for global RoPE
+        config = copy.deepcopy(config)
+        config.rope_theta = config.rope_local_base_freq
+        config.rope_scaling = {"rope_type": "default"}
+        self.rotary_emb_local = Gemma3RotaryEmbedding(config=config)
+
+        self.layers = make_layers(
+            config.num_hidden_layers,
+            lambda idx, prefix: Gemma3p5DecoderLayer(
+                layer_id=idx,
+                config=config,
+                quant_config=quant_config,
+                prefix=prefix,
+            ),
+            prefix=add_prefix("layers", prefix),
+        )
+        self.norm = Gemma3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_init()
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor,
+        forward_batch: ForwardBatch,
+        input_embeds: torch.Tensor = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        if input_embeds is None:
+            hidden_states = self.embed_tokens(input_ids)
+        else:
+            hidden_states = input_embeds
+
+        if positions.dim() == 1:
+            positions = einops.rearrange(positions, "s -> 1 s")
+
+        position_embeddings_global = self.rotary_emb(hidden_states, positions)
+        position_embeddings_local = self.rotary_emb_local(hidden_states, positions)
+        for layer in self.layers:
+            layer_outputs = layer(
+                positions=positions,
+                position_embeddings_global=position_embeddings_global,
+                position_embeddings_local=position_embeddings_local,
+                hidden_states=hidden_states,
+                forward_batch=forward_batch,
+                **kwargs,
+            )
+            hidden_states = layer_outputs[0]
+
+        hidden_states = self.norm(hidden_states)
+
+        return hidden_states
+
+
+class Gemma3p5ForCausalLM(PreTrainedModel):
+    config_class = Gemma3p5TextConfig
+
+    _tied_weights_keys = ["lm_head.weight"]
+    _tp_plan = {"lm_head": "colwise_rep"}
+    _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
+    config_class = Gemma3p5TextConfig
+    base_model_prefix = "language_model"
+
+    # BitandBytes specific attributes
+    default_bitsandbytes_target_modules = [
+        ".gate_proj.",
+        ".down_proj.",
+        ".up_proj.",
+        ".q_proj.",
+        ".k_proj.",
+        ".v_proj.",
+        ".o_proj.",
+    ]
+    bitsandbytes_stacked_params_mapping = {
+        # shard_name, weight_name, index
+        "q_proj": ("qkv_proj", 0),
+        "k_proj": ("qkv_proj", 1),
+        "v_proj": ("qkv_proj", 2),
+        "gate_proj": ("gate_up_proj", 0),
+        "up_proj": ("gate_up_proj", 1),
+    }
+
+    packed_modules_mapping = {
+        "qkv_proj": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+        ],
+        "gate_up_proj": [
+            "gate_proj",
+            "up_proj",
+        ],
+    }
+
+    # LoRA specific attributes
+    supported_lora_modules = [
+        "qkv_proj",
+        "o_proj",
+        "gate_up_proj",
+        "down_proj",
+    ]
+    # Gemma does not apply LoRA to the embedding layer.
+    embedding_modules = {}
+    embedding_padding_modules = []
+    supports_lora = True
+
+    def __init__(
+        self,
+        config: Gemma3p5TextConfig,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ) -> None:
+        super().__init__(config=config)
+        self.config = config
+        self.quant_config = quant_config
+        self.model = Gemma3p5TextModel(
+            config, quant_config, prefix=add_prefix("model", prefix)
+        )
+        self.logits_processor = LogitsProcessor(config)
+
+        if self.config.tie_word_embeddings:
+            self.lm_head = self.model.embed_tokens
+        else:
+            self.lm_head = ParallelLMHead(
+                config.vocab_size,
+                config.hidden_size,
+                quant_config=quant_config,
+                prefix=add_prefix("lm_head", prefix),
+            )
+        self.post_init()
+
+    def get_input_embeddings(self) -> nn.Embedding:
+        return self.model.embed_tokens
+
+    def get_attention_sliding_window_size(self):
+        return get_attention_sliding_window_size(self.config)
+
+    def dtype(self) -> torch.dtype:
+        return next(self.parameters()).dtype
+
+    @torch.no_grad()
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor,
+        forward_batch: ForwardBatch,
+        input_embeds: torch.Tensor = None,
+        **kwargs,
+    ) -> LogitsProcessor:
+        hidden_states = self.model(
+            input_ids, positions, forward_batch, input_embeds, **kwargs
+        )
+
+        return self.logits_processor(
+            input_ids, hidden_states, self.model.embed_tokens, forward_batch
+        )
+
+    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        stacked_params_mapping = [
+            # (param_name, shard_name, shard_id)
+            ("qkv_proj", "q_proj", "q"),
+            ("qkv_proj", "k_proj", "k"),
+            ("qkv_proj", "v_proj", "v"),
+            ("gate_up_proj", "gate_proj", 0),
+            ("gate_up_proj", "up_proj", 1),
+        ]
+        params_dict = dict(self.named_parameters())
+        loaded_params: Set[str] = set()
+        for name, loaded_weight in weights:
+            for param_name, shard_name, shard_id in stacked_params_mapping:
+                # if param_name in name:
+                # print(f"{param_name} is already in {name}")
+                if shard_name not in name:
+                    continue
+                name = name.replace(shard_name, param_name)
+                # Skip loading extra bias for GPTQ models.
+                if name.endswith(".bias") and name not in params_dict:
+                    continue
+                param = params_dict[name]
+                weight_loader = param.weight_loader
+                weight_loader(param, loaded_weight, shard_id)
+                break
+            else:
+                # lm_head is not used in vllm as it is tied with embed_token.
+                # To prevent errors, skip loading lm_head.weight.
+                if "lm_head.weight" in name:
+                    continue
+                # Skip loading extra bias for GPTQ models.
+                if name.endswith(".bias") and name not in params_dict:
+                    continue
+                # Remapping the name of FP8 kv-scale.
+                name = maybe_remap_kv_scale_name(name, params_dict)
+                if name is None:
+                    continue
+
+                param = params_dict[name]
+                weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                weight_loader(param, loaded_weight)
+            loaded_params.add(name)
+        # unloaded_params = params_dict.keys() - loaded_params
+        # if unloaded_params:
+        #     logger.warning(
+        #         "Some weights are not initialized from checkpoints: %s", unloaded_params
+        #     )
+        return loaded_params
+
+
+# Copied and modified from https://github.com/devvrit/matformer/blob/main/modified_llama.py
+# TODO: not modified for Gemma3p5 yet
+class Gemma3p5MatFormerMLP(Gemma3p5MLP):
+    def __init__(self, config, scale_factors, quant_config=None, prefix=""):
+        super().__init__(
+            hidden_size=config.hidden_size,
+            intermediate_size=config.intermediate_size,
+            hidden_activation=config.hidden_activation,
+            quant_config=quant_config,
+            prefix=prefix,
+        )
+        self.intermediate_size = config.intermediate_size
+        self.scale_factors = (
+            scale_factors  # List of scale factors for 's', 'm', 'l', 'xl'
+        )
+        self.current_subset_hd = None
+
+    def configure_subnetwork(self, flag):
+        """Configure subnetwork size based on flag."""
+        hd = self.intermediate_size
+        if flag == "s":
+            scale = self.scale_factors[0]  # hd/8
+        elif flag == "m":
+            scale = self.scale_factors[1]  # hd/4
+        elif flag == "l":
+            scale = self.scale_factors[2]  # hd/2
+        else:  # 'xl'
+            scale = self.scale_factors[3]  # hd
+
+        self.current_subset_hd = int(hd * scale)
+
+    def forward(self, x):
+        if self.current_subset_hd is None:
+            raise ValueError(
+                "Subnetwork size not configured. Call `configure_subnetwork` first."
+            )
+        gate_proj = self.gate_proj.weight[: self.current_subset_hd]
+        up_proj = self.up_proj.weight[: self.current_subset_hd]
+        down_proj = self.down_proj.weight[:, : self.current_subset_hd]
+        down_proj = F.linear(
+            self.act_fn(F.linear(x, gate_proj) * F.linear(x, up_proj)), down_proj
+        )
+        self.current_subset_hd = None
+
+        return down_proj
+
+
+class Gemma3p5MatFormerForCausalLM(Gemma3p5ForCausalLM):
+    def __init__(self, config):
+        super().__init__(config)
+        scale_factors = config.matformer_scale_factors
+
+        # Replace FFN in each layer with ModifiedFFN
+        for layer_idx in range(config.num_hidden_layers):
+            self.model.layers[layer_idx].mlp = Gemma3p5MatFormerMLP(
+                config, scale_factors
+            )
+
+    def configure_subnetwork(self, flag):
+        """Configure the subnetwork for all layers based on the flag."""
+        for layer_idx in range(len(self.model.layers)):
+            self.model.layers[layer_idx].mlp.configure_subnetwork(flag)
+
+
+EntryClass = Gemma3p5MatFormerForCausalLM
+AutoModel.register(Gemma3p5TextConfig, Gemma3p5MatFormerForCausalLM, exist_ok=True)
