@@ -2,7 +2,7 @@
 from typing import Any, Dict, Optional, Union
 
 from transformers import PretrainedConfig, SiglipVisionConfig, logging
-from transformers.modeling_utils import rope_config_validation
+from transformers.modeling_rope_utils import rope_config_validation
 
 # from ...configuration_utils import PretrainedConfig
 # from ...modeling_rope_utils import rope_config_validation
