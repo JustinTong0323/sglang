@@ -37,7 +37,7 @@ from sglang.srt.configs import (
     DbrxConfig,
     DeepseekVL2Config,
     ExaoneConfig,
-    Gemma3p5TextConfig,
+    Gemma3p5Config,
     KimiVLConfig,
     MultiModalityConfig,
 )
@@ -53,7 +53,7 @@ _CONFIG_REGISTRY: Dict[str, Type[PretrainedConfig]] = {
     MultiModalityConfig.model_type: MultiModalityConfig,
     KimiVLConfig.model_type: KimiVLConfig,
     InternVLChatConfig.model_type: InternVLChatConfig,
-    Gemma3p5TextConfig.model_type: Gemma3p5TextConfig,
+    Gemma3p5Config.model_type: Gemma3p5Config,
 }
 
 for name, cls in _CONFIG_REGISTRY.items():

@@ -12,15 +12,15 @@
 # limitations under the License.
 # ==============================================================================
 import copy
-from typing import Iterable, Optional, Set, Tuple
+from typing import Iterable, List, Optional, Set, Tuple
 
 import einops
 import torch
 import torch.nn.functional as F
 from torch import nn
-from transformers import AutoModel, PretrainedConfig, PreTrainedModel
+from transformers import AutoModel, PreTrainedModel
 
-from sglang.srt.configs import Gemma3p5TextConfig
+from sglang.srt.configs import Gemma3p5Config, Gemma3p5TextConfig
 from sglang.srt.layers.activation import GeluAndMul
 from sglang.srt.layers.layernorm import Gemma3RMSNorm
 from sglang.srt.layers.linear import (
@@ -104,11 +104,47 @@ class Gemma3p5MLP(nn.Module):
         return x
 
 
+class Gemma3p5LaurelLR(nn.Module):
+    # LaurelLR for SGLang
+    def __init__(
+        self,
+        hidden_size: int,
+        laurel_rank: int,
+        quant_config: Optional["QuantizationConfig"] = None,
+        prefix: str = "",
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.laurel_rank = laurel_rank
+
+        self.linear_left = ColumnParallelLinear(
+            input_size=hidden_size,
+            output_size=laurel_rank,
+            bias=False,
+            quant_config=quant_config,
+            prefix=add_prefix(prefix, "linear_left"),
+        )
+
+        self.linear_right = RowParallelLinear(
+            input_size=laurel_rank,
+            output_size=hidden_size,
+            bias=False,
+            quant_config=quant_config,
+            prefix=add_prefix(prefix, "linear_right"),
+        )
+
+    def forward(self, x_i: torch.Tensor) -> torch.Tensor:
+        temp, _ = self.linear_left(x_i)
+        output, _ = self.linear_right(temp)
+
+        return output
+
+
 class Gemma3p5DecoderLayer(nn.Module):
     def __init__(
         self,
         layer_id: int,
-        config: PretrainedConfig,
+        config: Gemma3p5TextConfig,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
     ) -> None:
@@ -145,10 +181,13 @@ class Gemma3p5DecoderLayer(nn.Module):
         self.is_sliding = self.self_attn.is_sliding
         self.layer_id = layer_id
 
+        self.altup = Gemma3p5AltUP(config=config)
+        self.config = config
+
     def forward(
         self,
         positions: torch.Tensor,
-        hidden_states: torch.Tensor,
+        blocks: List[torch.Tensor],
         position_embeddings_global: torch.Tensor,
         position_embeddings_local: torch.Tensor,
         forward_batch: ForwardBatch,
@@ -156,9 +195,17 @@ class Gemma3p5DecoderLayer(nn.Module):
     ) -> tuple[
         torch.FloatTensor, Optional[tuple[torch.FloatTensor, torch.FloatTensor]]
     ]:
-        # TODO: add AltUP, PerLayerEmbedding and ....
+        # TODO: add PerLayerEmbedding and ....
 
-        residual = hidden_states
+        # 1. predict the updated representation for each blocks
+        predicted_blocks = [self.altup.predict(block) for block in blocks]
+
+        # 2. select a block and perform the regular forward
+        # TODO: use `alternating` method described in the paper
+        # assume altup_num_inputs is the number of sub-blocks: K
+        selected_index = self.layer_id % self.config.altup_num_inputs
+        hidden_states = blocks[selected_index]
+        residual = [self.altup.predict(block) for block in blocks]
         hidden_states = self.input_layernorm(hidden_states)
 
         # apply global RoPE to non-sliding layer only
@@ -183,9 +230,91 @@ class Gemma3p5DecoderLayer(nn.Module):
         hidden_states = self.post_feedforward_layernorm(hidden_states)
         hidden_states = residual + hidden_states + self.laurel_lr(residual)
 
-        outputs = (hidden_states,)
+        # correct the predict of each blocks with computation result
+        new_blocks = []
+        selected_block_prediction_result = predicted_blocks[selected_index]
+        for predicted in predicted_blocks:
+            new_blocks += [
+                predicted
+                + self.altup.correct(hidden_states, selected_block_prediction_result)
+            ]
+        return new_blocks
 
-        return outputs
+
+# TODO: not tested
+class Gemma3p5AltUP(nn.Module):
+    def __init__(self, config: Gemma3p5TextConfig):
+        super().__init__()
+        self.d = config.hidden_size_per_layer_input
+        self.K = config.altup_num_inputs
+        self.active_idx = config.altup_active_idx
+        self.coef_clip = config.altup_coef_clip
+        self.correct_scale = config.altup_correct_scale
+        self.lr_multiplier = config.altup_lr_multiplier
+
+        self.prediction_coefs = nn.Parameter(
+            torch.randn(self.K, self.K, self.d, self.d)
+        )
+        self.modality_router = nn.Linear(self.d * self.K, self.d)
+        self.router_norm = nn.LayerNorm(self.d)
+        self.correction_coefs = nn.Parameter(torch.randn(self.K, self.d))
+        self.correct_output_scale = (
+            nn.Parameter(torch.ones(1)) if self.correct_scale else None
+        )
+
+    def predict(self, x_old):
+        """
+        Predict the updated representation for each sub-blocks
+        """
+        batch_size, seq_len, dK = x_old.shape
+        x_old_reshaped = x_old.view(batch_size, seq_len, self.K, self.d)
+        # x_old_reshaped shape: [batch_size, seq_len, K, d]
+
+        p_expanded = self.prediction_coefs.unsqueeze(0).unsqueeze(
+            0
+        )  # [1, 1, K, K, d, d]
+        x_old_expanded = x_old_reshaped.unsqueeze(2).unsqueeze(
+            -1
+        )  # [batch_size, seq_len, K, 1, d, 1]
+
+        # Perform prediction using matrix multiplication
+        x_hat = torch.matmul(p_expanded, x_old_expanded).squeeze(
+            -1
+        )  # [batch_size, seq_len, K, K, d]
+        x_hat = x_hat.sum(dim=3)  # [batch_size, seq_len, K, d]
+
+        return x_hat.view(batch_size, seq_len, dK)
+
+    def correct(self, x_hat, x_tilde):
+        """
+        Correct the passed prediction of sub-blocks with predicted results
+        Args:
+            x_hat: computation result for selected block
+            x_tilde: predicted result
+        """
+        # TODO: use correct_output_scale & correction_coefs
+        batch_size, seq_len, dK = x_hat.shape
+        x_hat_reshaped = x_hat.view(batch_size, seq_len, self.K, self.d)
+
+        # Correction
+        delta = x_tilde.unsqueeze(2) - x_hat_reshaped[
+            :, :, self.active_idx, :
+        ].unsqueeze(
+            2
+        )  # [batch_size, seq_len, 1, d]
+        g_expanded = (
+            self.correction_coefs.unsqueeze(0).unsqueeze(0).unsqueeze(-1)
+        )  # [1, 1, K, 1]
+        correction = g_expanded * delta  # [batch_size, seq_len, K, d]
+        x_new_reshaped = x_hat_reshaped + correction
+
+        x_new = x_new_reshaped.view(batch_size, seq_len, dK)
+
+        # Apply output scaling if enabled
+        if self.correct_output_scale is not None:
+            x_new = x_new * self.correct_output_scale
+
+        return x_new
 
 
 class Gemma3p5PerLayerEmbedding(nn.Module):
@@ -224,6 +353,22 @@ class Gemma3p5TextModel(PreTrainedModel):
         config.rope_scaling = {"rope_type": "default"}
         self.rotary_emb_local = Gemma3RotaryEmbedding(config=config)
 
+        self.altup_projections = nn.ModuleList(
+            [
+                AltUP_Projection()
+                # TODO: check the layer count
+                for _ in range(3)
+            ]
+        )
+
+        self.altup_unembed_projections = nn.ModuleList(
+            [
+                AltUP_Projection()
+                # TODO: check the layer count
+                for _ in range(3)
+            ]
+        )
+
         self.layers = make_layers(
             config.num_hidden_layers,
             lambda idx, prefix: Gemma3p5DecoderLayer(
@@ -255,20 +400,38 @@ class Gemma3p5TextModel(PreTrainedModel):
 
         position_embeddings_global = self.rotary_emb(hidden_states, positions)
         position_embeddings_local = self.rotary_emb_local(hidden_states, positions)
+
+        # partitioning the vector into blocks
+        blocks = hidden_states.split(split_size=self.config.altup_num_inputs)
+
         for layer in self.layers:
-            layer_outputs = layer(
+            hidden_states = layer(
                 positions=positions,
                 position_embeddings_global=position_embeddings_global,
                 position_embeddings_local=position_embeddings_local,
-                hidden_states=hidden_states,
+                hidden_states=blocks,
                 forward_batch=forward_batch,
                 **kwargs,
             )
-            hidden_states = layer_outputs[0]
 
+        # concat blocks
+        hidden_states = torch.concat(hidden_states, dim=0)
         hidden_states = self.norm(hidden_states)
 
         return hidden_states
+
+
+class AltUP_Projection(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # FIXME: shape not decided yet
+        self.weight = nn.Parameter(torch.zeros(0))
+
+    def forward(self, x):
+        return x * self.weight
+
+    def extra_repr(self):
+        return f"{tuple(self.weight.shape)}, eps={self.eps}"
 
 
 class Gemma3p5ForCausalLM(PreTrainedModel):
@@ -325,7 +488,7 @@ class Gemma3p5ForCausalLM(PreTrainedModel):
 
     def __init__(
         self,
-        config: Gemma3p5TextConfig,
+        config: Gemma3p5Config,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
     ) -> None:
@@ -333,7 +496,9 @@ class Gemma3p5ForCausalLM(PreTrainedModel):
         self.config = config
         self.quant_config = quant_config
         self.model = Gemma3p5TextModel(
-            config, quant_config, prefix=add_prefix("model", prefix)
+            config=config.text_config,
+            quant_config=quant_config,
+            prefix=add_prefix("model", prefix),
         )
         self.logits_processor = LogitsProcessor(config)
 
@@ -471,7 +636,7 @@ class Gemma3p5MatFormerMLP(Gemma3p5MLP):
         return down_proj
 
 
-class Gemma3p5AltUP(nn.Module):
+class AltUp(nn.Module):
     def __init__(self, d, K, selection_strategy="alternating", transformer_layer=None):
         super().__init__()
         self.d = d
@@ -529,46 +694,10 @@ class Gemma3p5AltUP(nn.Module):
         return x_new
 
 
-class Gemma3p5LaurelLR(nn.Module):
-    # LaurelLR for SGLang
-    def __init__(
-        self,
-        hidden_size: int,
-        laurel_rank: int,
-        quant_config: Optional["QuantizationConfig"] = None,
-        prefix: str = "",
-    ):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.laurel_rank = laurel_rank
-
-        self.linear_left = ColumnParallelLinear(
-            input_size=hidden_size,
-            output_size=laurel_rank,
-            bias=False,
-            quant_config=quant_config,
-            prefix=add_prefix(prefix, "linear_left"),
-        )
-
-        self.linear_right = RowParallelLinear(
-            input_size=laurel_rank,
-            output_size=hidden_size,
-            bias=False,
-            quant_config=quant_config,
-            prefix=add_prefix(prefix, "linear_right"),
-        )
-
-    def forward(self, x_i: torch.Tensor) -> torch.Tensor:
-        temp, _ = self.linear_left(x_i)
-        output, _ = self.linear_right(temp)
-
-        return output
-
-
 class Gemma3p5MatFormerForCausalLM(Gemma3p5ForCausalLM):
     model_type = "gemma3p5_text"
 
-    def __init__(self, config):
+    def __init__(self, config: Gemma3p5Config):
         super().__init__(config)
         scale_factors = config.matformer_scale_factors
 
@@ -585,4 +714,4 @@ class Gemma3p5MatFormerForCausalLM(Gemma3p5ForCausalLM):
 
 
 EntryClass = Gemma3p5MatFormerForCausalLM
-AutoModel.register(Gemma3p5TextConfig, Gemma3p5MatFormerForCausalLM, exist_ok=True)
+AutoModel.register(Gemma3p5Config, Gemma3p5MatFormerForCausalLM, exist_ok=True)
