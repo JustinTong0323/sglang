@@ -188,44 +188,6 @@ class Gemma3p5DecoderLayer(nn.Module):
         return outputs
 
 
-class Gemma3p5LaurelLR(nn.Module):
-    def __init__(self, hidden_size: int, laurel_rank: int):
-        super().__init__()
-        # Linear layer for down-projection A: D -> r
-        # Weight shape: (laurel_rank, hidden_size) -> (64, 2048)
-        self.linear_left = nn.Linear(hidden_size, laurel_rank, bias=False)
-
-        # Linear layer for up-projection B: r -> D
-        # Weight shape: (hidden_size, laurel_rank) -> (2048, 64)
-        self.linear_right = nn.Linear(laurel_rank, hidden_size, bias=False)
-
-    def forward(self, x_i: torch.Tensor) -> torch.Tensor:
-        """
-        Computes the LAUREL-LR modification term: B(A(x_i)).
-
-        Args:
-            x_i (torch.Tensor): Input tensor, shape (..., hidden_size).
-                                This is x_i in the paper's equation.
-
-        Returns:
-            torch.Tensor: The LAUREL modification (BAx_i), shape (..., hidden_size).
-        """
-        # Project down: A(x_i)
-        # x_i shape: (..., 2048) -> temp shape: (..., 64)
-        temp = self.linear_left(x_i)
-
-        # Project up: B(A(x_i))
-        # temp shape: (..., 64) -> output shape: (..., 2048)
-        output = self.linear_right(temp)
-
-        return output
-
-
-# TODO: add modules
-class Gemma3p5AltUP(nn.Module):
-    pass
-
-
 class Gemma3p5PerLayerEmbedding(nn.Module):
     pass
 
@@ -509,7 +471,7 @@ class Gemma3p5MatFormerMLP(Gemma3p5MLP):
         return down_proj
 
 
-class AltUp(nn.Module):
+class Gemma3p5AltUP(nn.Module):
     def __init__(self, d, K, selection_strategy="alternating", transformer_layer=None):
         super().__init__()
         self.d = d
@@ -567,7 +529,7 @@ class AltUp(nn.Module):
         return x_new
 
 
-class LaurelLR(nn.Module):
+class Gemma3p5LaurelLR(nn.Module):
     # LaurelLR for SGLang
     def __init__(
         self,
