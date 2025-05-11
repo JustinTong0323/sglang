@@ -18,26 +18,14 @@ import einops
 import torch
 import torch.nn.functional as F
 from torch import nn
-from transformers import (
-    ROPE_INIT_FUNCTIONS,
-    AutoModel,
-    PretrainedConfig,
-    PreTrainedModel,
-)
+from transformers import AutoModel, PretrainedConfig, PreTrainedModel
 
 from sglang.srt.configs import Gemma3p5TextConfig
-from sglang.srt.distributed import get_tensor_model_parallel_world_size
 from sglang.srt.layers.activation import GeluAndMul
 from sglang.srt.layers.layernorm import Gemma3RMSNorm
-from sglang.srt.layers.linear import (
-    MergedColumnParallelLinear,
-    QKVParallelLinear,
-    RowParallelLinear,
-)
+from sglang.srt.layers.linear import MergedColumnParallelLinear, RowParallelLinear
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
-from sglang.srt.layers.radix_attention import RadixAttention
-from sglang.srt.layers.rotary_embedding import apply_rotary_pos_emb
 from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import (
@@ -515,6 +503,64 @@ class Gemma3p5MatFormerMLP(Gemma3p5MLP):
         self.current_subset_hd = None
 
         return down_proj
+
+
+class AltUp(nn.Module):
+    def __init__(self, d, K, selection_strategy="alternating", transformer_layer=None):
+        super().__init__()
+        self.d = d
+        self.K = K
+        self.selection_strategy = selection_strategy
+        self.p = nn.Parameter(torch.randn(K, K))
+        self.g = nn.Parameter(torch.randn(K))
+        self.transformer_layer = transformer_layer
+        if transformer_layer is None:
+            raise ValueError("A transformer layer must be provided.")
+
+    def predict(self, x_old):
+        # x_old shape: [batch_size, seq_len, d * K]
+        batch_size, seq_len, dK = x_old.shape
+        x_old_reshaped = x_old.view(batch_size, seq_len, self.K, self.d)
+        # x_old_reshaped shape: [batch_size, seq_len, K, d]
+        p_expanded = self.p.unsqueeze(0).unsqueeze(0)  # [1, 1, K, K]
+        x_hat = torch.matmul(p_expanded, x_old_reshaped.transpose(2, 3)).transpose(2, 3)
+        # x_hat shape: [batch_size, seq_len, K, d]
+        return x_hat.view(batch_size, seq_len, dK)
+
+    def compute(self, x_old, layer_index=None):
+        batch_size, seq_len, dK = x_old.shape
+        x_old_reshaped = x_old.view(batch_size, seq_len, self.K, self.d)
+        if self.selection_strategy == "same":
+            j_star = 0
+        elif self.selection_strategy == "alternating":
+            if layer_index is None:
+                raise ValueError(
+                    "Layer index must be provided for 'alternating' strategy."
+                )
+            j_star = layer_index % self.K
+        else:
+            raise ValueError(f"Invalid selection strategy: {self.selection_strategy}")
+
+        x_old_j_star = x_old_reshaped[:, :, j_star, :]
+        x_tilde_j_star = self.transformer_layer(x_old_j_star)
+        return x_tilde_j_star, j_star
+
+    def correct(self, x_hat, x_tilde_j_star, j_star):
+        batch_size, seq_len, dK = x_hat.shape
+        x_hat_reshaped = x_hat.view(batch_size, seq_len, self.K, self.d)
+        x_hat_j_star = x_hat_reshaped[:, :, j_star, :]
+        delta = x_tilde_j_star - x_hat_j_star
+        g_expanded = self.g.unsqueeze(0).unsqueeze(0).unsqueeze(-1)  # [1, 1, K, 1]
+        delta_expanded = delta.unsqueeze(2)  # [batch_size, seq_len, 1, d]
+        correction = g_expanded * delta_expanded
+        x_new = x_hat_reshaped + correction
+        return x_new.view(batch_size, seq_len, dK)
+
+    def forward(self, x, layer_index):
+        x_hat = self.predict(x)
+        x_tilde_j_star, j_star = self.compute(x, layer_index)
+        x_new = self.correct(x_hat, x_tilde_j_star, j_star)
+        return x_new
 
 
 class Gemma3p5MatFormerForCausalLM(Gemma3p5ForCausalLM):
