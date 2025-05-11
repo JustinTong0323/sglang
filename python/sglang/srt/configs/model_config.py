@@ -539,7 +539,7 @@ def is_generation_model(model_architectures: List[str], is_embedding: bool = Fal
 multimodal_model_archs = [
     "DeepseekVL2ForCausalLM",
     "Gemma3ForConditionalGeneration",
-    "Gemma3p5MatFormerForCausalLM",
+    "Gemma3p5ForConditionalGeneration",
     "Grok1VForCausalLM",
     "Grok1AForCausalLM",
     "LlavaLlamaForCausalLM",

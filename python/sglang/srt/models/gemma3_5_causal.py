@@ -205,7 +205,7 @@ class Gemma3p5DecoderLayer(nn.Module):
         # assume altup_num_inputs is the number of sub-blocks: K
         selected_index = self.layer_id % self.config.altup_num_inputs
         hidden_states = blocks[selected_index]
-        residual = [self.altup.predict(block) for block in blocks]
+        residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
         # apply global RoPE to non-sliding layer only
@@ -231,13 +231,18 @@ class Gemma3p5DecoderLayer(nn.Module):
         hidden_states = residual + hidden_states + self.laurel_lr(residual)
 
         # correct the predict of each blocks with computation result
+        # propagates decoder output to predictions
         new_blocks = []
         selected_block_prediction_result = predicted_blocks[selected_index]
         for predicted in predicted_blocks:
-            new_blocks += [
-                predicted
-                + self.altup.correct(hidden_states, selected_block_prediction_result)
-            ]
+            new_block = predicted + self.altup.correct(
+                hidden_states, selected_block_prediction_result
+            )
+            new_block = self.altup.scale_corrected_output(new_block)
+            # TODO:  called just before the block exits
+            # where are blocks being merged ?
+            new_blocks += [new_block]
+
         return new_blocks
 
 
@@ -315,6 +320,11 @@ class Gemma3p5AltUP(nn.Module):
             x_new = x_new * self.correct_output_scale
 
         return x_new
+
+    def scale_corrected_output(self, corrected_output):
+        if self.correct_output_scale:
+            return corrected_output * self.correct_output_scale
+        return corrected_output
 
 
 class Gemma3p5PerLayerEmbedding(nn.Module):
@@ -714,4 +724,3 @@ class Gemma3p5MatFormerForCausalLM(Gemma3p5ForCausalLM):
 
 
 EntryClass = Gemma3p5MatFormerForCausalLM
-AutoModel.register(Gemma3p5Config, Gemma3p5MatFormerForCausalLM, exist_ok=True)
