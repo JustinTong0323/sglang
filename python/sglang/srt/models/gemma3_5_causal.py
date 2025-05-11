@@ -23,7 +23,11 @@ from transformers import AutoModel, PretrainedConfig, PreTrainedModel
 from sglang.srt.configs import Gemma3p5TextConfig
 from sglang.srt.layers.activation import GeluAndMul
 from sglang.srt.layers.layernorm import Gemma3RMSNorm
-from sglang.srt.layers.linear import MergedColumnParallelLinear, RowParallelLinear
+from sglang.srt.layers.linear import (
+    ColumnParallelLinear,
+    MergedColumnParallelLinear,
+    RowParallelLinear,
+)
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
@@ -561,6 +565,42 @@ class AltUp(nn.Module):
         x_tilde_j_star, j_star = self.compute(x, layer_index)
         x_new = self.correct(x_hat, x_tilde_j_star, j_star)
         return x_new
+
+
+class LaurelLR(nn.Module):
+    # LaurelLR for SGLang
+    def __init__(
+        self,
+        hidden_size: int,
+        laurel_rank: int,
+        quant_config: Optional["QuantizationConfig"] = None,
+        prefix: str = "",
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.laurel_rank = laurel_rank
+
+        self.linear_left = ColumnParallelLinear(
+            input_size=hidden_size,
+            output_size=laurel_rank,
+            bias=False,
+            quant_config=quant_config,
+            prefix=add_prefix(prefix, "linear_left"),
+        )
+
+        self.linear_right = RowParallelLinear(
+            input_size=laurel_rank,
+            output_size=hidden_size,
+            bias=False,
+            quant_config=quant_config,
+            prefix=add_prefix(prefix, "linear_right"),
+        )
+
+    def forward(self, x_i: torch.Tensor) -> torch.Tensor:
+        temp, _ = self.linear_left(x_i)
+        output, _ = self.linear_right(temp)
+
+        return output
 
 
 class Gemma3p5MatFormerForCausalLM(Gemma3p5ForCausalLM):
