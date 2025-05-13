@@ -260,7 +260,7 @@ class Gemma3Attention(nn.Module):
 
         # [s, h, head_dim]
         q = q.unflatten(-1, (self.num_heads, self.head_dim))
-        # -> [h, s, head_dim]
+        # -> [b, h, s, head_dim]
         q = q.transpose(0, 1).unsqueeze(0)
         q = self.q_norm(q)
         k = k.unflatten(-1, (self.num_kv_heads, self.head_dim))
@@ -268,7 +268,6 @@ class Gemma3Attention(nn.Module):
         k = k.transpose(0, 1).unsqueeze(0)
         k = self.k_norm(k)
 
-        # q, k = self.rotary_emb(positions, q, k)
         cos, sin = position_embeddings
         q, k = apply_rotary_pos_emb(q, k, cos, sin)
 

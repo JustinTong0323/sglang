@@ -12,7 +12,6 @@
 # limitations under the License.
 # ==============================================================================
 import copy
-import logging
 from typing import Iterable, Optional, Sequence, Set, Tuple
 
 import torch
@@ -32,7 +31,8 @@ from sglang.srt.layers.linear import (
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
-from sglang.srt.layers.rotary_embedding import apply_rotary_pos_emb
+from sglang.srt.layers.rotary_embedding import apply_rotary_pos_emb, rotate_half
+from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import (
     default_weight_loader,
@@ -180,6 +180,36 @@ class Gemma3p5RMSNorm(nn.Module):
         return x
 
 
+def apply_rotary_pos_emb(
+    x: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    position_ids: Optional[torch.Tensor] = None,
+    unsqueeze_dim: int = 1,
+):
+    """Applies Rotary Position Embedding to the query and key tensors.
+
+    Args:
+        x (`torch.Tensor`): The tensor to embed.
+        cos (`torch.Tensor`): The cosine part of the rotary embedding.
+        sin (`torch.Tensor`): The sine part of the rotary embedding.
+        position_ids (`torch.Tensor`, *optional*):
+            Deprecated and unused.
+        unsqueeze_dim (`int`, *optional*, defaults to 1):
+            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
+            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
+            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
+            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
+            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
+            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
+    Returns:
+        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
+    """
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    return (x * cos) + (rotate_half(x) * sin)
+
+
 class Gemma3p5LaurelBlock(nn.Module):
     """Learned Augmented Residual Layer"""
 
@@ -235,26 +265,26 @@ class Gemma3p5Attention(nn.Module):
         self.attention_dropout = self.config.attention_dropout
         self.is_causal = True
 
-        self.q_proj = nn.Linear(
-            config.hidden_size,
-            config.num_attention_heads * self.head_dim,
-            bias=config.attention_bias,
-        )
-        self.k_proj = nn.Linear(
-            config.hidden_size,
-            config.num_key_value_heads * self.head_dim,
-            bias=config.attention_bias,
-        )
-        self.v_proj = nn.Linear(
-            config.hidden_size,
-            config.num_key_value_heads * self.head_dim,
-            bias=config.attention_bias,
-        )
-        self.o_proj = nn.Linear(
-            config.num_attention_heads * self.head_dim,
-            config.hidden_size,
-            bias=config.attention_bias,
-        )
+        # self.q_proj = nn.Linear(
+        #     config.hidden_size,
+        #     config.num_attention_heads * self.head_dim,
+        #     bias=config.attention_bias,
+        # )
+        # self.k_proj = nn.Linear(
+        #     config.hidden_size,
+        #     config.num_key_value_heads * self.head_dim,
+        #     bias=config.attention_bias,
+        # )
+        # self.v_proj = nn.Linear(
+        #     config.hidden_size,
+        #     config.num_key_value_heads * self.head_dim,
+        #     bias=config.attention_bias,
+        # )
+        # self.o_proj = nn.Linear(
+        #     config.num_attention_heads * self.head_dim,
+        #     config.hidden_size,
+        #     bias=config.attention_bias,
+        # )
         self.attn_logit_softcapping = self.config.attn_logit_softcapping
         self.sliding_window = config.sliding_window if self.is_sliding else None
 
@@ -352,32 +382,59 @@ class Gemma3p5Attention(nn.Module):
         hidden_states: torch.Tensor,
         position_embeddings: torch.Tensor,
         attention_mask: Optional[torch.Tensor],
-        cache_position: Optional[torch.LongTensor] = None,
+        forward_batch: ForwardBatch,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         input_shape = hidden_states.shape[:-1]
-        hidden_shape = (*input_shape, -1, self.config.head_dim)
+        # hidden_shape = (*input_shape, -1, self.config.head_dim)
+        # print(f"{hidden_states.shape=}")
+
+        qkv, _ = self.qkv_proj(hidden_states)
+        # [s, h * head_dim]
+        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+
+        # [s, h, head_dim]
+        q = q.unflatten(-1, (self.num_heads, self.head_dim))
+        # -> [b, h, s, head_dim]
+        q = q.transpose(0, 1).unsqueeze(0)
+        q = self.qkv_norm(q)
+
+        k = k.unflatten(-1, (self.num_kv_heads, self.head_dim))
+        # -> [b, h, s, head_dim]
+        k = k.transpose(0, 1).unsqueeze(0)
+        k = self.qkv_norm(k)
+
+        v = self.qkv_norm(v)
 
         cos, sin = position_embeddings
 
-        query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        query_states = self.qkv_norm(query_states)
-        query_states = apply_rotary_pos_emb(query_states, cos, sin)
+        q = apply_rotary_pos_emb(q, cos, sin)
+        k = apply_rotary_pos_emb(k, cos, sin)
 
-        key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        key_states = self.qkv_norm(key_states)
-        key_states = apply_rotary_pos_emb(key_states, cos, sin)
+        # q, k = apply_rotary_pos_emb(q, k, cos, sin)
 
-        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        value_states = self.qkv_norm(value_states)
+        # [b, h, s, head_dim] ->  [b, s, h, head_dim]
+        q = q.permute(0, 2, 1, 3)
+        k = k.permute(0, 2, 1, 3)
 
-        # Here we need to slice as we use a static cache by default, but FA2 does not support it
-        if (
-            attention_mask is not None
-            and self.config._attn_implementation == "flash_attention_2"
-        ):
-            seq_len = attention_mask.shape[-1]
-            key_states = key_states[:, :, :seq_len, :]
-            value_states = value_states[:, :, :seq_len, :]
+        # q = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        # q = self.qkv_norm(q)
+        # q = apply_rotary_pos_emb(q, cos, sin)
+        #
+        # k = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        # k = self.qkv_norm(k)
+        # k = apply_rotary_pos_emb(k, cos, sin)
+        #
+        # v = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        # v = self.qkv_norm(v)
+
+        # # Here we need to slice as we use a static cache by default, but FA2 does not support it
+        # if (
+        #     attention_mask is not None
+        #     and self.config._attn_implementation == "flash_attention_2"
+        # ):
+        #     seq_len = attention_mask.shape[-1]
+        #     k = k[:, :, :seq_len, :]
+        #     v = v[:, :, :seq_len, :]
 
         # attention_interface: Callable = eager_attention_forward
         # if self.config._attn_implementation != "eager":
@@ -392,22 +449,34 @@ class Gemma3p5Attention(nn.Module):
 
         if attention_mask is not None:
             # backwards compatibility
-            attention_mask = attention_mask.to(query_states)
+            attention_mask = attention_mask.to(q)
 
-        attn_output, attn_weights = attention_interface(
-            self,
-            query_states,
-            key_states,
-            value_states,
-            attention_mask,
-            dropout=self.attention_dropout if self.training else 0.0,
-            scaling=self.scaling,
-            sliding_window=self.sliding_window,
+        # attn_output, attn_weights = attention_interface(
+        #     self,
+        #     q,
+        #     k,
+        #     v,
+        #     attention_mask,
+        #     dropout=self.attention_dropout if self.training else 0.0,
+        #     scaling=self.scaling,
+        #     sliding_window=self.sliding_window,
+        # )
+
+        # print(f"{q.shape=}")
+        # print(f"{k.shape=}")
+        # print(f"{v.shape=}")
+
+        attn_output = self.attn(
+            q=q,
+            k=k,
+            v=v,
+            forward_batch=forward_batch,
         )
-
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
-        attn_output = self.o_proj(attn_output)
-        return attn_output, attn_weights
+        output, _ = self.o_proj(attn_output)
+
+        # print(f"{type(attn_output)=}")
+        return output
 
 
 class Gemma3p5DecoderLayer(nn.Module):
@@ -522,11 +591,11 @@ class Gemma3p5DecoderLayer(nn.Module):
         else:
             position_embeddings = position_embeddings_global
 
-        attn, self_attn_weights = self.self_attn(
+        attn = self.self_attn(
             hidden_states=active_prediction_normed,
             position_embeddings=position_embeddings,
-            attention_mask=attention_mask,
-            **kwargs,
+            forward_batch=forward_batch,
+            attention_mask=None,
         )
         attn = self.post_attention_layernorm(attn)
 
@@ -544,7 +613,9 @@ class Gemma3p5DecoderLayer(nn.Module):
             first_prediction = self.altup.scale_corrected_output(first_prediction)
 
         # per_layer_input_gate adapted from jax.numpy.einsum("btd,dp->btp", ...)
-        first_prediction = self.per_layer_input_gate(first_prediction)
+        first_prediction = self.per_layer_input_gate(
+            first_prediction.type(next(self.per_layer_input_gate.parameters()).dtype)
+        )
         first_prediction = self.act_fn(first_prediction)
         first_prediction = torch.multiply(first_prediction, per_layer_input)
 
@@ -555,7 +626,7 @@ class Gemma3p5DecoderLayer(nn.Module):
         for i in range(1, len(corrected_predictions)):
             corrected_predictions[i] += first_prediction
 
-        return corrected_predictions, self_attn_weights
+        return corrected_predictions
 
 
 class Gemma3p5RotaryEmbedding(nn.Module):
@@ -586,7 +657,9 @@ class Gemma3p5RotaryEmbedding(nn.Module):
             .expand(position_ids.shape[0], -1, 1)
             .to(x.device)
         )
-        position_ids_expanded = position_ids[:, None, :].float()
+        # print(f"{inv_freq_expanded.shape=}")
+        position_ids_expanded = position_ids[:, None, None].float()
+        # print(f"{position_ids_expanded.shape=}")
 
         device_type = (
             x.device.type
@@ -598,6 +671,9 @@ class Gemma3p5RotaryEmbedding(nn.Module):
                 inv_freq_expanded.float() @ position_ids_expanded.float()
             ).transpose(1, 2)
             emb = torch.cat((freqs, freqs), dim=-1)
+            # print(f"{emb.shape=}")
+            emb = emb.view(emb.shape[1], -1, emb.shape[-1])
+
             cos = emb.cos() * self.attention_scaling
             sin = emb.sin() * self.attention_scaling
 
@@ -667,7 +743,9 @@ class Gemma3p5AltUp(nn.Module):
         return torch.tanh(routed).float()
 
     def predict(self, x: Sequence[torch.Tensor]) -> Sequence[torch.Tensor]:
-        modalities = self.compute_router_modalities(x[self.config.altup_active_idx])
+        modalities = self.compute_router_modalities(
+            x[self.config.altup_active_idx]
+        ).type(next(self.prediction_coefs.parameters()).dtype)
 
         if self.config.altup_coef_clip is not None:
             self.prediction_coefs.weight.clamp_(
@@ -700,7 +778,9 @@ class Gemma3p5AltUp(nn.Module):
     def correct(
         self, predictions: Sequence[torch.Tensor], activated: torch.Tensor
     ) -> list[torch.Tensor]:
-        modalities = self.compute_router_modalities(activated)
+        modalities = self.compute_router_modalities(activated).type(
+            next(self.correction_coefs.parameters()).dtype
+        )
 
         if self.config.altup_coef_clip is not None:
             self.correction_coefs.weight.clamp_(
@@ -753,7 +833,7 @@ class Gemma3p5TextModel(PreTrainedModel):
                 attention_pattern_length * numerator // attention_pattern_length
             )
         else:
-            logging.warning_once(
+            logger.warning_once(
                 "Not rounding unshared layers. round_up_to_nearest_attention_block is"
                 " False or num_unshared_layers is less than attention_pattern_length."
             )
@@ -828,7 +908,7 @@ class Gemma3p5TextModel(PreTrainedModel):
                 attention_pattern_length * numerator // attention_pattern_length
             )
         else:
-            logging.warning_once(
+            logger.warning_once(
                 "Not rounding unshared layers. round_up_to_nearest_attention_block is"
                 " False or num_unshared_layers is less than attention_pattern_length."
             )
@@ -886,9 +966,12 @@ class Gemma3p5TextModel(PreTrainedModel):
 
     def forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-    ):
+        input_ids: torch.Tensor,
+        positions: torch.Tensor,
+        forward_batch: ForwardBatch,
+        input_embeds: torch.Tensor = None,
+        **kwargs,
+    ) -> LogitsProcessor:
 
         inputs_embeds = self.embed_tokens(input_ids)
         per_layer_inputs = self.get_per_layer_inputs(input_ids)
@@ -901,8 +984,8 @@ class Gemma3p5TextModel(PreTrainedModel):
         hidden_states_0 = inputs_embeds
 
         # Initialize RoPE embeddings
-        position_embeddings_global = self.rotary_emb(hidden_states_0, position_ids)
-        position_embeddings_local = self.rotary_emb_local(hidden_states_0, position_ids)
+        position_embeddings_global = self.rotary_emb(hidden_states_0, positions)
+        position_embeddings_local = self.rotary_emb_local(hidden_states_0, positions)
 
         # Expand hidden_states to support per-layer inputs
         target_magnitude: torch.Tensor = (
@@ -926,30 +1009,19 @@ class Gemma3p5TextModel(PreTrainedModel):
             )
 
         # decoder layers
-
         for decoder_layer in self.layers[: self.config.num_hidden_layers]:
+            per_layer_input = per_layer_inputs[:, decoder_layer.layer_idx, :]
 
-            per_layer_input = per_layer_inputs[:, :, decoder_layer.layer_idx, :]
+            layer_outputs = decoder_layer(
+                hidden_states,
+                position_embeddings_global=position_embeddings_global,
+                position_embeddings_local=position_embeddings_local,
+                per_layer_input=per_layer_input,
+                forward_batch=forward_batch,
+                position_ids=positions,
+            )
 
-            if self.gradient_checkpointing and self.training:
-                layer_outputs = self._gradient_checkpointing_func(
-                    decoder_layer.__call__,
-                    hidden_states,
-                    position_embeddings_global,
-                    position_embeddings_local,
-                    per_layer_input,
-                    position_ids,
-                )
-            else:
-                layer_outputs = decoder_layer(
-                    hidden_states,
-                    position_embeddings_global=position_embeddings_global,
-                    position_embeddings_local=position_embeddings_local,
-                    per_layer_input=per_layer_input,
-                    position_ids=position_ids,
-                )
-
-            hidden_states, self_attns = layer_outputs
+            hidden_states = layer_outputs
 
         # Per-layer inputs to single output
         target_magnitude = (
@@ -1057,7 +1129,16 @@ class Gemma3p5ForCausalLM(PreTrainedModel):
         super().__init__(config)
         self.model = Gemma3p5TextModel(config)
         self.vocab_size = config.vocab_size
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        if self.config.tie_word_embeddings:
+            self.lm_head = self.model.embed_tokens
+        else:
+            self.lm_head = ParallelLMHead(
+                config.vocab_size,
+                config.hidden_size,
+                quant_config=quant_config,
+                prefix=add_prefix("lm_head", prefix),
+            )
+        self.logits_processor = LogitsProcessor(config)
 
     def configure_subnetwork(self, flag):
         """Configure the subnetwork for all layers based on the flag."""
