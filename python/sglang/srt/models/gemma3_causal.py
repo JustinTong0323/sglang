@@ -174,7 +174,6 @@ class Gemma3Attention(nn.Module):
             # Local attention. Override the values in config.json.
             self.rope_theta = config.rope_local_base_freq
             self.rope_scaling = {"rope_type": "default"}
-            # FIXME(mick): idk why vllm does this
             # self.sliding_window = config.interleaved_sliding_window
             self.sliding_window = get_attention_sliding_window_size(config)
         else:

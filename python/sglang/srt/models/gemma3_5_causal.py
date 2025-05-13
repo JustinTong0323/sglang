@@ -31,7 +31,7 @@ from sglang.srt.layers.linear import (
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
-from sglang.srt.layers.rotary_embedding import apply_rotary_pos_emb, rotate_half
+from sglang.srt.layers.rotary_embedding import apply_rotary_pos_emb
 from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import (
@@ -180,36 +180,6 @@ class Gemma3p5RMSNorm(nn.Module):
         return x
 
 
-def apply_rotary_pos_emb(
-    x: torch.Tensor,
-    cos: torch.Tensor,
-    sin: torch.Tensor,
-    position_ids: Optional[torch.Tensor] = None,
-    unsqueeze_dim: int = 1,
-):
-    """Applies Rotary Position Embedding to the query and key tensors.
-
-    Args:
-        x (`torch.Tensor`): The tensor to embed.
-        cos (`torch.Tensor`): The cosine part of the rotary embedding.
-        sin (`torch.Tensor`): The sine part of the rotary embedding.
-        position_ids (`torch.Tensor`, *optional*):
-            Deprecated and unused.
-        unsqueeze_dim (`int`, *optional*, defaults to 1):
-            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
-            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
-            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
-            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
-            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
-            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
-    Returns:
-        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
-    """
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-    return (x * cos) + (rotate_half(x) * sin)
-
-
 class Gemma3p5LaurelBlock(nn.Module):
     """Learned Augmented Residual Layer"""
 
@@ -265,26 +235,6 @@ class Gemma3p5Attention(nn.Module):
         self.attention_dropout = self.config.attention_dropout
         self.is_causal = True
 
-        # self.q_proj = nn.Linear(
-        #     config.hidden_size,
-        #     config.num_attention_heads * self.head_dim,
-        #     bias=config.attention_bias,
-        # )
-        # self.k_proj = nn.Linear(
-        #     config.hidden_size,
-        #     config.num_key_value_heads * self.head_dim,
-        #     bias=config.attention_bias,
-        # )
-        # self.v_proj = nn.Linear(
-        #     config.hidden_size,
-        #     config.num_key_value_heads * self.head_dim,
-        #     bias=config.attention_bias,
-        # )
-        # self.o_proj = nn.Linear(
-        #     config.num_attention_heads * self.head_dim,
-        #     config.hidden_size,
-        #     bias=config.attention_bias,
-        # )
         self.attn_logit_softcapping = self.config.attn_logit_softcapping
         self.sliding_window = config.sliding_window if self.is_sliding else None
 
@@ -354,8 +304,6 @@ class Gemma3p5Attention(nn.Module):
             # Local attention. Override the values in config.json.
             self.rope_theta = config.rope_local_base_freq
             self.rope_scaling = {"rope_type": "default"}
-            # FIXME(mick): idk why vllm does this
-            # self.sliding_window = config.interleaved_sliding_window
             self.sliding_window = get_attention_sliding_window_size(config)
         else:
             # Global attention. Use the values in config.json.
@@ -381,12 +329,9 @@ class Gemma3p5Attention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         position_embeddings: torch.Tensor,
-        attention_mask: Optional[torch.Tensor],
         forward_batch: ForwardBatch,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         input_shape = hidden_states.shape[:-1]
-        # hidden_shape = (*input_shape, -1, self.config.head_dim)
-        # print(f"{hidden_states.shape=}")
 
         qkv, _ = self.qkv_proj(hidden_states)
         # [s, h * head_dim]
@@ -407,57 +352,11 @@ class Gemma3p5Attention(nn.Module):
 
         cos, sin = position_embeddings
 
-        q = apply_rotary_pos_emb(q, cos, sin)
-        k = apply_rotary_pos_emb(k, cos, sin)
-
-        # q, k = apply_rotary_pos_emb(q, k, cos, sin)
+        q, k = apply_rotary_pos_emb(q, k, cos, sin)
 
         # [b, h, s, head_dim] ->  [b, s, h, head_dim]
         q = q.permute(0, 2, 1, 3)
         k = k.permute(0, 2, 1, 3)
-
-        # q = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        # q = self.qkv_norm(q)
-        # q = apply_rotary_pos_emb(q, cos, sin)
-        #
-        # k = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        # k = self.qkv_norm(k)
-        # k = apply_rotary_pos_emb(k, cos, sin)
-        #
-        # v = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        # v = self.qkv_norm(v)
-
-        # # Here we need to slice as we use a static cache by default, but FA2 does not support it
-        # if (
-        #     attention_mask is not None
-        #     and self.config._attn_implementation == "flash_attention_2"
-        # ):
-        #     seq_len = attention_mask.shape[-1]
-        #     k = k[:, :, :seq_len, :]
-        #     v = v[:, :, :seq_len, :]
-
-        # attention_interface: Callable = eager_attention_forward
-        # if self.config._attn_implementation != "eager":
-        #     if self.config._attn_implementation == "sdpa" and kwargs.get("output_attentions", False):
-        #         logger.warning_once(
-        #             "`torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. "
-        #             "Falling back to eager attention. This warning can be removed using the argument "
-        #             '`attn_implementation="eager"` when loading the model.'
-        #         )
-        #     else:
-        #         attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
-
-        if attention_mask is not None:
-            # backwards compatibility
-            attention_mask = attention_mask.to(q)
-
-        # attn_output, attn_weights = attention_interface(
-        #     self,
-        #     q,
-        #     k,
-        #     v,
-        #     attention_mask,
-        #     dropout=self.attention_dropout if self.training else 0.0,
         #     scaling=self.scaling,
         #     sliding_window=self.sliding_window,
         # )
@@ -550,33 +449,6 @@ class Gemma3p5DecoderLayer(nn.Module):
     ) -> tuple[
         torch.FloatTensor, Optional[tuple[torch.FloatTensor, torch.FloatTensor]]
     ]:
-        # if self.is_sliding and attention_mask is not None:  # efficient SDPA and no padding
-        #     # In prefill, we may be larger than sliding window
-        #     effective_seq_len = max(cache_position.shape[0], self.sliding_window)
-        #     # For FA2, the mask is 2D and is of shape [bs, processed_tokens] (not [bs, max_cache_len]),
-        #     # thus we must slice from the right (at most `effective_seq_len` elements)
-        #     if self.config._attn_implementation == "flash_attention_2":
-        #         attention_mask = attention_mask[:, -effective_seq_len:]
-        #     # Otherwise, the mask is 4D of shape [bs, 1, query_len, max_cache_len] thus we must slice
-        #     # from the left, with an offset if we are beyond the sliding window
-        #     else:
-        #         min_dtype = torch.finfo(attention_mask.dtype).min
-        #         sliding_window_mask = torch.tril(
-        #             torch.ones_like(attention_mask, dtype=torch.bool), diagonal=-self.sliding_window
-        #         )
-        #         attention_mask = torch.where(sliding_window_mask, min_dtype, attention_mask)
-        #         # In case we are beyond the sliding window, we need to correctly offset the mask slicing
-        #         offset = cache_position[-1] - effective_seq_len + 1
-        #         # Should only be used when beyond the sliding window (i.e. offset > 0)
-        #         offset = torch.clamp(offset, min=0)
-        #         # equivalent to: `attention_mask = attention_mask[:, :, :, offset : offset + effective_seq_len]`,
-        #         # but without data-dependent slicing (i.e. torch.compile friendly)
-        #         mask_indexes = torch.arange(
-        #             min(effective_seq_len, attention_mask.shape[-1]), device=attention_mask.device
-        #         )
-        #         mask_indexes += offset
-        #         attention_mask = attention_mask[:, :, :, mask_indexes]
-
         predictions = self.altup.predict(hidden_states)
         active_prediction = predictions[self.config.altup_active_idx]
 
@@ -657,9 +529,7 @@ class Gemma3p5RotaryEmbedding(nn.Module):
             .expand(position_ids.shape[0], -1, 1)
             .to(x.device)
         )
-        # print(f"{inv_freq_expanded.shape=}")
-        position_ids_expanded = position_ids[:, None, None].float()
-        # print(f"{position_ids_expanded.shape=}")
+        position_ids_expanded = position_ids[:, None, :].float()
 
         device_type = (
             x.device.type
@@ -671,8 +541,7 @@ class Gemma3p5RotaryEmbedding(nn.Module):
                 inv_freq_expanded.float() @ position_ids_expanded.float()
             ).transpose(1, 2)
             emb = torch.cat((freqs, freqs), dim=-1)
-            # print(f"{emb.shape=}")
-            emb = emb.view(emb.shape[1], -1, emb.shape[-1])
+            # emb = emb.view(emb.shape[1], -1, emb.shape[-1])
 
             cos = emb.cos() * self.attention_scaling
             sin = emb.sin() * self.attention_scaling
@@ -983,6 +852,7 @@ class Gemma3p5TextModel(PreTrainedModel):
         # embed positions
         hidden_states_0 = inputs_embeds
 
+        positions = positions.unsqueeze(0)
         # Initialize RoPE embeddings
         position_embeddings_global = self.rotary_emb(hidden_states_0, positions)
         position_embeddings_local = self.rotary_emb_local(hidden_states_0, positions)
@@ -1163,6 +1033,7 @@ class Gemma3p5ForCausalLM(PreTrainedModel):
         input_embeds: torch.Tensor = None,
         **kwargs,
     ) -> LogitsProcessor:
+
         hidden_states = self.model(
             input_ids, positions, forward_batch, input_embeds, **kwargs
         )
