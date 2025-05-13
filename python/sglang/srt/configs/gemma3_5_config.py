@@ -1,7 +1,7 @@
 # copied from https://github.com/huggingface/transformers/blob/main/src/transformers/models/gemma3/modular_gemma3.py
-from typing import Any, Dict, Optional, Union
+from typing import Any, Optional, Union
 
-from transformers import PretrainedConfig, SiglipVisionConfig, logging
+from transformers import PretrainedConfig, logging
 from transformers.modeling_rope_utils import rope_config_validation
 
 # from ...configuration_utils import PretrainedConfig
@@ -119,43 +119,90 @@ class Gemma3p5TextConfig(PretrainedConfig):
         rope_config_validation(self)
 
 
+class Gemma3p5AudioConfig(PretrainedConfig):
+    model_type = "gemma3p5"
+
+    def __init__(
+        self,
+        *args,
+        hidden_size: int = 1536,
+        embedding_norm_eps: float = 1e-6,
+        vocab_size: int = 256_128,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.hidden_size = hidden_size
+        self.embedding_norm_eps = embedding_norm_eps
+        self.vocab_size = vocab_size
+
+
+class Gemma3p5VisionConfig(PretrainedConfig):
+    model_type = "gemma3p5"
+
+    def __init__(
+        self,
+        *args,
+        embedding_norm_eps: float = 1e-6,
+        hidden_size: int = 2048,
+        vocab_size: int = 128,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.hidden_size = hidden_size
+        self.embedding_norm_eps = embedding_norm_eps
+        self.vocab_size = vocab_size
+
+
 class Gemma3p5Config(PretrainedConfig):
     model_type = "gemma3p5"
     sub_configs = {
         "text_config": Gemma3p5TextConfig,
-        "vision_config": None,
-        "audio_config": None,
+        "vision_config": Gemma3p5VisionConfig,
+        "audio_config": Gemma3p5AudioConfig,
     }
 
     def __init__(
         self,
-        text_config: Optional[Union[Gemma3p5TextConfig, Dict[str, Any]]] = None,
-        vision_config: None = None,
-        audio_config: None = None,
-        mm_tokens_per_image: int = 256,
-        boi_token_index: int = 255_999,
-        eoi_token_index: int = 256_000,
-        image_token_index: int = 262_144,
+        text_config: Optional[Union[Gemma3p5TextConfig, dict[str, Any]]] = None,
+        vision_config: Optional[Union[Gemma3p5VisionConfig, dict[str, Any]]] = None,
+        audio_config: Optional[Union[Gemma3p5AudioConfig, dict[str, Any]]] = None,
+        audio_soft_tokens_per_image: int = 256,
+        vision_soft_tokens_per_image: int = 256,
+        boi_token_id: int = 255_999,
+        eoi_token_id: int = 256_000,
+        image_token_id: int = 262_144,
         initializer_range: float = 0.02,
         **kwargs,
     ):
-        if text_config is None:
-            text_config = Gemma3p5TextConfig()
-            logger.info(
-                "text_config is None, using default Gemma3p5TextConfig text config."
-            )
-        elif isinstance(text_config, dict):
+        super().__init__(**kwargs)
+
+        if isinstance(text_config, dict):
             text_config = Gemma3p5TextConfig(**text_config)
+        elif text_config is None:
+            text_config = Gemma3p5TextConfig()
+            logger.info("text_config is None. Using default Gemma3p5TextConfig.")
+
+        if isinstance(vision_config, dict):
+            vision_config = Gemma3p5VisionConfig(**vision_config)
+        elif vision_config is None:
+            logger.info("vision_config is None. Vision capabilities will not be used.")
+
+        if isinstance(audio_config, dict):
+            audio_config = Gemma3p5AudioConfig(**audio_config)
+        elif audio_config is None:
+            logger.info("audio_config is None. Audio capabilities will not be used.")
 
         self.text_config = text_config
         self.vision_config = vision_config
-        self.mm_tokens_per_image = mm_tokens_per_image
-        self.boi_token_index = boi_token_index
-        self.eoi_token_index = eoi_token_index
-        self.image_token_index = image_token_index
+        self.audio_config = audio_config
+
+        self.audio_soft_tokens_per_image = audio_soft_tokens_per_image
+        self.vision_soft_tokens_per_image = vision_soft_tokens_per_image
+        self.boi_token_id = boi_token_id
+        self.eoi_token_id = eoi_token_id
+        self.image_token_id = image_token_id
         self.initializer_range = initializer_range
 
-        super().__init__(**kwargs)
 
-
-__all__ = ["Gemma3p5Config", "Gemma3p5TextConfig"]
+# register_processor(Gemma3p5Config, Gemma3SGLangImageProcessor)
+# register_image_processor(Gemma3p5Config, Gemma3SGLangImageProcessor)

@@ -14,9 +14,11 @@
 from typing import Iterable, List, Set, Tuple
 
 import torch
+from torch import nn
 from transformers import AutoModel, PreTrainedModel
 
 from sglang.srt.configs import Gemma3p5Config
+from sglang.srt.configs.gemma3_5_config import Gemma3p5AudioConfig, Gemma3p5VisionConfig
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.managers.mm_utils import (
     MultiModalityDataPaddingPatternTokenPairs,
@@ -25,8 +27,136 @@ from sglang.srt.managers.mm_utils import (
 from sglang.srt.managers.schedule_batch import MultimodalDataItem, MultimodalInputs
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import maybe_remap_kv_scale_name
-from sglang.srt.models.gemma3_5_causal import Gemma3p5ForCausalLM
+from sglang.srt.models.gemma3_5_causal import Gemma3p5ForCausalLM, Gemma3p5RMSNorm
 from sglang.srt.utils import flatten_nested_list
+
+
+class Gemma3p5MultiModalProjector(nn.Module):
+    def __init__(self, config: Gemma3p5Config):
+        super().__init__()
+
+        self.mm_input_projection_weight = nn.Parameter(
+            torch.zeros(
+                config.vision_config.hidden_size, config.text_config.hidden_size
+            )
+        )
+
+        self.mm_soft_emb_norm = Gemma3p5RMSNorm(
+            config.vision_config.hidden_size, eps=config.vision_config.layer_norm_eps
+        )
+
+        self.patches_per_image = int(
+            config.vision_config.image_size // config.vision_config.patch_size
+        )
+        self.tokens_per_side = int(config.vision_soft_tokens_per_image**0.5)
+        self.kernel_size = self.patches_per_image // self.tokens_per_side
+        self.avg_pool = nn.AvgPool2d(
+            kernel_size=self.kernel_size, stride=self.kernel_size
+        )
+
+    def forward(self, vision_outputs: torch.Tensor):
+        batch_size, _, seq_length = vision_outputs.shape
+
+        reshaped_vision_outputs = vision_outputs.transpose(1, 2)
+        reshaped_vision_outputs = reshaped_vision_outputs.reshape(
+            batch_size, seq_length, self.patches_per_image, self.patches_per_image
+        )
+        reshaped_vision_outputs = reshaped_vision_outputs.contiguous()
+
+        pooled_vision_outputs = self.avg_pool(reshaped_vision_outputs)
+        pooled_vision_outputs = pooled_vision_outputs.flatten(2)
+        pooled_vision_outputs = pooled_vision_outputs.transpose(1, 2)
+
+        normed_vision_outputs = self.mm_soft_emb_norm(pooled_vision_outputs)
+
+        projected_vision_outputs = torch.matmul(
+            normed_vision_outputs, self.mm_input_projection_weight
+        )
+        return projected_vision_outputs.type_as(vision_outputs)
+
+
+class Gemma3p5VisionEmbedder(nn.Module):
+    def __init__(self, config: Gemma3p5Config, *args, vocab_offset: int = 0, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        if (vision_config := config.vision_config) is None:
+            raise ValueError(
+                "`Gemma3p5Config` passed as `config` cannot have `vision_config=None`"
+            )
+
+        self.vision_config: Gemma3p5VisionConfig = vision_config
+        self.text_config = config.text_config
+        self.vocab_offset = vocab_offset
+
+        self.embedding = nn.Embedding(
+            self.vision_config.vocab_size, self.vision_config.hidden_size
+        )
+
+        self.embedding_norm = Gemma3p5RMSNorm(
+            self.vision_config.hidden_size,
+            eps=self.text_config.rms_norm_eps,
+            scale_shift=0.0,
+            with_scale=True,
+        )
+
+        self.embedding_projection = nn.Linear(
+            self.vision_config.hidden_size, self.text_config.hidden_size, bias=False
+        )
+
+        self.embedding_post_projection_norm = Gemma3p5RMSNorm(
+            dim=self.text_config.hidden_size,
+            eps=self.text_config.rms_norm_eps,
+            scale_shift=0.0,
+            with_scale=False,
+        )
+
+    def forward(self, input_ids: torch.LongTensor) -> torch.Tensor:
+        hard_emb = self.embedding(input_ids - self.vocab_offset)
+        hard_emb_norm = self.embedding_norm(hard_emb)
+        hard_emb_norm_proj = self.embedding_projection(hard_emb_norm)
+        return self.embedding_post_projection_norm(hard_emb_norm_proj)
+
+
+class Gemma3p5AudioEmbedder(nn.Module):
+    def __init__(self, config: Gemma3p5Config, *args, vocab_offset: int = 0, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        if (audio_config := config.audio_config) is None:
+            raise ValueError(
+                "`Gemma3p5Config` passed as `config` cannot have `audio_config=None`"
+            )
+
+        self.audio_config: Gemma3p5AudioConfig = audio_config
+        self.text_config = config.text_config
+        self.vocab_offset = vocab_offset
+
+        self.embedding = nn.Embedding(
+            self.audio_config.vocab_size, self.audio_config.hidden_size
+        )
+
+        self.embedding_norm = Gemma3p5RMSNorm(
+            dim=self.audio_config.hidden_size,
+            eps=self.audio_config.embedding_norm_eps,
+            scale_shift=0.0,
+            with_scale=True,
+        )
+
+        self.embedding_projection = nn.Linear(
+            self.audio_config.hidden_size, self.text_config.hidden_size, bias=False
+        )
+
+        self.embedding_post_projection_norm = Gemma3p5RMSNorm(
+            dim=self.text_config.hidden_size,
+            eps=self.audio_config.embedding_norm_eps,
+            scale_shift=0.0,
+            with_scale=False,
+        )
+
+    def forward(self, input_ids: torch.LongTensor) -> torch.Tensor:
+        hard_emb = self.embedding(input_ids - self.vocab_offset)
+        hard_emb_norm = self.embedding_norm(hard_emb)
+        hard_emb_norm_proj = self.embedding_projection(hard_emb_norm)
+        return self.embedding_post_projection_norm(hard_emb_norm_proj)
 
 
 class Gemma3p5ForConditionalGeneration(PreTrainedModel):
@@ -35,6 +165,35 @@ class Gemma3p5ForConditionalGeneration(PreTrainedModel):
     def __init__(self, config: Gemma3p5Config):
         super().__init__(config)
         self.vision_tower = AutoModel.from_config(config=config.vision_config)
+        self.multi_modal_projector = Gemma3p5MultiModalProjector(config)
+        self.vocab_size = config.text_config.vocab_size
+
+        language_model = Gemma3p5ForCausalLM(config=config.text_config)
+
+        if language_model._tied_weights_keys is not None:
+            self._tied_weights_keys = [
+                f"language_model.{k}" for k in language_model._tied_weights_keys
+            ]
+        self.language_model = language_model
+
+        self.pad_token_id = (
+            self.config.pad_token_id if self.config.pad_token_id is not None else -1
+        )
+        # self.audio_tower = AutoModel.from_config(config=config.audio_config)
+
+        vision_vocab_offset = audio_vocab_offset = config.text_config.vocab_size
+
+        if config.vision_config is not None:
+            audio_vocab_offset += config.vision_config.vocab_size
+            self.embed_vision = Gemma3p5VisionEmbedder(
+                config, vocab_offset=vision_vocab_offset
+            )
+
+        if config.audio_config is not None:
+            self.embed_audio = Gemma3p5AudioEmbedder(
+                config, vocab_offset=audio_vocab_offset
+            )
+        self.post_init()
         # TODO: audio tower
 
     def pad_input_ids(

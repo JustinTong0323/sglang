@@ -788,7 +788,7 @@ class TestKimiVLServer(TestOpenAIVisionServer):
 class TestGemma3_5Server(TestOpenAIVisionServer):
     @classmethod
     def setUpClass(cls):
-        cls.model = "gg-hf-gm/gemma3n-4b-it-text"
+        cls.model = "~/.cache/huggingface/hub/models--gg-hf-gm--gemma3n-4b-it-text/snapshots/9a697ecf20cd8baa73444d64aa43db01452f58fd/"
         # cls.model = "gg-hf-gm/gemma3n-4b-text"
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.api_key = "sk-123456"
