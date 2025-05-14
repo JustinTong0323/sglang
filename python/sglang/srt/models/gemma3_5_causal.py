@@ -228,7 +228,7 @@ class Gemma3p5LaurelBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # laurel_x adapated from two einsums:
+        # laurel_x adapted from two einsums:
         # jax.numpy.einsum("bld,dr->blr", ...)
         # jax.numpy.einsum("blr,rd->bld", ...)
 
@@ -932,77 +932,6 @@ class Gemma3p5TextModel(PreTrainedModel):
         hidden_states = self.norm(hidden_states)
 
         return hidden_states
-
-
-class AltUP_Projection(nn.Module):
-    def __init__(self):
-        super().__init__()
-        # FIXME: shape not decided yet
-        self.weight = nn.Parameter(torch.zeros(0))
-
-    def forward(self, x):
-        return x * self.weight
-
-    def extra_repr(self):
-        return f"{tuple(self.weight.shape)}, eps={self.eps}"
-
-
-class AltUp(nn.Module):
-    def __init__(self, d, K, selection_strategy="alternating", transformer_layer=None):
-        super().__init__()
-        self.d = d
-        self.K = K
-        self.selection_strategy = selection_strategy
-        self.p = nn.Parameter(torch.randn(K, K))
-        self.g = nn.Parameter(torch.randn(K))
-        self.transformer_layer = transformer_layer
-        if transformer_layer is None:
-            raise ValueError("A transformer layer must be provided.")
-
-    def predict(self, x_old):
-        # x_old shape: [batch_size, seq_len, d * K]
-        batch_size, seq_len, dK = x_old.shape
-        x_old_reshaped = x_old.view(batch_size, seq_len, self.K, self.d)
-        # x_old_reshaped shape: [batch_size, seq_len, K, d]
-        p_expanded = self.p.unsqueeze(0).unsqueeze(0)  # [1, 1, K, K]
-        x_hat = torch.matmul(p_expanded, x_old_reshaped.transpose(2, 3)).transpose(2, 3)
-        # x_hat shape: [batch_size, seq_len, K, d]
-        return x_hat.view(batch_size, seq_len, dK)
-
-    def compute(self, x_old, layer_index=None):
-        batch_size, seq_len, dK = x_old.shape
-        x_old_reshaped = x_old.view(batch_size, seq_len, self.K, self.d)
-        if self.selection_strategy == "same":
-            j_star = 0
-        elif self.selection_strategy == "alternating":
-            if layer_index is None:
-                raise ValueError(
-                    "Layer index must be provided for 'alternating' strategy."
-                )
-            j_star = layer_index % self.K
-        else:
-            raise ValueError(f"Invalid selection strategy: {self.selection_strategy}")
-
-        x_old_j_star = x_old_reshaped[:, :, j_star, :]
-        x_tilde_j_star = self.transformer_layer(x_old_j_star)
-        return x_tilde_j_star, j_star
-
-    def correct(self, x_hat, x_tilde_j_star, j_star):
-        batch_size, seq_len, dK = x_hat.shape
-        x_hat_reshaped = x_hat.view(batch_size, seq_len, self.K, self.d)
-        x_hat_j_star = x_hat_reshaped[:, :, j_star, :]
-        delta = x_tilde_j_star - x_hat_j_star
-        g_expanded = self.g.unsqueeze(0).unsqueeze(0).unsqueeze(-1)  # [1, 1, K, 1]
-        delta_expanded = delta.unsqueeze(2)  # [batch_size, seq_len, 1, d]
-        correction = g_expanded * delta_expanded
-        x_new = x_hat_reshaped + correction
-        return x_new.view(batch_size, seq_len, dK)
-
-    def forward(self, x, layer_index):
-        x_hat = self.predict(x)
-        x_tilde_j_star, j_star = self.compute(x, layer_index)
-        x_new = self.correct(x_hat, x_tilde_j_star, j_star)
-        return x_new
 
 
 class Gemma3p5ForCausalLM(PreTrainedModel):
