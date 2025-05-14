@@ -66,76 +66,86 @@ def extract_layer_index(prefix: str) -> int:
 class Gemma3p5MLP(nn.Module):
     def __init__(
         self,
-        hidden_size: int,
-        intermediate_size: int,
-        hidden_activation: str,
+        config: Gemma3p5TextConfig,
+        layer_idx: int = 0,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
     ) -> None:
-        super().__init__()
-        self.gate_up_proj = MergedColumnParallelLinear(
-            hidden_size,
-            [intermediate_size] * 2,
-            bias=False,
-            quant_config=quant_config,
-            prefix=add_prefix("gate_up_proj", prefix),
-        )
-        self.down_proj = RowParallelLinear(
-            intermediate_size,
-            hidden_size,
-            bias=False,
-            quant_config=quant_config,
-            prefix=add_prefix("down_proj", prefix),
-        )
-        if hidden_activation != "gelu_pytorch_tanh":
+        # Raise error if hidden_activation is not gelu_pytorch_tanh
+        if config.hidden_activation != "gelu_pytorch_tanh":
             raise ValueError(
                 "Gemma3p5 uses `gelu_pytorch_tanh` as the hidden activation "
                 "function. Please set `hidden_activation` to "
                 "`gelu_pytorch_tanh`."
             )
-        self.act_fn = GeluAndMul()
+
+        super().__init__()
+        self.config = config
+        self.hidden_size = config.hidden_size
+        self.intermediate_size = config.intermediate_size
+        # self.gate_up_proj = MergedColumnParallelLinear(
+        #     hidden_size,
+        #     [intermediate_size] * 2,
+        #     bias=False,
+        #     quant_config=quant_config,
+        #     prefix=add_prefix("gate_up_proj", prefix),
+        # )
+
+        self.gate_proj = ColumnParallelLinear(
+            self.hidden_size,
+            self.intermediate_size,
+            bias=False,
+            quant_config=quant_config,
+            prefix=add_prefix("gate_proj", prefix),
+        )
+
+        self.up_proj = ColumnParallelLinear(
+            self.hidden_size,
+            self.intermediate_size,
+            bias=False,
+            quant_config=quant_config,
+            prefix=add_prefix("up_proj", prefix),
+        )
+
+        self.down_proj = RowParallelLinear(
+            self.intermediate_size,
+            self.hidden_size,
+            bias=False,
+            quant_config=quant_config,
+            prefix=add_prefix("down_proj", prefix),
+        )
+        self.act_fn = ACT2FN[config.hidden_activation]
+        if config.activation_sparsity_pattern is not None:
+            self.activation_sparsity = config.activation_sparsity_pattern[layer_idx]
+        else:
+            self.activation_sparsity = 0.0
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        gate_up, _ = self.gate_up_proj(x)
-        x = self.act_fn(gate_up)
-        x, _ = self.down_proj(x)
+        gate, _ = self.gate_proj(x)
+        if self.activation_sparsity > 0.0:
+            gate = self._gaussian_topk(gate)
+        activations = self.act_fn(gate)
+        up, _ = self.up_proj(x)
+        x, _ = self.down_proj(activations * up)
         return x
 
-
-class Gemma3p5LaurelLR(nn.Module):
-    # LaurelLR for SGLang
-    def __init__(
-        self,
-        hidden_size: int,
-        laurel_rank: int,
-        quant_config: Optional["QuantizationConfig"] = None,
-        prefix: str = "",
-    ):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.laurel_rank = laurel_rank
-
-        self.linear_left = ColumnParallelLinear(
-            input_size=hidden_size,
-            output_size=laurel_rank,
-            bias=False,
-            quant_config=quant_config,
-            prefix=add_prefix(prefix, "linear_left"),
+    def _gaussian_topk(self, inputs: torch.Tensor) -> torch.Tensor:
+        target_sparsity_tensor = torch.tensor(
+            self.activation_sparsity, dtype=torch.float32, device=inputs.device
         )
-
-        self.linear_right = RowParallelLinear(
-            input_size=laurel_rank,
-            output_size=hidden_size,
-            bias=False,
-            quant_config=quant_config,
-            prefix=add_prefix(prefix, "linear_right"),
-        )
-
-    def forward(self, x_i: torch.Tensor) -> torch.Tensor:
-        temp, _ = self.linear_left(x_i)
-        output, _ = self.linear_right(temp)
-
-        return output
+        # normal_dist and std_multiplier are adapted from jax.scipy.stats.norm.ppf().
+        #
+        # References:
+        #   *   https://docs.jax.dev/en/latest/_autosummary/jax.scipy.stats.norm.ppf.html
+        #   *   https://pytorch.org/docs/stable/distributions.html#torch.distributions.normal.Normal
+        #   *   https://pytorch.org/docs/stable/distributions.html#torch.distributions.transformed_distribution.TransformedDistribution.icdf
+        normal_dist = torch.distributions.normal.Normal(0, 1)
+        std_multiplier: torch.Tensor = normal_dist.icdf(target_sparsity_tensor)
+        std_multiplier = std_multiplier.type(inputs.dtype)
+        inputs_mean = torch.mean(inputs, dim=-1, keepdim=True)
+        inputs_std = torch.std(inputs, dim=-1, keepdim=True, unbiased=False)
+        cutoff_x = inputs_mean + inputs_std * std_multiplier
+        return nn.functional.relu(inputs - cutoff_x)
 
 
 class Gemma3p5RMSNorm(nn.Module):
@@ -183,16 +193,33 @@ class Gemma3p5RMSNorm(nn.Module):
 class Gemma3p5LaurelBlock(nn.Module):
     """Learned Augmented Residual Layer"""
 
-    def __init__(self, config: Gemma3p5TextConfig, *args, **kwargs):
+    def __init__(
+        self,
+        config: Gemma3p5TextConfig,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+        *args,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.config = config
 
-        self.linear_left = nn.Linear(
-            self.config.hidden_size, self.config.laurel_rank, bias=False
+        self.linear_left = ColumnParallelLinear(
+            input_size=self.config.hidden_size,
+            output_size=self.config.laurel_rank,
+            bias=False,
+            quant_config=quant_config,
+            prefix=add_prefix(prefix, "linear_left"),
         )
-        self.linear_right = nn.Linear(
-            self.config.laurel_rank, self.config.hidden_size, bias=False
+
+        self.linear_right = RowParallelLinear(
+            input_size=self.config.laurel_rank,
+            output_size=self.config.hidden_size,
+            bias=False,
+            quant_config=quant_config,
+            prefix=add_prefix(prefix, "linear_right"),
         )
+
         self.post_laurel_norm = Gemma3p5RMSNorm(
             dim=self.config.hidden_size,
             eps=self.config.rms_norm_eps,
@@ -204,8 +231,9 @@ class Gemma3p5LaurelBlock(nn.Module):
         # laurel_x adapated from two einsums:
         # jax.numpy.einsum("bld,dr->blr", ...)
         # jax.numpy.einsum("blr,rd->bld", ...)
-        laurel_x: torch.Tensor = self.linear_left(x)
-        laurel_x: torch.Tensor = self.linear_right(laurel_x)
+
+        laurel_x, _ = self.linear_left(x)
+        laurel_x, _ = self.linear_right(laurel_x)
         normed_laurel_x = self.post_laurel_norm(laurel_x)
         return x + normed_laurel_x
 
@@ -329,6 +357,7 @@ class Gemma3p5Attention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         position_embeddings: torch.Tensor,
+        attention_mask: Optional[torch.Tensor],
         forward_batch: ForwardBatch,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         input_shape = hidden_states.shape[:-1]
@@ -357,13 +386,6 @@ class Gemma3p5Attention(nn.Module):
         # [b, h, s, head_dim] ->  [b, s, h, head_dim]
         q = q.permute(0, 2, 1, 3)
         k = k.permute(0, 2, 1, 3)
-        #     scaling=self.scaling,
-        #     sliding_window=self.sliding_window,
-        # )
-
-        # print(f"{q.shape=}")
-        # print(f"{k.shape=}")
-        # print(f"{v.shape=}")
 
         attn_output = self.attn(
             q=q,
@@ -374,7 +396,6 @@ class Gemma3p5Attention(nn.Module):
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         output, _ = self.o_proj(attn_output)
 
-        # print(f"{type(attn_output)=}")
         return output
 
 
@@ -399,9 +420,7 @@ class Gemma3p5DecoderLayer(nn.Module):
             prefix=prefix,
         )
         self.mlp = Gemma3p5MLP(
-            hidden_size=config.hidden_size,
-            intermediate_size=config.intermediate_size,
-            hidden_activation=config.hidden_activation,
+            config=config,
             quant_config=quant_config,
             prefix=prefix,
         )
@@ -445,6 +464,7 @@ class Gemma3p5DecoderLayer(nn.Module):
         position_embeddings_local: torch.Tensor,
         per_layer_input: torch.Tensor,
         forward_batch: ForwardBatch,
+        attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> tuple[
         torch.FloatTensor, Optional[tuple[torch.FloatTensor, torch.FloatTensor]]
@@ -467,7 +487,7 @@ class Gemma3p5DecoderLayer(nn.Module):
             hidden_states=active_prediction_normed,
             position_embeddings=position_embeddings,
             forward_batch=forward_batch,
-            attention_mask=None,
+            attention_mask=attention_mask,
         )
         attn = self.post_attention_layernorm(attn)
 
@@ -541,8 +561,6 @@ class Gemma3p5RotaryEmbedding(nn.Module):
                 inv_freq_expanded.float() @ position_ids_expanded.float()
             ).transpose(1, 2)
             emb = torch.cat((freqs, freqs), dim=-1)
-            # emb = emb.view(emb.shape[1], -1, emb.shape[-1])
-
             cos = emb.cos() * self.attention_scaling
             sin = emb.sin() * self.attention_scaling
 
@@ -1048,8 +1066,8 @@ class Gemma3p5ForCausalLM(PreTrainedModel):
             (".qkv_proj", ".q_proj", "q"),
             (".qkv_proj", ".k_proj", "k"),
             (".qkv_proj", ".v_proj", "v"),
-            (".gate_up_proj", ".gate_proj", 0),
-            (".gate_up_proj", ".up_proj", 1),
+            # (".gate_up_proj", ".gate_proj", 0),
+            # (".gate_up_proj", ".up_proj", 1),
         ]
         params_dict = dict(self.named_parameters())
         loaded_params: Set[str] = set()
