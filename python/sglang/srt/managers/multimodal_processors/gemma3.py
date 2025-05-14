@@ -20,6 +20,9 @@ class Gemma3SGLangImageProcessor(SGLangBaseProcessor):
     def __init__(self, hf_config, server_args, _processor):
         super().__init__(hf_config, server_args, _processor)
         self.IMAGE_TOKEN = "<start_of_image>"
+        # TODO
+        self.AUDIO_TOKEN = "<start_of_audio>"
+        self.AUDIO_TOKEN_ID = 0
         self.IM_START_TOKEN_ID = hf_config.boi_token_index
         self.IM_END_TOKEN_ID = hf_config.eoi_token_index
 
@@ -41,20 +44,35 @@ class Gemma3SGLangImageProcessor(SGLangBaseProcessor):
         base_output = self.load_mm_data(
             prompt=input_text,
             image_data=image_data,
-            multimodal_tokens=MultimodalSpecialTokens(image_token=image_token),
+            audio_data=request_obj.audio_data,
+            multimodal_tokens=MultimodalSpecialTokens(
+                image_token=image_token,
+                audio_token=self.AUDIO_TOKEN,
+            ),
             max_req_input_len=max_req_input_len,
             discard_alpha_channel=True,
         )
 
         ret = self.process_mm_data(
-            input_text=base_output.input_text, images=base_output.images
+            input_text=base_output.input_text,
+            images=base_output.images,
+            audios=base_output.audios,
         )
 
         items = []
+
         for i, image in enumerate(base_output.images):
             item = MultimodalDataItem(
                 pixel_values=ret["pixel_values"][i],
                 modality=Modality.IMAGE,
+            )
+            items += [item]
+
+        # TODO
+        if "audio_feature" in ret:
+            item = MultimodalDataItem(
+                audio_features=ret["audio_feature"],
+                modality=Modality.AUDIO,
             )
             items += [item]
 
@@ -63,4 +81,5 @@ class Gemma3SGLangImageProcessor(SGLangBaseProcessor):
             "input_ids": ret["input_ids"].flatten().tolist(),
             "im_start_id": self.IM_START_TOKEN_ID,
             "im_end_id": self.IM_END_TOKEN_ID,
+            "audio_token_id": self.AUDIO_TOKEN_ID,
         }

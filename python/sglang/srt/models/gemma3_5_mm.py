@@ -21,7 +21,7 @@ from sglang.srt.configs import Gemma3p5Config
 from sglang.srt.configs.gemma3_5_config import Gemma3p5AudioConfig, Gemma3p5VisionConfig
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.managers.mm_utils import (
-    MultiModalityDataPaddingPatternTokenPairs,
+    MultiModalityDataPaddingPatternMultimodalTokens,
     general_mm_embed_routine,
 )
 from sglang.srt.managers.schedule_batch import MultimodalDataItem, MultimodalInputs
@@ -159,12 +159,21 @@ class Gemma3p5AudioEmbedder(nn.Module):
         return self.embedding_post_projection_norm(hard_emb_norm_proj)
 
 
+class Gemma3p5AudioEncoder(nn.Module):
+    def __init__(self, config: Gemma3p5AudioConfig, *args, **kwargs):
+        super().__init__(config)
+        self.config = config
+        pass
+
+
 class Gemma3p5ForConditionalGeneration(PreTrainedModel):
     model_type = "gemma3p5"
 
     def __init__(self, config: Gemma3p5Config):
         super().__init__(config)
-        self.vision_tower = AutoModel.from_config(config=config.vision_config)
+        # TODO
+        self.vision_tower = AutoModel.from_pretrained(config.vision_config)
+        self.audio_tower = Gemma3p5AudioEncoder(config.audio_config)
         self.multi_modal_projector = Gemma3p5MultiModalProjector(config)
         self.vocab_size = config.text_config.vocab_size
 
@@ -194,24 +203,27 @@ class Gemma3p5ForConditionalGeneration(PreTrainedModel):
                 config, vocab_offset=audio_vocab_offset
             )
         self.post_init()
-        # TODO: audio tower
 
     def pad_input_ids(
         self, input_ids: List[int], image_inputs: MultimodalInputs
     ) -> List[int]:
-        """Pad input IDs with image tokens."""
-        # Get special token IDs
-        im_start_id: int = image_inputs.im_start_id
-        im_end_id: int = image_inputs.im_end_id
-
-        media_token_pairs = [(im_start_id, im_end_id)]
-        pattern = MultiModalityDataPaddingPatternTokenPairs(media_token_pairs)
+        pattern = MultiModalityDataPaddingPatternMultimodalTokens(
+            [image_inputs.im_token_id, image_inputs.audio_token_id]
+        )
         ids = pattern.pad_input_tokens(input_ids, image_inputs)
         return ids
 
     def get_audio_feature(self, items: List[MultimodalDataItem]):
         # TODO
-        pass
+        audio_feature = torch.stack(
+            flatten_nested_list([item.audio_features for item in items]), dim=0
+        )
+        audio_feature = audio_feature.to(device=self.audio_tower.device)
+        audio_feature = audio_feature.to(dtype=self.language_model.dtype())
+
+        audio_outputs = self.audio_tower(audio_feature).last_hidden_state
+        audio_features = self.multi_modal_projector(audio_outputs)
+        return audio_features
 
     def get_image_feature(self, items: List[MultimodalDataItem]):
         """
@@ -223,6 +235,7 @@ class Gemma3p5ForConditionalGeneration(PreTrainedModel):
         pixel_values = torch.stack(
             flatten_nested_list([item.pixel_values for item in items]), dim=0
         )
+
         pixel_values = pixel_values.to(device=self.vision_tower.device)
         pixel_values = pixel_values.to(dtype=self.language_model.dtype())
 
@@ -238,7 +251,7 @@ class Gemma3p5ForConditionalGeneration(PreTrainedModel):
         forward_batch: ForwardBatch,
         input_embeds: torch.Tensor = None,
         **kwargs: object,
-    ) -> LogitsProcessor:
+    ) -> torch.Tensor:
         r"""
             labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
                 Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
@@ -278,7 +291,7 @@ class Gemma3p5ForConditionalGeneration(PreTrainedModel):
 
         # Important: position_ids in Gemma3 are 1-indexed
         # This really does cost me sometime
-        positions += 1
+        # positions += 1
 
         # Replace image id with PAD if the image token if OOV, to avoid index-errors
         if input_ids is not None and self.config.image_token_index >= self.vocab_size:
