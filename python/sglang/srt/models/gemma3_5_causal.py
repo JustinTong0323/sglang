@@ -21,10 +21,8 @@ from transformers.activations import ACT2FN
 
 from sglang.srt.configs import Gemma3p5TextConfig
 from sglang.srt.distributed import get_tensor_model_parallel_world_size
-from sglang.srt.layers.activation import GeluAndMul
 from sglang.srt.layers.linear import (
     ColumnParallelLinear,
-    MergedColumnParallelLinear,
     QKVParallelLinear,
     RowParallelLinear,
 )
@@ -170,24 +168,17 @@ class Gemma3p5RMSNorm(nn.Module):
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self._guard_against_excess_precision(x)
-
         scale = self.weight if self.weight is not None else torch.tensor(1.0)
         if self.scale_shift != 0.0:
             scale += self.scale_shift
 
-        output = self._norm(x.float())
         # Llama does x.to(float16) * w whilst Gemma2 is (x * w).to(float16)
         # See https://github.com/huggingface/transformers/pull/29402
-        output = output * scale.float()
+        output = self._norm(x) * scale.type(x.dtype)
         return output.type_as(x)
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.eps}"
-
-    def _guard_against_excess_precision(self, x: torch.Tensor) -> torch.Tensor:
-        # TODO(ryanmullins): Implement Torch equivalent to jax.lax.reduce_precision
-        return x
 
 
 class Gemma3p5LaurelBlock(nn.Module):
@@ -224,7 +215,7 @@ class Gemma3p5LaurelBlock(nn.Module):
             dim=self.config.hidden_size,
             eps=self.config.rms_norm_eps,
             scale_shift=0.0,
-            with_scale=False,
+            with_scale=True,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -451,11 +442,11 @@ class Gemma3p5DecoderLayer(nn.Module):
             self.hidden_size_per_layer_input, self.hidden_size, bias=False
         )
         self.post_per_layer_input_norm = Gemma3p5RMSNorm(
-            self.hidden_size, eps=config.rms_norm_eps
+            self.hidden_size, eps=config.rms_norm_eps, scale_shift=0.0, with_scale=True
         )
-        self.post_laurel_norm = Gemma3p5RMSNorm(
-            self.hidden_size, eps=config.rms_norm_eps
-        )
+        # self.post_laurel_norm = Gemma3p5RMSNorm(
+        #     self.hidden_size, eps=config.rms_norm_eps
+        # )
 
     def forward(
         self,
@@ -473,9 +464,7 @@ class Gemma3p5DecoderLayer(nn.Module):
         active_prediction = predictions[self.config.altup_active_idx]
 
         active_prediction_normed = self.input_layernorm(active_prediction)
-        laurel_hidden_states = self.laurel(active_prediction_normed)
-        laurel_normed = self.post_laurel_norm(laurel_hidden_states)
-        laurel_output = active_prediction_normed + laurel_normed
+        laurel_output = self.laurel(active_prediction_normed)
 
         # apply global RoPE to non-sliding layer only
         if self.is_sliding:
@@ -1026,7 +1015,8 @@ class Gemma3p5ForCausalLM(PreTrainedModel):
                 name = maybe_remap_kv_scale_name(name, params_dict)
                 if name is None:
                     continue
-
+                if not name in params_dict:
+                    print(f"{params_dict.keys()=}")
                 param = params_dict[name]
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
