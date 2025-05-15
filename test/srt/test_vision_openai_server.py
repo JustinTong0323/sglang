@@ -807,5 +807,26 @@ class TestKimiVLServer(TestOpenAIVisionServer):
         pass
 
 
+class TestGemma3_5Server(TestOpenAIVisionServer):
+    @classmethod
+    def setUpClass(cls):
+        cls.model = "~/.cache/huggingface/hub/models--gg-hf-gm--gemma3n-4b-it-text/snapshots/9a697ecf20cd8baa73444d64aa43db01452f58fd/"
+        # cls.model = "gg-hf-gm/gemma3n-4b-text"
+        cls.base_url = DEFAULT_URL_FOR_TEST
+        cls.api_key = "sk-123456"
+        cls.process = popen_launch_server(
+            cls.model,
+            cls.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            other_args=[
+                "--trust-remote-code",
+            ],
+        )
+        cls.base_url += "/v1"
+
+    def test_video_chat_completion(self):
+        pass
+
+
 if __name__ == "__main__":
     unittest.main()

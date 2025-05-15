@@ -174,7 +174,6 @@ class Gemma3Attention(nn.Module):
             # Local attention. Override the values in config.json.
             self.rope_theta = config.rope_local_base_freq
             self.rope_scaling = {"rope_type": "default"}
-            # FIXME(mick): idk why vllm does this
             # self.sliding_window = config.interleaved_sliding_window
             self.sliding_window = get_attention_sliding_window_size(config)
         else:
@@ -260,7 +259,7 @@ class Gemma3Attention(nn.Module):
 
         # [s, h, head_dim]
         q = q.unflatten(-1, (self.num_heads, self.head_dim))
-        # -> [h, s, head_dim]
+        # -> [b, h, s, head_dim]
         q = q.transpose(0, 1).unsqueeze(0)
         q = self.q_norm(q)
         k = k.unflatten(-1, (self.num_kv_heads, self.head_dim))
@@ -268,7 +267,6 @@ class Gemma3Attention(nn.Module):
         k = k.transpose(0, 1).unsqueeze(0)
         k = self.k_norm(k)
 
-        # q, k = self.rotary_emb(positions, q, k)
         cos, sin = position_embeddings
         q, k = apply_rotary_pos_emb(q, k, cos, sin)
 
