@@ -200,7 +200,7 @@ def cutlass_w4a8_moe(
         src2dst,
         local_topk_ids,
         topk_weights,
-        num_experts,
+        total_num_experts,
         topk,
         k,
         0,
