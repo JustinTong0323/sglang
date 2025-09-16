@@ -3,6 +3,16 @@ Unit tests for the RadixCache implementation.
 
 This module tests the core functionality of RadixCache, BaseKey, and TreeNode
 without requiring full SGLang server setup.
+
+Test Coverage:
+- BaseKey: token ID management, slicing, iteration, representation
+- TreeNode: node properties, reference counting, hash values  
+- RadixCache: insert/match operations, eviction, page alignment, KV cache events
+
+Usage:
+    python test_radix_cache_unit.py
+    python -m pytest test_radix_cache_unit.py -v
+    python -m pytest test_radix_cache_unit.py::TestRadixCache::test_insert_basic
 """
 
 import unittest
