@@ -1146,6 +1146,7 @@ def sample_random_requests(
     dataset_path: str,
     random_sample: bool = True,
     return_text: bool = True,
+    seed: int = -1,
 ) -> List[DatasetRow]:
     input_lens = np.random.randint(
         max(int(input_len * range_ratio), 1),
@@ -1182,6 +1183,11 @@ def sample_random_requests(
             )
             for data in dataset
         ]
+
+        # Set random seed for reproducibility
+        if seed != -1:
+            random.seed(seed)
+
         # Shuffle the dataset.
         random.shuffle(dataset)
 
@@ -1216,6 +1222,7 @@ def sample_random_requests(
                     output_len=int(output_lens[i]),
                 )
             )
+        print(f"!!!!DEBUG: Sampled prompt {input_requests[0]}")
     else:
         # Sample token ids from random integers. This can cause some NaN issues.
         offsets = np.random.randint(0, tokenizer.vocab_size, size=num_prompts)

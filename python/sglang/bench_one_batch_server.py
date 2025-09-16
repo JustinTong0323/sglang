@@ -49,6 +49,7 @@ class BenchArgs:
     profile_by_stage: bool = False
     dataset_path: str = ""
     parallel_batch: bool = False
+    seed: int = -1
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser):
@@ -92,6 +93,7 @@ class BenchArgs:
             help="Path to the dataset.",
         )
         parser.add_argument("--parallel-batch", action="store_true")
+        parser.add_argument("--seed", type=int, default=BenchArgs.seed)
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace):
@@ -149,6 +151,7 @@ def run_one_case(
     profile_by_stage: bool = False,
     dataset_path: str = "",
     parallel_batch: bool = False,
+    seed: int = -1,
 ):
     requests.post(url + "/flush_cache")
     input_requests = sample_random_requests(
@@ -160,6 +163,7 @@ def run_one_case(
         dataset_path=dataset_path,
         random_sample=True,
         return_text=False,
+        seed=seed,
     )
 
     use_structured_outputs = False
@@ -359,6 +363,7 @@ def run_benchmark(server_args: ServerArgs, bench_args: BenchArgs):
             tokenizer=tokenizer,
             dataset_path=bench_args.dataset_path,
             parallel_batch=bench_args.parallel_batch,
+            seed=bench_args.seed,
         )
         print("=" * 8 + " Warmup End   " + "=" * 8 + "\n")
 
