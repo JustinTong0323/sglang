@@ -17,23 +17,11 @@ Usage:
 
 import unittest
 import time
-try:
-    import torch
-    HAS_TORCH = True
-except ImportError:
-    HAS_TORCH = False
-
-try:
-    from sglang.srt.mem_cache.radix_cache import RadixCache, BaseKey, TreeNode
-    from sglang.test.test_utils import CustomTestCase
-    HAS_SGLANG = True
-except ImportError:
-    HAS_SGLANG = False
-    # Use regular unittest.TestCase if SGLang not available
-    CustomTestCase = unittest.TestCase
+import torch
+from sglang.srt.mem_cache.radix_cache import RadixCache, BaseKey, TreeNode
+from sglang.test.test_utils import CustomTestCase
 
 
-@unittest.skipIf(not HAS_SGLANG, "SGLang not available")
 class TestBaseKey(CustomTestCase):
     """Test cases for BaseKey class."""
 
@@ -98,7 +86,6 @@ class TestBaseKey(CustomTestCase):
         self.assertIn("...", repr_str)  # Should be truncated
 
 
-@unittest.skipIf(not HAS_SGLANG, "SGLang not available")
 class TestTreeNode(CustomTestCase):
     """Test cases for TreeNode class."""
 
@@ -137,7 +124,6 @@ class TestTreeNode(CustomTestCase):
         self.assertEqual(node2.id, 1)
         self.assertEqual(node3.id, 2)
 
-    @unittest.skipIf(not HAS_TORCH, "PyTorch not available")
     def test_evicted_property(self):
         """Test evicted property."""
         node = TreeNode()
@@ -149,7 +135,6 @@ class TestTreeNode(CustomTestCase):
         node.value = None
         self.assertTrue(node.evicted)
 
-    @unittest.skipIf(not HAS_TORCH, "PyTorch not available")
     def test_backuped_property(self):
         """Test backuped property."""
         node = TreeNode()
@@ -207,7 +192,6 @@ class TestTreeNode(CustomTestCase):
         self.assertFalse(node2 < node1)
 
 
-@unittest.skipIf(not HAS_SGLANG, "SGLang not available")
 class TestRadixCache(CustomTestCase):
     """Test cases for RadixCache class."""
 
@@ -252,7 +236,6 @@ class TestRadixCache(CustomTestCase):
         # Should use paged key matching functions (partial objects don't have __name__)
         self.assertTrue(hasattr(cache.key_match_fn, 'func'))
 
-    @unittest.skipIf(not HAS_TORCH, "PyTorch not available")
     def test_reset(self):
         """Test reset method."""
         cache = RadixCache(
@@ -295,7 +278,6 @@ class TestRadixCache(CustomTestCase):
         result = cache.match_prefix(BaseKey([1, 2, 3]))
         self.assertEqual(len(result.device_indices), 0)
 
-    @unittest.skipIf(not HAS_TORCH, "PyTorch not available")
     def test_insert_basic(self):
         """Test basic insert functionality."""
         cache = RadixCache(
@@ -325,7 +307,6 @@ class TestRadixCache(CustomTestCase):
         self.assertEqual(prefix_len, 0)
         self.assertEqual(cache.total_size(), 0)
 
-    @unittest.skipIf(not HAS_TORCH, "PyTorch not available")
     def test_insert_and_match_prefix(self):
         """Test insert followed by match_prefix."""
         cache = RadixCache(
@@ -364,7 +345,6 @@ class TestRadixCache(CustomTestCase):
         self.assertEqual(prefix_len, 0)
         self.assertEqual(cache.total_size(), 3)
 
-    @unittest.skipIf(not HAS_TORCH, "PyTorch not available")
     def test_total_size(self):
         """Test total_size calculation."""
         cache = RadixCache(
@@ -416,15 +396,6 @@ class TestRadixCache(CustomTestCase):
         # Should not generate events
         events = cache.take_events()
         self.assertEqual(len(events), 0)
-
-
-class TestNoSGLang(unittest.TestCase):
-    """Test case for when SGLang is not available."""
-    
-    @unittest.skipIf(HAS_SGLANG, "SGLang is available")
-    def test_graceful_fallback(self):
-        """Test that we gracefully handle missing SGLang."""
-        self.assertTrue(True)  # Just to have a passing test
 
 
 if __name__ == "__main__":
