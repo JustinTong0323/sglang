@@ -16,6 +16,7 @@ Usage:
 """
 
 import unittest
+import unittest.mock
 import time
 import torch
 from sglang.srt.mem_cache.radix_cache import RadixCache, BaseKey, TreeNode
@@ -396,6 +397,233 @@ class TestRadixCache(CustomTestCase):
         # Should not generate events
         events = cache.take_events()
         self.assertEqual(len(events), 0)
+
+    def test_extra_key_isolation(self):
+        """Test that keys with different extra_key values are isolated."""
+        cache = RadixCache(
+            req_to_token_pool=None,
+            token_to_kv_pool_allocator=None,
+            page_size=1
+        )
+        
+        # Insert same token sequence with different extra keys
+        cache.insert(BaseKey([1, 2, 3], "key1"), torch.tensor([10, 20, 30], dtype=torch.int64))
+        cache.insert(BaseKey([1, 2, 3], "key2"), torch.tensor([40, 50, 60], dtype=torch.int64))
+        cache.insert(BaseKey([1, 2, 3], None), torch.tensor([70, 80, 90], dtype=torch.int64))
+        
+        # Keys with different extra_key should not match each other
+        result1 = cache.match_prefix(BaseKey([1, 2, 3], "key1"))
+        result2 = cache.match_prefix(BaseKey([1, 2, 3], "key2"))
+        result3 = cache.match_prefix(BaseKey([1, 2, 3], None))
+        result4 = cache.match_prefix(BaseKey([1, 2, 3], "nonexistent"))
+        
+        # Each should match only its own data
+        self.assertEqual(len(result1.device_indices), 3)
+        torch.testing.assert_close(result1.device_indices, torch.tensor([10, 20, 30], dtype=torch.int64))
+        
+        self.assertEqual(len(result2.device_indices), 3)
+        torch.testing.assert_close(result2.device_indices, torch.tensor([40, 50, 60], dtype=torch.int64))
+        
+        self.assertEqual(len(result3.device_indices), 3)
+        torch.testing.assert_close(result3.device_indices, torch.tensor([70, 80, 90], dtype=torch.int64))
+        
+        # Non-existent extra_key should not match
+        self.assertEqual(len(result4.device_indices), 0)
+
+    def test_extra_key_prefix_matching(self):
+        """Test prefix matching with extra_key."""
+        cache = RadixCache(
+            req_to_token_pool=None,
+            token_to_kv_pool_allocator=None,
+            page_size=1
+        )
+        
+        # Insert longer sequence with extra_key
+        cache.insert(BaseKey([1, 2, 3, 4, 5], "key1"), torch.tensor([10, 20, 30, 40, 50], dtype=torch.int64))
+        
+        # Prefix matching should work within same extra_key
+        result = cache.match_prefix(BaseKey([1, 2, 3], "key1"))
+        self.assertEqual(len(result.device_indices), 3)
+        torch.testing.assert_close(result.device_indices, torch.tensor([10, 20, 30], dtype=torch.int64))
+        
+        # But not with different extra_key
+        result = cache.match_prefix(BaseKey([1, 2, 3], "key2"))
+        self.assertEqual(len(result.device_indices), 0)
+
+    def test_overlapping_sequences_with_extra_key(self):
+        """Test overlapping sequences with same extra_key."""
+        cache = RadixCache(
+            req_to_token_pool=None,
+            token_to_kv_pool_allocator=None,
+            page_size=1
+        )
+        
+        # Insert overlapping sequences with same extra_key
+        cache.insert(BaseKey([1, 2, 3], "key1"), torch.tensor([10, 20, 30], dtype=torch.int64))
+        prefix_len = cache.insert(BaseKey([1, 2, 3, 4], "key1"), torch.tensor([10, 20, 30, 40], dtype=torch.int64))
+        
+        # Should reuse prefix from same extra_key
+        self.assertEqual(prefix_len, 3)
+        
+        # Verify both sequences can be matched
+        result1 = cache.match_prefix(BaseKey([1, 2, 3], "key1"))
+        result2 = cache.match_prefix(BaseKey([1, 2, 3, 4], "key1"))
+        
+        self.assertEqual(len(result1.device_indices), 3)
+        self.assertEqual(len(result2.device_indices), 4)
+
+    def test_page_size_with_extra_key(self):
+        """Test page size alignment with extra_key."""
+        cache = RadixCache(
+            req_to_token_pool=None,
+            token_to_kv_pool_allocator=None,
+            page_size=2
+        )
+        
+        # Insert data with extra_key
+        cache.insert(BaseKey([1, 2, 3, 4], "key1"), torch.tensor([10, 20, 30, 40], dtype=torch.int64))
+        
+        # Page size alignment should work with extra_key
+        result = cache.match_prefix(BaseKey([1, 2, 3], "key1"))
+        self.assertEqual(len(result.device_indices), 2)  # Aligned to page size 2
+        
+        # But not with different extra_key
+        result = cache.match_prefix(BaseKey([1, 2, 3], "key2"))
+        self.assertEqual(len(result.device_indices), 0)
+
+    def test_lock_ref_with_extra_key(self):
+        """Test lock reference counting with extra_key."""
+        cache = RadixCache(
+            req_to_token_pool=None,
+            token_to_kv_pool_allocator=None,
+            page_size=1
+        )
+        
+        # Insert data with extra_key
+        cache.insert(BaseKey([1, 2, 3], "key1"), torch.tensor([10, 20, 30], dtype=torch.int64))
+        
+        # Find the node and test lock reference
+        result = cache.match_prefix(BaseKey([1, 2, 3], "key1"))
+        node = result.last_device_node
+        
+        initial_evictable = cache.evictable_size()
+        
+        # Lock/unlock should work properly
+        cache.inc_lock_ref(node)
+        self.assertLessEqual(cache.evictable_size(), initial_evictable)
+        
+        cache.dec_lock_ref(node)
+        self.assertEqual(cache.evictable_size(), initial_evictable)
+
+    def test_split_node_functionality(self):
+        """Test node splitting when keys diverge."""
+        cache = RadixCache(
+            req_to_token_pool=None,
+            token_to_kv_pool_allocator=None,
+            page_size=1
+        )
+        
+        # Insert a sequence
+        cache.insert(BaseKey([1, 2, 3, 4, 5]), torch.tensor([10, 20, 30, 40, 50], dtype=torch.int64))
+        
+        # Insert a diverging sequence that shares a prefix
+        cache.insert(BaseKey([1, 2, 3, 6, 7]), torch.tensor([10, 20, 30, 60, 70], dtype=torch.int64))
+        
+        # Both sequences should be stored and retrievable
+        result1 = cache.match_prefix(BaseKey([1, 2, 3, 4, 5]))
+        result2 = cache.match_prefix(BaseKey([1, 2, 3, 6, 7]))
+        result3 = cache.match_prefix(BaseKey([1, 2, 3]))  # Common prefix
+        
+        self.assertEqual(len(result1.device_indices), 5)
+        self.assertEqual(len(result2.device_indices), 5)
+        self.assertEqual(len(result3.device_indices), 3)
+        
+        # Verify correct values
+        torch.testing.assert_close(result1.device_indices, torch.tensor([10, 20, 30, 40, 50], dtype=torch.int64))
+        torch.testing.assert_close(result2.device_indices, torch.tensor([10, 20, 30, 60, 70], dtype=torch.int64))
+        torch.testing.assert_close(result3.device_indices, torch.tensor([10, 20, 30], dtype=torch.int64))
+
+    def test_evict_functionality(self):
+        """Test eviction of cache entries."""
+        # Mock the allocator to track free calls
+        mock_allocator = unittest.mock.Mock()
+        mock_allocator.device = torch.device("cpu")
+        
+        cache = RadixCache(
+            req_to_token_pool=None,
+            token_to_kv_pool_allocator=mock_allocator,
+            page_size=1
+        )
+        
+        # Insert some data
+        cache.insert(BaseKey([1, 2]), torch.tensor([10, 20], dtype=torch.int64))
+        cache.insert(BaseKey([3, 4]), torch.tensor([30, 40], dtype=torch.int64))
+        initial_size = cache.total_size()
+        
+        # Evict some tokens
+        cache.evict(2)
+        
+        # Should have called free on allocator
+        self.assertTrue(mock_allocator.free.called)
+        
+        # Size should be reduced (though exact behavior depends on LRU order)
+        self.assertLessEqual(cache.total_size(), initial_size)
+
+    def test_all_values_flatten(self):
+        """Test the all_values_flatten method."""
+        cache = RadixCache(
+            req_to_token_pool=None,
+            token_to_kv_pool_allocator=None,
+            page_size=1
+        )
+        
+        # Insert data
+        cache.insert(BaseKey([1, 2]), torch.tensor([10, 20], dtype=torch.int64))
+        cache.insert(BaseKey([3, 4]), torch.tensor([30, 40], dtype=torch.int64))
+        
+        # Get all values flattened
+        all_values = cache.all_values_flatten()
+        
+        # Should contain all inserted values
+        self.assertEqual(len(all_values), 4)
+        # Values should be concatenated (order may vary due to tree structure)
+        expected_values = set([10, 20, 30, 40])
+        actual_values = set(all_values.tolist())
+        self.assertEqual(actual_values, expected_values)
+
+    def test_protected_and_evictable_size(self):
+        """Test protected and evictable size tracking."""
+        cache = RadixCache(
+            req_to_token_pool=None,
+            token_to_kv_pool_allocator=None,
+            page_size=1
+        )
+        
+        # Initially should be zero
+        self.assertEqual(cache.protected_size(), 0)
+        self.assertEqual(cache.evictable_size(), 0)
+        
+        # Insert data
+        cache.insert(BaseKey([1, 2, 3]), torch.tensor([10, 20, 30], dtype=torch.int64))
+        
+        # Should be evictable initially
+        self.assertEqual(cache.protected_size(), 0)
+        self.assertEqual(cache.evictable_size(), 3)
+        
+        # Lock the data
+        result = cache.match_prefix(BaseKey([1, 2, 3]))
+        cache.inc_lock_ref(result.last_device_node)
+        
+        # Should now be protected
+        self.assertEqual(cache.protected_size(), 3)
+        self.assertEqual(cache.evictable_size(), 0)
+        
+        # Unlock
+        cache.dec_lock_ref(result.last_device_node)
+        
+        # Should be evictable again
+        self.assertEqual(cache.protected_size(), 0)
+        self.assertEqual(cache.evictable_size(), 3)
 
 
 if __name__ == "__main__":
