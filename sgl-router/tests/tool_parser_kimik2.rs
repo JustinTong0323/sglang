@@ -34,6 +34,9 @@ async fn test_kimik2_multiple_tools() {
     assert_eq!(result.len(), 2);
     assert_eq!(result[0].function.name, "search");
     assert_eq!(result[1].function.name, "translate");
+    // Verify deterministic call_id ordering
+    assert_eq!(result[0].id, "call_0");
+    assert_eq!(result[1].id, "call_1");
 }
 
 #[tokio::test]
@@ -122,6 +125,9 @@ async fn test_kimik2_sequential_indices() {
     assert_eq!(result[0].function.name, "first");
     assert_eq!(result[1].function.name, "second");
     assert_eq!(result[2].function.name, "third");
+    assert_eq!(result[0].id, "call_0");
+    assert_eq!(result[1].id, "call_1");
+    assert_eq!(result[2].id, "call_2");
 }
 
 #[tokio::test]
@@ -138,8 +144,71 @@ async fn test_function_index_extraction() {
     assert_eq!(result.len(), 2);
     assert_eq!(result[0].function.name, "search");
     assert_eq!(result[1].function.name, "calc");
-    // TODO: Verify indices are preserved: 0 and 1
-    // TODO: Verify normal text = "Text before tool calls."
+    // Verify indices are preserved in call_id: 0 and 1
+    assert_eq!(result[0].id, "call_0");
+    assert_eq!(result[1].id, "call_1");
+}
+
+#[tokio::test]
+async fn test_kimik2_streaming_multiple_tools_indices_and_ids() {
+    let parser = KimiK2Parser::new();
+    let mut state = ParseState::new();
+
+    let chunks = vec![
+        "<|tool_calls_section_begin|>",
+        "<|tool_call_begin|>functions.alpha:0<|tool_call_argument_begin|>",
+        r#"{"x":1}"#,
+        "<|tool_call_end|>",
+        "<|tool_call_begin|>functions.beta:1<|tool_call_argument_begin|>",
+        r#"{"y":2}"#,
+        "<|tool_call_end|>",
+        "<|tool_calls_section_end|>",
+    ];
+
+    let mut seen_names: Vec<(usize, String)> = Vec::new();
+    let mut completed_ids: Vec<String> = Vec::new();
+
+    for chunk in chunks {
+        let res = parser.parse_incremental(chunk, &mut state).await.unwrap();
+        match res {
+            StreamResult::ToolName { index, name } => {
+                seen_names.push((index, name));
+            }
+            StreamResult::ToolComplete(tool) => {
+                completed_ids.push(tool.id);
+            }
+            _ => {}
+        }
+    }
+
+    // We should have seen name for alpha with index 0 and beta with index 1
+    assert!(seen_names.contains(&(0, "alpha".to_string())));
+    assert!(seen_names.contains(&(1, "beta".to_string())));
+    // Completed IDs should be deterministic and in order
+    assert_eq!(completed_ids, vec!["call_0".to_string(), "call_1".to_string()]);
+}
+
+#[tokio::test]
+async fn test_kimik2_multi_turn_sections_reset_indices() {
+    let parser = KimiK2Parser::new();
+
+    // Turn 1
+    let turn1 = r#"<|tool_calls_section_begin|>
+<|tool_call_begin|>functions.t1a:0<|tool_call_argument_begin|>{"a":1}<|tool_call_end|>
+<|tool_calls_section_end|>"#;
+    let r1 = parser.parse_complete(turn1).await.unwrap();
+    assert_eq!(r1.len(), 1);
+    assert_eq!(r1[0].id, "call_0");
+
+    // Turn 2 (new section should start from index 0 again per model output)
+    let turn2 = r#"<|tool_calls_section_begin|>
+<|tool_call_begin|>functions.t2a:0<|tool_call_argument_begin|>{"b":2}<|tool_call_end|>
+<|tool_call_begin|>functions.t2b:1<|tool_call_argument_begin|>{"c":3}<|tool_call_end|>
+<|tool_calls_section_end|>"#;
+    let r2 = parser.parse_complete(turn2).await.unwrap();
+    assert_eq!(r2.len(), 2);
+    assert_eq!(r2[0].id, "call_0");
+    assert_eq!(r2[1].id, "call_1");
 }
 
 #[tokio::test]

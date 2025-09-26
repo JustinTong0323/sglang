@@ -97,11 +97,11 @@ impl ToolParser for KimiK2Parser {
                 let function_args = args_match.as_str();
 
                 // Parse function ID
-                if let Some((func_name, _index)) = self.parse_function_id(function_id) {
+                if let Some((func_name, index)) = self.parse_function_id(function_id) {
                     // Validate JSON arguments
                     if serde_json::from_str::<serde_json::Value>(function_args).is_ok() {
-                        // Generate unique ID
-                        let id = format!("kimi_call_{}", uuid::Uuid::new_v4());
+                        // Use deterministic ID aligned with OpenAI-style tool_call_id
+                        let id = format!("call_{}", index);
 
                         tools.push(ToolCall {
                             id,
@@ -146,12 +146,12 @@ impl ToolParser for KimiK2Parser {
                 let partial_args = args_match.as_str();
 
                 // Parse function ID
-                if let Some((func_name, _index)) = self.parse_function_id(function_id) {
+                if let Some((func_name, index)) = self.parse_function_id(function_id) {
                     // Send function name if not sent yet
                     if !state.in_string {
                         state.in_string = true; // Mark name as sent
                         return Ok(StreamResult::ToolName {
-                            index: 0,
+                            index,
                             name: func_name.clone(),
                         });
                     }
@@ -163,8 +163,8 @@ impl ToolParser for KimiK2Parser {
 
                         // Validate and parse JSON
                         if serde_json::from_str::<serde_json::Value>(json_args).is_ok() {
-                            // Generate unique ID
-                            let id = format!("kimi_call_{}", uuid::Uuid::new_v4());
+                            // Use deterministic ID aligned with OpenAI-style tool_call_id
+                            let id = format!("call_{}", index);
 
                             let tool = ToolCall {
                                 id,
@@ -194,7 +194,7 @@ impl ToolParser for KimiK2Parser {
                                     .unwrap_or_else(|_| "{}".to_string());
 
                                 return Ok(StreamResult::ToolArguments {
-                                    index: 0,
+                                    index,
                                     arguments: args_str,
                                 });
                             }
