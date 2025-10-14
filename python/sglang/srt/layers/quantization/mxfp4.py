@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import torch
 from torch.nn.parameter import Parameter
@@ -271,6 +271,8 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
 
         self.triton_kernel_moe_forward = None
         self.triton_kernel_moe_with_bias_forward = None
+        # Persist extra attrs (e.g., weight_loader) to re-apply after rematerialization
+        self._extra_weight_attrs: Dict[str, Any] = {}
         if torch.cuda.is_available() and has_triton_kernels:
             from sglang.srt.layers.moe.fused_moe_triton.triton_kernels_moe import (
                 triton_kernel_moe_forward as _tk_forward,
@@ -281,6 +283,10 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
 
             self.triton_kernel_moe_forward = _tk_forward
             self.triton_kernel_moe_with_bias_forward = _tk_with_bias_forward
+
+    def _apply_weight_attrs(self, param: Parameter) -> None:
+        if self._extra_weight_attrs:
+            set_weight_attrs(param, self._extra_weight_attrs)
 
     def create_weights(
         self,
@@ -389,6 +395,9 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
         )
         layer.register_parameter("w2_weight_bias", w2_weight_bias)
         set_weight_attrs(w2_weight_bias, extra_weight_attrs)
+
+        # Keep a copy of attrs to restore on new Parameter objects created later
+        self._extra_weight_attrs = dict(extra_weight_attrs) if extra_weight_attrs else {}
 
     def process_weights_after_loading(self, layer):
         if self.use_flashinfer:
@@ -537,17 +546,23 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             )
 
             layer.w13_weight = Parameter(w13_weight, requires_grad=False)
+            self._apply_weight_attrs(layer.w13_weight)
             layer.w13_weight_scale = Parameter(w13_weight_scale, requires_grad=False)
+            self._apply_weight_attrs(layer.w13_weight_scale)
             layer.w2_weight = Parameter(w2_weight, requires_grad=False)
+            self._apply_weight_attrs(layer.w2_weight)
             layer.w2_weight_scale = Parameter(w2_weight_scale, requires_grad=False)
+            self._apply_weight_attrs(layer.w2_weight_scale)
             layer.w13_weight_bias = Parameter(
                 torch.stack(gemm1_bias_shuffled).reshape(self.num_experts, -1),
                 requires_grad=False,
             )
+            self._apply_weight_attrs(layer.w13_weight_bias)
             layer.w2_weight_bias = Parameter(
                 torch.stack(gemm2_bias_shuffled).reshape(self.num_experts, -1),
                 requires_grad=False,
             )
+            self._apply_weight_attrs(layer.w2_weight_bias)
             return
 
         if self.use_triton_kernels:
@@ -558,7 +573,9 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             w2_weight_bias = layer.w2_weight_bias.to(torch.float32)
 
             layer.w13_weight_bias = Parameter(w13_weight_bias, requires_grad=False)
+            self._apply_weight_attrs(layer.w13_weight_bias)
             layer.w2_weight_bias = Parameter(w2_weight_bias, requires_grad=False)
+            self._apply_weight_attrs(layer.w2_weight_bias)
 
             num_warps = 8
 
@@ -578,8 +595,8 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
 
             self.w13_weight_triton_tensor = w13_weight
             self.w2_weight_triton_tensor = w2_weight
-            del layer.w13_weight
-            del layer.w2_weight
+            # Keep original parameters alive so that hot-reload can load into them.
+            # Forward path uses the triton tensors when with_bias=True.
         else:
             from triton_kernels.numerics_details.mxfp import upcast_from_mxfp
 
@@ -594,7 +611,9 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             del layer.w13_weight_scale
             del layer.w2_weight_scale
             layer.w13_weight = Parameter(w13_weight.data, requires_grad=False)
+            self._apply_weight_attrs(layer.w13_weight)
             layer.w2_weight = Parameter(w2_weight.data, requires_grad=False)
+            self._apply_weight_attrs(layer.w2_weight)
         torch.cuda.empty_cache()
 
     def _get_tile_tokens_dim(self, x: torch.Tensor, top_k: int):
@@ -738,6 +757,13 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
 
 
 class Mxfp4DynamicQuantMoEMethod(FusedMoEMethodBase):
+    def __init__(self) -> None:
+        super().__init__()
+        self._extra_weight_attrs: Dict[str, Any] = {}
+
+    def _apply_weight_attrs(self, param: Parameter) -> None:
+        if self._extra_weight_attrs:
+            set_weight_attrs(param, self._extra_weight_attrs)
     def create_weights(
         self,
         layer: torch.nn.Module,
@@ -795,6 +821,9 @@ class Mxfp4DynamicQuantMoEMethod(FusedMoEMethodBase):
         layer.w13_input_scale = None
         layer.w2_input_scale = None
 
+        # Keep a copy of attrs to restore on new Parameter objects later
+        self._extra_weight_attrs = dict(extra_weight_attrs) if extra_weight_attrs else {}
+
     def mxfp4_quantize(self, w):
         w_shape = w.shape
         w_need_reshape = True if w.dim() != 2 else False
@@ -818,10 +847,16 @@ class Mxfp4DynamicQuantMoEMethod(FusedMoEMethodBase):
         w2, w2_mx_scales = self.mxfp4_quantize(layer.w2_weight.data)
 
         layer.w13_weight = torch.nn.Parameter(w13, requires_grad=False)
-        layer.w13_weight_scale = torch.nn.Parameter(w13_mx_scales, requires_grad=False)
+        self._apply_weight_attrs(layer.w13_weight)
+        layer.w13_weight_scale = torch.nn.Parameter(
+            w13_mx_scales, requires_grad=False
+        )
+        self._apply_weight_attrs(layer.w13_weight_scale)
 
         layer.w2_weight = torch.nn.Parameter(w2, requires_grad=False)
+        self._apply_weight_attrs(layer.w2_weight)
         layer.w2_weight_scale = torch.nn.Parameter(w2_mx_scales, requires_grad=False)
+        self._apply_weight_attrs(layer.w2_weight_scale)
 
     def create_moe_runner(
         self, layer: torch.nn.Module, moe_runner_config: MoeRunnerConfig
