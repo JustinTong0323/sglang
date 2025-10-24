@@ -1607,6 +1607,7 @@ def calculate_metrics(
     dur_s: float,
     tokenizer: PreTrainedTokenizerBase,
     backend: str,
+    accept_length: Optional[float] = None,
 ) -> Tuple[BenchmarkMetrics, List[int]]:
     output_lens: List[int] = []
     retokenized_output_lens: List[int] = []
@@ -1631,7 +1632,19 @@ def calculate_metrics(
             total_input_vision += input_requests[i].vision_prompt_len
             if output_len > 1:
                 tpots.append((outputs[i].latency - outputs[i].ttft) / (output_len - 1))
-            itls += outputs[i].itl
+            # Collect ITLs. For OpenAI-compatible backends under SGLang, speculative
+            # decoding may accept multiple tokens per verify step and the server
+            # streams them in aggregated chunks. In that case, each recorded ITL
+            # here corresponds to a verify step interval rather than per-token.
+            # Adjust by average acceptance length to estimate per-token ITL.
+            if (
+                accept_length
+                and accept_length > 0
+                and backend in ("sglang-oai", "sglang-oai-chat")
+            ):
+                itls += [v / accept_length for v in outputs[i].itl]
+            else:
+                itls += outputs[i].itl
             ttfts.append(outputs[i].ttft)
 
             e2e_latencies.append(outputs[i].latency)
@@ -1910,6 +1923,7 @@ async def benchmark(
         dur_s=benchmark_duration,
         tokenizer=tokenizer,
         backend=backend,
+        accept_length=accept_length,
     )
 
     print("\n{s:{c}^{n}}".format(s=" Serving Benchmark Result ", n=50, c="="))
