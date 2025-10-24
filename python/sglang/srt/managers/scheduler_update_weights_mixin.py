@@ -166,6 +166,13 @@ class SchedulerUpdateWeightsMixin:
             max_size=params["max_size"],
         )
 
+    def save_serverless_llm_state(self: Scheduler, params):
+        self.tp_worker.model_runner.save_serverless_llm_state(
+            path=params["path"],
+            pattern=params.get("pattern", None),
+            max_size=params.get("max_size", None),
+        )
+
 
 def _export_static_state(model):
     return dict(

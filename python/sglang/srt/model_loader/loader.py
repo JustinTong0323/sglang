@@ -284,6 +284,162 @@ class BaseModelLoader(ABC):
         raise NotImplementedError
 
 
+class ServerlessLLMModelLoader(BaseModelLoader):
+    """Model loader that loads weights from ServerlessLLM checkpoint store.
+
+    This mirrors the vLLM sllm_loader behavior: each TP rank reads its own
+    shard from `model_path/rank_{tp_rank}` via `sllm_store.torch.load_dict`.
+    """
+
+    def __init__(self, load_config: LoadConfig):
+        super().__init__(load_config)
+        if load_config.model_loader_extra_config:
+            raise ValueError(
+                f"Model loader extra config is not supported for load format {load_config.load_format}"
+            )
+
+    @staticmethod
+    def _filter_subtensors(tensors: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Filter out view/sub-tensors that share storage with other tensors."""
+        same_storage_groups: Dict[Any, List[Tuple[str, torch.Tensor]]] = (
+            collections.defaultdict(list)
+        )
+        for key, tensor in tensors.items():
+            if tensor.numel():
+                ptr = tensor.untyped_storage().data_ptr()
+                same_storage_groups[tensor.device, ptr].append((key, tensor))
+
+        def get_end_ptr(tensor: torch.Tensor) -> int:
+            return tensor.view(-1)[-1].data_ptr() + tensor.element_size()
+
+        result: Dict[str, torch.Tensor] = {}
+        for group in same_storage_groups.values():
+            for k, t in group:
+                a, b = t.data_ptr(), get_end_ptr(t)
+                for k2, t2 in group:
+                    if not t2.is_contiguous():
+                        continue
+                    a2, b2 = t2.data_ptr(), get_end_ptr(t2)
+                    if a < a2 or b2 < b:
+                        continue
+                    if a2 < a or b < b2 or not t.is_contiguous():
+                        break
+                    if k2 < k:
+                        break
+                else:
+                    result[k] = t
+        return result
+
+    def download_model(self, model_config: ModelConfig) -> None:
+        # Nothing to download; ServerlessLLM store streams tensors
+        return None
+
+    def load_model(
+        self,
+        *,
+        model_config: ModelConfig,
+        device_config: DeviceConfig,
+    ) -> nn.Module:
+        from sllm_store.torch import load_dict
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+
+        # Ensure path exists and select per-rank shard path
+        tp_rank = get_tensor_model_parallel_rank()
+        local_model_path = os.path.join(model_config.model_path, f"rank_{tp_rank}")
+
+        # ServerlessLLM store expects a model identifier relative to STORAGE_PATH
+        storage_path = os.getenv("STORAGE_PATH", "./models")
+
+        def remove_prefix(path: str, prefix: str) -> str:
+            path = os.path.normpath(path)
+            prefix = os.path.normpath(prefix)
+            if path.startswith(prefix):
+                return path[len(prefix):].lstrip(os.sep)
+            return path
+
+        model_id = remove_prefix(local_model_path, storage_path)
+
+        target_device = torch.device(device_config.device)
+        with set_default_torch_dtype(model_config.dtype):
+            # Create model on CPU first then place weights
+            with torch.device("cpu"):
+                model = _initialize_model(model_config, self.load_config)
+                model = model.eval()
+
+            # Prepare state dict filter
+            state_dict = self._filter_subtensors(model.state_dict())
+            key_list = list(state_dict.keys())
+
+            # Place parameter storages on target device to receive copies
+            for key, param in model.named_parameters(recurse=True):
+                if key in key_list:
+                    # allocate tiny tensor to pin device placement early
+                    param.data = torch.empty(1, device=target_device)
+
+            # Build simple device map: all tensors for this rank go to current device
+            if target_device.type == "cuda":
+                device_id = torch.cuda.current_device()
+            else:
+                device_id = 0
+            device_map = {"": device_id}
+
+            # Load tensors from ServerlessLLM store
+            sllm_state_dict = load_dict(model_id, device_map)
+
+            # Assign tensors to parameters
+            for key, param in model.named_parameters(recurse=True):
+                if key in key_list:
+                    tensor = sllm_state_dict[key]
+                    param.data = tensor
+                    state_dict.pop(key)
+
+            if state_dict:
+                raise ValueError(f"Missing keys {tuple(state_dict)} in loaded state!")
+
+            # Run quantization post-processing hooks similar to other loaders
+            for _, module in model.named_modules():
+                quant_method = getattr(module, "quant_method", None)
+                if quant_method is not None:
+                    with device_loading_context(module, target_device):
+                        quant_method.process_weights_after_loading(module)
+
+            # Move buffers to target device if needed
+            for _, buffer in model.named_buffers(recurse=True):
+                if buffer.device.type != target_device.type:
+                    buffer.data = buffer.data.to(target_device)
+
+            # Post processing hook
+            post_load_weights(model, model_config)
+
+        return model.eval()
+
+    @staticmethod
+    def save_model(
+        model: torch.nn.Module,
+        path: str,
+        pattern: Optional[str] = None,
+        max_size: Optional[int] = None,
+    ) -> None:
+        """Save current TP shard tensors to ServerlessLLM store format."""
+        from sllm_store.torch import save_dict
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+
+        _ = pattern  # unused
+        _ = max_size  # unused
+
+        rank = get_tensor_model_parallel_rank()
+        state_dict = ServerlessLLMModelLoader._filter_subtensors(model.state_dict())
+
+        # Move to CPU for saving (store accepts CPU tensors)
+        cpu_state: Dict[str, torch.Tensor] = {}
+        for key, tensor in state_dict.items():
+            cpu_state[key] = tensor.detach().to("cpu").contiguous()
+
+        save_path = os.path.join(path, f"rank_{rank}")
+        os.makedirs(save_path, exist_ok=True)
+        save_dict(cpu_state, save_path)
+
+
 class DefaultModelLoader(BaseModelLoader):
     """Model loader that can load different file types from disk."""
 
@@ -2091,5 +2247,8 @@ def get_model_loader(
 
     if load_config.load_format == LoadFormat.REMOTE_INSTANCE:
         return RemoteInstanceModelLoader(load_config)
+
+    if load_config.load_format == LoadFormat.SERVERLESS_LLM:
+        return ServerlessLLMModelLoader(load_config)
 
     return DefaultModelLoader(load_config)
