@@ -2384,6 +2384,16 @@ class ModelRunner:
         )
         ShardedStateLoader.save_model(self.model, path, pattern, max_size)
 
+    def save_serverless_llm_state(
+        self, path: str, pattern: Optional[str] = None, max_size: Optional[int] = None
+    ):
+        from sglang.srt.model_loader.loader import ServerlessLLMModelLoader
+
+        logger.info(
+            f"Save ServerlessLLM model state to {path} (pattern ignored, max_size ignored)"
+        )
+        ServerlessLLMModelLoader.save_model(self.model, path, pattern, max_size)
+
     def update_weights_from_ipc(self, recv_req):
         """Update weights from IPC for checkpoint-engine integration."""
         try:
