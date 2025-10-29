@@ -141,8 +141,8 @@ class FunctionCallParser:
             assert name is not None
             info = get_structure_info(name)
 
-            # accept all if not strict, otherwise only accept the schema
-            schema = function.parameters if function.strict else {}
+            # Always include declared schema to guide arguments, regardless of `strict`
+            schema = function.parameters or {}
 
             tool_structures.append(
                 StructuresResponseFormat(
