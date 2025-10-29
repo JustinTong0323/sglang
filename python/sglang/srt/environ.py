@@ -154,6 +154,8 @@ class Envs:
     # Constrained Decoding
     SGLANG_DISABLE_OUTLINES_DISK_CACHE = EnvBool(True)
     SGLANG_GRAMMAR_TIMEOUT = EnvFloat(300)
+    # Tool-Call Behavior
+    SGLANG_TOOL_STRICT = EnvBool(False)
 
     # Hi-Cache
     SGLANG_HICACHE_HF3FS_CONFIG_PATH = EnvStr(None)

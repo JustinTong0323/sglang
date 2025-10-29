@@ -45,6 +45,7 @@ from sglang.srt.managers.io_struct import GenerateReqInput
 from sglang.srt.parser.conversation import generate_chat_conv
 from sglang.srt.parser.jinja_template_utils import process_content_for_template_format
 from sglang.srt.parser.reasoning_parser import ReasoningParser
+from sglang.srt.environ import envs
 
 if TYPE_CHECKING:
     from sglang.srt.managers.template_manager import TemplateManager
@@ -221,6 +222,14 @@ class OpenAIServingChat(OpenAIServingBase):
         tools = None
         if request.tools and request.tool_choice != "none":
             request.skip_special_tokens = False
+            # Optionally force 'strict' on tools via env
+            if envs.SGLANG_TOOL_STRICT.get():
+                try:
+                    for _tool in request.tools:
+                        # Pydantic model; mutate in place
+                        _tool.function.strict = True
+                except Exception:  # be defensive
+                    pass
             if not isinstance(request.tool_choice, str):
                 tools = [
                     item.function.model_dump()
