@@ -3,6 +3,8 @@ import logging
 import re
 from typing import List
 
+from json_repair import repair_json
+
 from sglang.srt.entrypoints.openai.protocol import Tool
 from sglang.srt.function_call.base_format_detector import BaseFormatDetector
 from sglang.srt.function_call.core_types import (
@@ -61,26 +63,26 @@ class KimiK2Detector(BaseFormatDetector):
 
     def detect_and_parse(self, text: str, tools: List[Tool]) -> StreamingParseResult:
         """
-        One-time parsing: Detects and parses tool calls in the provided text.
-
-        :param text: The complete text to parse.
-        :param tools: List of available tools.
-        :return: ParseResult indicating success or failure, consumed text, leftover text, and parsed calls.
+        One-time parsing with fallback for incomplete tool calls.
         """
         if self.bot_token not in text:
             return StreamingParseResult(normal_text=text, calls=[])
+
         try:
-            # there are two possible captures - between tags, or between a
-            # tag and end-of-string so the result of
-            # findall is an array of tuples where one is a function call and
-            # the other is None
-            function_call_tuples = self.tool_call_regex.findall(text)
+            tool_calls: List[ToolCallItem] = []
+            tool_indices = self._get_tool_indices(tools)
 
-            logger.debug("function_call_tuples: %s", function_call_tuples)
+            # Match each tool call individually, both complete and incomplete
+            pattern = re.compile(
+                r"<\|tool_call_begin\|>\s*(?P<tool_call_id>[\w\.]+:\\d+)\s*"
+                r"<\|tool_call_argument_begin\|>\s*(?P<function_arguments>\{.*?)(?:<\|tool_call_end\|>|<\|tool_call_begin\|>|<\|tool_calls_section_end\|>|$)",
+                re.DOTALL,
+            )
 
-            tool_calls = []
-            for match in function_call_tuples:
-                function_id, function_args = match
+            for match in pattern.finditer(text):
+                function_id = match.group("tool_call_id")
+                function_args = match.group("function_arguments").strip()
+
                 m = self.tool_call_id_regex.match(function_id)
                 if not m:
                     logger.warning("Unexpected tool_call_id format: %s", function_id)
@@ -88,22 +90,50 @@ class KimiK2Detector(BaseFormatDetector):
                 function_name = m.group("name")
                 function_idx = int(m.group("index"))
 
-                logger.info(f"function_name {function_name}")
-
-                tool_calls.append(
-                    ToolCallItem(
-                        tool_index=function_idx,
-                        name=function_name,
-                        parameters=function_args,
+                if function_name not in tool_indices:
+                    logger.warning(
+                        "Model attempted to call undefined function: %s", function_name
                     )
-                )
+                    continue
+
+                # Validate JSON; attempt repair on failure
+                try:
+                    json.loads(function_args)
+                    tool_calls.append(
+                        ToolCallItem(
+                            tool_index=function_idx,
+                            name=function_name,
+                            parameters=function_args,
+                        )
+                    )
+                except Exception:
+                    try:
+                        repaired = repair_json(function_args)
+                        if repaired:
+                            json.loads(repaired)
+                            tool_calls.append(
+                                ToolCallItem(
+                                    tool_index=function_idx,
+                                    name=function_name,
+                                    parameters=repaired,
+                                )
+                            )
+                        else:
+                            logger.error(
+                                "Invalid JSON in tool call function=%s: %s and failed to repair",
+                                function_name,
+                                function_args,
+                            )
+                    except Exception:
+                        logger.error(
+                            "Invalid JSON in tool call %s, repaired JSON invalid", function_name
+                        )
 
             content = text[: text.find(self.bot_token)]
             return StreamingParseResult(normal_text=content, calls=tool_calls)
 
         except Exception as e:
             logger.error(f"Error in detect_and_parse: {e}")
-            # return the normal text if parsing fails
             return StreamingParseResult(normal_text=text)
 
     def parse_streaming_increment(
@@ -142,6 +172,18 @@ class KimiK2Detector(BaseFormatDetector):
                     logger.warning("Unexpected tool_call_id format: %s", function_id)
                     return StreamingParseResult(normal_text="", calls=calls)
                 function_name = m.group("name")
+
+                if function_name not in self._tool_indices:
+                    logger.warning(
+                        "Model attempted to call undefined function: %s", function_name
+                    )
+                    self._buffer = ""
+                    self.current_tool_id = -1
+                    self.prev_tool_call_arr = []
+                    self.streamed_args_for_tool = []
+                    self._last_arguments = ""
+                    self.current_tool_name_sent = False
+                    return StreamingParseResult(normal_text="", calls=[])
 
                 # Initialize state if this is the first tool call
                 if self.current_tool_id == -1:
