@@ -690,12 +690,18 @@ class FlashAttentionBackend(AttentionBackend):
         )
         window_size = (layer.sliding_window_size, 0) if is_swa else (-1, -1)
         k_descale, v_descale = None, None
-        # only use kv scaling if: 1) fp8 kv is explicitly enabled, 2) RadixAttention
-        # has corresponding quantization method so that layer.k_scale is not None,
+        # only use kv scaling if: 1) fp8 kv is enabled (including auto-detected),
+        # 2) RadixAttention has corresponding quantization method so that layer.k_scale is not None,
         # 3) layer.head_dim <= 256 since fa3 kernel require fp16 and bf16 data type in this case,
         # 4) fa_impl_ver != 4 since fa4 does not currently support fp8 queries and keys.
+        is_kv_fp8 = self.kv_cache_dtype in (
+            getattr(torch, "float8_e4m3fn", None),
+            getattr(torch, "float8_e5m2", None),
+            getattr(torch, "float8_e4m3fnuz", None),
+            getattr(torch, "float8_e5m2fnuz", None),
+        )
         if (
-            self.kv_cache_dtype_str != "auto"
+            is_kv_fp8
             and layer.head_dim <= 256
             and self.fa_impl_ver != 4
         ):
@@ -1030,10 +1036,16 @@ class FlashAttentionBackend(AttentionBackend):
             kwargs["sinks"] = sinks
 
         k_descale, v_descale = None, None
-        # only use kv scaling if: 1) fp8 kv is explicitly enabled, 2) RadixAttention
-        # has corresponding quantization method so that layer.k_scale is not None,
+        # only use kv scaling if: 1) fp8 kv is enabled (including auto-detected),
+        # 2) RadixAttention has corresponding quantization method so that layer.k_scale is not None,
         # 3) layer.head_dim <= 256 since fa3 kernel require fp16 and bf16 data type in this case.
-        if self.kv_cache_dtype_str != "auto" and layer.head_dim <= 256:
+        is_kv_fp8 = self.kv_cache_dtype in (
+            getattr(torch, "float8_e4m3fn", None),
+            getattr(torch, "float8_e5m2", None),
+            getattr(torch, "float8_e4m3fnuz", None),
+            getattr(torch, "float8_e5m2fnuz", None),
+        )
+        if is_kv_fp8 and layer.head_dim <= 256:
             if layer.k_scale is not None:
                 descale_shape = (forward_batch.batch_size, layer.tp_k_head_num)
                 k_descale = layer.k_scale.expand(descale_shape)
