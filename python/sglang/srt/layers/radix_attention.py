@@ -109,19 +109,14 @@ class RadixAttention(nn.Module):
             else:
                 k = k.view(-1, self.tp_k_head_num, self.v_head_dim)
 
-            # Ensure dtype alignment between query and key/value before delegating to backends.
-            # Some kernels require q and k to share the same dtype; prefer promoting K/V to Q's dtype.
+            # Ensure dtype alignment between query and key before delegating to backends.
+            # Prefer casting Q (and its rope) to K's dtype to avoid extra KV conversions.
             if q.dtype is not None and q.dtype != k.dtype:
-                target_dtype = q.dtype
-                k = k.to(dtype=target_dtype)
-                v = v.to(dtype=target_dtype)
-                # Align optional rope tensors if provided
+                target_dtype = k.dtype
+                q = q.to(dtype=target_dtype)
                 q_rope = kwargs.get("q_rope")
                 if q_rope is not None and q_rope.dtype != target_dtype:
                     kwargs["q_rope"] = q_rope.to(dtype=target_dtype)
-                k_rope = kwargs.get("k_rope")
-                if k_rope is not None and k_rope.dtype != target_dtype:
-                    kwargs["k_rope"] = k_rope.to(dtype=target_dtype)
 
         if forward_batch.forward_mode.is_extend() and get_forward_context() is not None:
             output = torch.empty_like(q)
