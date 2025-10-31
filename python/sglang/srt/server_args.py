@@ -631,6 +631,10 @@ class ServerArgs:
             )
             self.tool_call_parser = deprecated_tool_call_parsers[self.tool_call_parser]
 
+        # Set strict level for kimi_k2 parser
+        if self.tool_call_parser == "kimi_k2":
+            envs.SGLANG_TOOL_STRICT_LEVEL.set(2)
+
     def _handle_missing_default_values(self):
         if self.tokenizer_path is None:
             self.tokenizer_path = self.model_path
@@ -3623,7 +3627,7 @@ class ServerArgs:
                 self.disable_overlap_schedule
             ), "PD-Multiplexing is not compatible with overlap schedule."
 
-            # NOTE: CUDA Green Context may encounter potential issues with CudaGraph on torch 2.7.x – 2.8.x, leading to performance degradation.
+            # NOTE: CUDA Green Context may encounter potential issues with CudaGraph on torch 2.7.x ? 2.8.x, leading to performance degradation.
             import torch
 
             parts = torch.__version__.split("+", 1)[0].split(".")
