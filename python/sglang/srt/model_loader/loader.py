@@ -366,16 +366,6 @@ class ServerlessLLMModelLoader(BaseModelLoader):
                 model = _initialize_model(model_config, self.load_config)
                 model = model.eval()
 
-            # Prepare state dict filter
-            state_dict = self._filter_subtensors(model.state_dict())
-            key_list = list(state_dict.keys())
-
-            # Place parameter storages on target device to receive copies
-            for key, param in model.named_parameters(recurse=True):
-                if key in key_list:
-                    # allocate tiny tensor to pin device placement early
-                    param.data = torch.empty(1, device=target_device)
-
             # Build simple device map: all tensors for this rank go to current device
             if target_device.type == "cuda":
                 device_id = torch.cuda.current_device()
@@ -386,15 +376,43 @@ class ServerlessLLMModelLoader(BaseModelLoader):
             # Load tensors from ServerlessLLM store
             sllm_state_dict = load_dict(model_id, device_map)
 
-            # Assign tensors to parameters
-            for key, param in model.named_parameters(recurse=True):
-                if key in key_list:
-                    tensor = sllm_state_dict[key]
-                    param.data = tensor
-                    state_dict.pop(key)
+            # Build a map of parameter storage pointers to handle tied weights
+            full_state_dict = model.state_dict()
+            storage_to_keys = collections.defaultdict(list)
+            for key, tensor in full_state_dict.items():
+                if tensor.numel() > 0:
+                    storage_ptr = (tensor.device, tensor.untyped_storage().data_ptr())
+                    storage_to_keys[storage_ptr].append(key)
 
-            if state_dict:
-                raise ValueError(f"Missing keys {tuple(state_dict)} in loaded state!")
+            # Track which parameters have been loaded
+            loaded_params = set()
+
+            # Assign tensors to parameters, handling tied weights
+            for key, param in model.named_parameters(recurse=True):
+                if key in sllm_state_dict:
+                    # Direct load
+                    param.data = sllm_state_dict[key]
+                    loaded_params.add(key)
+                else:
+                    # Try to find a tied weight that was saved under a different key
+                    orig_tensor = full_state_dict.get(key)
+                    if orig_tensor is not None and orig_tensor.numel() > 0:
+                        param_storage_ptr = (orig_tensor.device, orig_tensor.untyped_storage().data_ptr())
+                        
+                        if param_storage_ptr in storage_to_keys:
+                            # Find the corresponding saved key that shares storage
+                            for saved_key in storage_to_keys[param_storage_ptr]:
+                                if saved_key in sllm_state_dict:
+                                    # Share the loaded tensor
+                                    param.data = sllm_state_dict[saved_key]
+                                    loaded_params.add(key)
+                                    break
+
+            # Check if we have any parameters that weren't loaded
+            all_param_names = set(dict(model.named_parameters()).keys())
+            missing_params = all_param_names - loaded_params
+            if missing_params:
+                raise ValueError(f"Missing parameters {tuple(missing_params)} in loaded state!")
 
             # Run quantization post-processing hooks similar to other loaders
             for _, module in model.named_modules():
