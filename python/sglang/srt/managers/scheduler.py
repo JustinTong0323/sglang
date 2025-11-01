@@ -2004,7 +2004,8 @@ class Scheduler(
                     # FIXME(lsyin): tmp code for eagle v2
                     # We only keep future indices for next draft input
 
-                    batch.spec_info = batch_result.next_draft_input
+                    draft_input = batch_result.next_draft_input
+                    batch.spec_info = draft_input
                     batch.spec_info.future_indices = future_indices
 
                     # batch.spec_info = EagleDraftInput(
@@ -2016,7 +2017,11 @@ class Scheduler(
 
                     # The future value, usually for next batch preparation
                     # Current implementation strictly synchronizes the seq_lens
-                    batch.seq_lens = batch_result.next_draft_input.new_seq_lens
+                    if draft_input.verify_done is not None:
+                        draft_input.verify_done.synchronize()
+                    batch.seq_lens = draft_input.new_seq_lens
+                    batch.seq_lens_cpu = draft_input.new_seq_lens.to("cpu")
+                    batch.seq_lens_sum = int(batch.seq_lens_cpu.sum().item())
             elif self.enable_pdmux and batch.forward_mode.is_split_prefill():
                 batch_result = self.tp_worker.forward_batch_split_prefill(batch)
                 future_indices_or_next_token_ids = batch_result.next_token_ids
