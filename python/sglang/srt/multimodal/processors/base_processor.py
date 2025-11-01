@@ -13,7 +13,14 @@ from PIL import Image
 from transformers import BaseImageProcessorFast
 
 from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
-from sglang.srt.utils import is_npu, load_audio, load_image, load_video, logger
+from sglang.srt.utils import (
+    is_npu,
+    load_audio,
+    load_image,
+    load_video,
+    logger,
+    print_warning_once,
+)
 
 _is_npu = is_npu()
 
@@ -150,6 +157,10 @@ class MultimodalSpecialTokens:
 class BaseMultimodalProcessor(ABC):
     models = []
 
+    _FAST_IMAGE_MEMORY_KEY = "_sglang_fast_image_processor_memory_bytes"
+    _FAST_IMAGE_DEVICE_KEY = "_sglang_fast_image_processor_device"
+    _FAST_IMAGE_USED_FAST_KEY = "_sglang_fast_image_processor_used_fast"
+
     def __init__(
         self, hf_config, server_args, _processor, transport_mode, *args, **kwargs
     ):
@@ -168,6 +179,51 @@ class BaseMultimodalProcessor(ABC):
             mp_context=mp.get_context("fork"),
             max_workers=int(os.environ.get("SGLANG_CPU_WORKERS", os.cpu_count())),
         )
+
+        self._fast_image_processor_cap_ratio = self._get_env_float(
+            "SGLANG_FAST_IMAGE_PROCESSOR_CAP_RATIO", 0.25
+        )
+        self._fast_image_processor_cap_ratio = min(
+            max(self._fast_image_processor_cap_ratio, 0.05), 1.0
+        )
+        self._fast_image_processor_min_free_bytes = int(
+            float(os.environ.get("SGLANG_FAST_IMAGE_PROCESSOR_MIN_FREE_MB", "512"))
+            * (1024**2)
+        )
+        self._fast_image_processor_overhead_factor = self._get_env_float(
+            "SGLANG_FAST_IMAGE_PROCESSOR_OVERHEAD_FACTOR", 4.0
+        )
+        self._fast_image_processor_constant_overhead_bytes = max(
+            int(
+                float(os.environ.get("SGLANG_FAST_IMAGE_PROCESSOR_BASE_MB", "128"))
+                * (1024**2)
+            ),
+            0,
+        )
+        self._fast_image_processor_safety_factor = self._get_env_float(
+            "SGLANG_FAST_IMAGE_PROCESSOR_SAFETY_FACTOR", 1.6
+        )
+        self._fast_image_processor_allow_empty_cache = (
+            os.environ.get("SGLANG_FAST_IMAGE_PROCESSOR_EMPTY_CACHE_ON_REJECT", "0")
+            .strip()
+            .lower()
+            in {"1", "true", "yes"}
+        )
+        self._fast_image_processor_dtype_size = (
+            self._infer_fast_image_processor_dtype_size()
+        )
+        self._fast_image_processor_device_index: Optional[int] = None
+        self._fast_image_processor_memory_cap_bytes: Optional[int] = None
+        self._fast_image_processor_stats = {
+            "last_estimated_bytes": 0,
+            "last_free_bytes": None,
+            "last_allowed_bytes": None,
+            "cap_bytes": None,
+            "rejection_count": 0,
+            "last_used_fast": None,
+            "last_device": None,
+        }
+        self._init_fast_image_processor_device()
 
         # Mapping from attribute names to modality types
         self.ATTR_NAME_TO_MODALITY = {
@@ -210,6 +266,265 @@ class BaseMultimodalProcessor(ABC):
             "input_features",
         ]
 
+    @staticmethod
+    def _get_env_float(env_name: str, default: float) -> float:
+        value = os.environ.get(env_name)
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            print_warning_once(
+                f"Invalid value '{value}' for {env_name}. Falling back to default {default}."
+            )
+            return default
+
+    def _init_fast_image_processor_device(self) -> None:
+        if _is_npu:
+            self._fast_image_processor_device_index = None
+            self._fast_image_processor_memory_cap_bytes = None
+            return
+
+        if not torch.cuda.is_available():
+            self._fast_image_processor_device_index = None
+            self._fast_image_processor_memory_cap_bytes = None
+            return
+
+        try:
+            device_index = torch.cuda.current_device()
+        except RuntimeError:
+            device_index = 0
+
+        self._fast_image_processor_device_index = device_index
+
+        try:
+            total_memory = torch.cuda.get_device_properties(device_index).total_memory
+        except RuntimeError:
+            total_memory = None
+
+        if total_memory is None or total_memory <= 0:
+            self._fast_image_processor_memory_cap_bytes = None
+            return
+
+        cap_bytes = int(total_memory * self._fast_image_processor_cap_ratio)
+        env_cap = os.environ.get("SGLANG_FAST_IMAGE_PROCESSOR_CAP_BYTES")
+        if env_cap:
+            try:
+                cap_override = int(float(env_cap))
+                if cap_override > 0:
+                    cap_bytes = min(cap_bytes, cap_override)
+            except (TypeError, ValueError):
+                print_warning_once(
+                    f"Invalid value '{env_cap}' for SGLANG_FAST_IMAGE_PROCESSOR_CAP_BYTES."
+                )
+
+        self._fast_image_processor_memory_cap_bytes = max(cap_bytes, 0)
+
+    @staticmethod
+    def _dtype_size(dtype) -> int:
+        if dtype is None:
+            return 0
+        if isinstance(dtype, torch.dtype):
+            return torch.tensor([], dtype=dtype).element_size()
+        if isinstance(dtype, np.dtype):
+            return int(dtype.itemsize)
+        if isinstance(dtype, str):
+            try:
+                return int(np.dtype(dtype).itemsize)
+            except (TypeError, ValueError):
+                torch_dtype = getattr(torch, dtype, None)
+                if isinstance(torch_dtype, torch.dtype):
+                    return torch.tensor([], dtype=torch_dtype).element_size()
+        return 0
+
+    def _infer_fast_image_processor_dtype_size(self) -> int:
+        processor = getattr(self._processor, "image_processor", None)
+        dtype_candidates = []
+        if processor is not None:
+            for attr in ("torch_dtype", "dtype", "target_dtype", "_torch_dtype"):
+                val = getattr(processor, attr, None)
+                if val is not None:
+                    dtype_candidates.append(val)
+        for candidate in dtype_candidates:
+            size = self._dtype_size(candidate)
+            if size:
+                return size
+        return self._dtype_size(torch.float32)
+
+    def _estimate_fast_image_processor_memory_bytes(
+        self,
+        images=None,
+        videos=None,
+        audios=None,
+    ) -> Optional[int]:
+        total_bytes = 0
+
+        def accumulate(item):
+            nonlocal total_bytes
+            if item is None:
+                return
+            if isinstance(item, (list, tuple)):
+                for sub in item:
+                    accumulate(sub)
+                return
+            if isinstance(item, dict):
+                return
+            if isinstance(item, Image.Image):
+                width, height = item.size
+                bands = item.getbands() or []
+                channels = len(bands) if bands else 3
+                total_bytes += (
+                    width
+                    * height
+                    * channels
+                    * max(self._fast_image_processor_dtype_size, 1)
+                )
+                return
+            if torch.is_tensor(item):
+                total_bytes += item.numel() * self._dtype_size(item.dtype)
+                return
+            if isinstance(item, np.ndarray):
+                total_bytes += int(item.size * item.itemsize)
+                return
+
+        accumulate(images)
+        accumulate(videos)
+        accumulate(audios)
+
+        if total_bytes == 0:
+            return 0
+
+        estimated = int(
+            total_bytes * max(self._fast_image_processor_overhead_factor, 1.0)
+        )
+        estimated += self._fast_image_processor_constant_overhead_bytes
+        return estimated
+
+    def _should_use_fast_image_processor(self, estimated_bytes: Optional[int]) -> bool:
+        if estimated_bytes is None or estimated_bytes <= 0:
+            return True
+
+        if _is_npu:
+            self._fast_image_processor_stats.update(
+                {
+                    "last_estimated_bytes": int(estimated_bytes),
+                    "last_used_fast": True,
+                    "last_device": "npu",
+                }
+            )
+            return True
+
+        if not torch.cuda.is_available():
+            self._fast_image_processor_stats["rejection_count"] += 1
+            return False
+
+        try:
+            free_bytes, total_bytes = torch.cuda.mem_get_info()
+        except RuntimeError as exc:
+            logger.debug("Failed to query CUDA memory info: %s", exc)
+            return True
+
+        cap_bytes = self._fast_image_processor_memory_cap_bytes
+        if cap_bytes is None or cap_bytes <= 0:
+            cap_bytes = int(total_bytes * self._fast_image_processor_cap_ratio)
+        cap_bytes = max(cap_bytes, int(estimated_bytes))
+
+        allowed_bytes = min(
+            cap_bytes,
+            max(free_bytes - self._fast_image_processor_min_free_bytes, 0),
+        )
+
+        self._fast_image_processor_stats.update(
+            {
+                "last_estimated_bytes": int(estimated_bytes),
+                "last_free_bytes": int(free_bytes),
+                "last_allowed_bytes": int(allowed_bytes),
+                "cap_bytes": int(cap_bytes),
+            }
+        )
+
+        if allowed_bytes <= 0:
+            if self._fast_image_processor_allow_empty_cache:
+                torch.cuda.empty_cache()
+                free_bytes, total_bytes = torch.cuda.mem_get_info()
+                allowed_bytes = min(
+                    cap_bytes,
+                    max(free_bytes - self._fast_image_processor_min_free_bytes, 0),
+                )
+                self._fast_image_processor_stats.update(
+                    {
+                        "last_free_bytes": int(free_bytes),
+                        "last_allowed_bytes": int(allowed_bytes),
+                    }
+                )
+            else:
+                self._fast_image_processor_stats["rejection_count"] += 1
+                return False
+
+        if estimated_bytes * self._fast_image_processor_safety_factor <= allowed_bytes:
+            return True
+
+        self._fast_image_processor_stats["rejection_count"] += 1
+        return False
+
+    def _attach_processor_output_metadata(self, processor_output, metadata: dict) -> None:
+        if processor_output is None or not metadata:
+            return
+        for key, value in metadata.items():
+            try:
+                processor_output[key] = value
+            except (TypeError, AttributeError):
+                if hasattr(processor_output, "data") and isinstance(
+                    processor_output.data, dict
+                ):
+                    processor_output.data[key] = value
+                else:
+                    setattr(processor_output, key, value)
+
+    @staticmethod
+    def _iter_processor_output_sources(processor_output):
+        if isinstance(processor_output, dict):
+            yield processor_output
+        data = getattr(processor_output, "data", None)
+        if isinstance(data, dict):
+            yield data
+
+    def _extract_from_processor_output(self, processor_output, key):
+        if processor_output is None:
+            return None
+        for source in self._iter_processor_output_sources(processor_output):
+            if key in source:
+                return source[key]
+        return getattr(processor_output, key, None)
+
+    def _get_fast_image_processor_metadata(self, processor_output) -> dict:
+        metadata = {}
+        mem_bytes = self._extract_from_processor_output(
+            processor_output, self._FAST_IMAGE_MEMORY_KEY
+        )
+        if mem_bytes is not None:
+            try:
+                metadata["fast_image_processor_memory_bytes"] = int(mem_bytes)
+            except (TypeError, ValueError):
+                pass
+
+        device = self._extract_from_processor_output(
+            processor_output, self._FAST_IMAGE_DEVICE_KEY
+        )
+        if device is not None:
+            metadata["fast_image_processor_device"] = str(device)
+
+        used_fast = self._extract_from_processor_output(
+            processor_output, self._FAST_IMAGE_USED_FAST_KEY
+        )
+        if used_fast is not None:
+            metadata["fast_image_processor_used_fast"] = bool(used_fast)
+
+        return metadata
+
+    def get_fast_image_processor_stats(self) -> dict:
+        return dict(self._fast_image_processor_stats)
+
     def process_mm_data(
         self, input_text, images=None, videos=None, audios=None, **kwargs
     ) -> dict:
@@ -232,25 +547,70 @@ class BaseMultimodalProcessor(ABC):
                 kwargs["audios"] = audios
 
         processor = self._processor
+
+        estimated_memory_bytes: Optional[int] = None
+        fast_device: Optional[str] = None
+        used_fast = False
+
         if (
             hasattr(processor, "image_processor")
             and isinstance(processor.image_processor, BaseImageProcessorFast)
             and not self.server_args.disable_fast_image_processor
         ):
-            if not _is_npu:
-                kwargs["device"] = "cuda"
-            elif processor.__class__.__name__ not in {
-                "Qwen2_5_VLProcessor",
-                "Qwen3VLProcessor",
-            }:
-                # Note: for qwen-vl, processor has some reshape issue because of dims restriction on Ascend.
+            estimated_memory_bytes = self._estimate_fast_image_processor_memory_bytes(
+                kwargs.get("images"), kwargs.get("videos"), kwargs.get("audios")
+            )
+
+            if _is_npu:
                 kwargs["device"] = "npu"
+                fast_device = "npu"
+                used_fast = True
+            else:
+                if self._should_use_fast_image_processor(estimated_memory_bytes):
+                    device_index = (
+                        self._fast_image_processor_device_index
+                        if self._fast_image_processor_device_index is not None
+                        else torch.cuda.current_device()
+                    )
+                    fast_device = "cuda" if device_index == 0 else f"cuda:{device_index}"
+                    kwargs["device"] = fast_device
+                    used_fast = True
+                else:
+                    kwargs.pop("device", None)
+                    fast_device = "cpu"
+                    stats = self._fast_image_processor_stats
+                    logger.debug(
+                        "Fast image processor fallback to CPU (estimate %.2f MiB, allowed %.2f MiB, free %.2f MiB)",
+                        (estimated_memory_bytes or 0) / (1024**2),
+                        (stats.get("last_allowed_bytes") or 0) / (1024**2),
+                        (stats.get("last_free_bytes") or 0) / (1024**2),
+                    )
+                    print_warning_once(
+                        "Fast image processor fallback to CPU due to insufficient GPU memory. "
+                        "Consider lowering image resolution, adjusting SGLANG_FAST_IMAGE_PROCESSOR_CAP_RATIO, "
+                        "or disable the fast image processor."
+                    )
+
         result = processor.__call__(
             text=[input_text],
             padding=True,
             return_tensors="pt",
             **kwargs,
         )
+
+        if estimated_memory_bytes is not None:
+            if fast_device is None:
+                fast_device = "npu" if _is_npu else ("cuda" if used_fast else "cpu")
+            metadata = {
+                self._FAST_IMAGE_MEMORY_KEY: int(estimated_memory_bytes),
+                self._FAST_IMAGE_DEVICE_KEY: fast_device,
+                self._FAST_IMAGE_USED_FAST_KEY: used_fast,
+            }
+            self._fast_image_processor_stats.update(
+                {"last_device": fast_device, "last_used_fast": used_fast}
+            )
+            self._attach_processor_output_metadata(result, metadata)
+
         if not self.server_args.keep_mm_feature_on_device:
             # move feature tensors to cpu
             for feature_name in self.FEATURE_NAMES:

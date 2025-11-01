@@ -82,16 +82,18 @@ class DotsVLMImageProcessor(BaseMultimodalProcessor):
                 for image in base_output.images
             ]
             base_output.images = await asyncio.gather(*resize_tasks)
-        combined_mm_item, input_ids, _ = self.process_and_combine_mm_data(
+        combined_mm_item, input_ids, ret = self.process_and_combine_mm_data(
             base_output, self.mm_tokens
         )
         if combined_mm_item is None:
             return None
 
-        return {
+        payload = {
             "input_ids": input_ids.tolist(),
             "mm_items": combined_mm_item,
             "im_start_id": self.im_start_id,
             "im_end_id": self.im_end_id,
             "im_token_id": self.image_token_id,
         }
+        payload.update(self._get_fast_image_processor_metadata(ret))
+        return payload

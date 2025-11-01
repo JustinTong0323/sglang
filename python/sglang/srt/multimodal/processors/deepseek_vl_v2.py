@@ -48,15 +48,17 @@ class DeepseekVL2ImageProcessor(BaseMultimodalProcessor):
             image_data=image_data,
             multimodal_tokens=self.mm_tokens,
         )
-        mm_items, input_ids, _ = self.process_and_combine_mm_data(
+        mm_items, input_ids, ret = self.process_and_combine_mm_data(
             base_output,
             self.mm_tokens,
             max_req_input_len=max_req_input_len,
             conversations=base_output.input_text,
         )
 
-        return {
+        payload = {
             "mm_items": mm_items,
             "input_ids": input_ids.tolist(),
             "im_token_id": self._processor.image_token_id,
         }
+        payload.update(self._get_fast_image_processor_metadata(ret))
+        return payload

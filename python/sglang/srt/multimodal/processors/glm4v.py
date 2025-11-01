@@ -125,4 +125,6 @@ class Glm4vImageProcessor(SGLangBaseProcessor):
             "mrope_position_delta": mrope_position_delta,
         }
 
+        mm_inputs.update(self._get_fast_image_processor_metadata(ret))
+
         return mm_inputs

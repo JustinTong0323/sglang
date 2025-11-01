@@ -88,13 +88,15 @@ class Phi4MMMultimodalProcessor(BaseMultimodalProcessor):
                 (audio, self.AUDIO_SAMPLE_RATE) for audio in base_output.audios
             ]
 
-        mm_items, input_ids, _ = self.process_and_combine_mm_data(
+        mm_items, input_ids, ret = self.process_and_combine_mm_data(
             base_output, self.mm_tokens
         )
 
-        return {
+        payload = {
             "input_ids": input_ids.tolist(),
             "mm_items": mm_items,
             "im_token_id": self.mm_tokens.image_token_id,
             "audio_token_id": self.mm_tokens.audio_token_id,
         }
+        payload.update(self._get_fast_image_processor_metadata(ret))
+        return payload
