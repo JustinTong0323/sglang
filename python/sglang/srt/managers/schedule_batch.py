@@ -294,6 +294,10 @@ class MultimodalInputs:
     image_pad_len: Optional[list] = None
     num_image_tokens: Optional[int] = None
 
+    fast_image_processor_memory_bytes: Optional[int] = None
+    fast_image_processor_device: Optional[str] = None
+    fast_image_processor_used_fast: Optional[bool] = None
+
     # image
     im_token_id: Optional[int] = None
     im_start_id: Optional[int] = None
@@ -325,6 +329,9 @@ class MultimodalInputs:
             item.set_pad_value()
 
         optional_args = [
+            "fast_image_processor_memory_bytes",
+            "fast_image_processor_device",
+            "fast_image_processor_used_fast",
             "mrope_positions",
             "mrope_position_delta",
             "im_token_id",
@@ -369,6 +376,20 @@ class MultimodalInputs:
             self_arg = getattr(self, arg, None)
             if self_arg is not None:
                 setattr(self, arg, self_arg + getattr(other, arg))
+
+        if other.fast_image_processor_memory_bytes is not None:
+            if self.fast_image_processor_memory_bytes is None:
+                self.fast_image_processor_memory_bytes = 0
+            self.fast_image_processor_memory_bytes += other.fast_image_processor_memory_bytes
+
+        if other.fast_image_processor_device is not None:
+            self.fast_image_processor_device = other.fast_image_processor_device
+
+        if other.fast_image_processor_used_fast is not None:
+            current = bool(self.fast_image_processor_used_fast) if self.fast_image_processor_used_fast is not None else False
+            self.fast_image_processor_used_fast = current or bool(
+                other.fast_image_processor_used_fast
+            )
 
         mrope_positions = self.mrope_positions
         if mrope_positions is not None:

@@ -58,10 +58,12 @@ class Qwen2AudioMultimodalProcessor(BaseMultimodalProcessor):
 
         mm_items[0].audio_feature_lens = output_lengths
 
-        return {
+        payload = {
             "mm_items": mm_items,
             "input_ids": input_ids.tolist(),
             "audio_start_id": self.audio_start_id,
             "audio_token_id": self.audio_token_id,
             "audio_end_id": self.audio_end_id,
         }
+        payload.update(self._get_fast_image_processor_metadata(ret))
+        return payload

@@ -31,14 +31,16 @@ class JanusProImageProcessor(BaseMultimodalProcessor):
             multimodal_tokens=self.mm_tokens,
         )
 
-        mm_items, input_ids, _ = self.process_and_combine_mm_data(
+        mm_items, input_ids, ret = self.process_and_combine_mm_data(
             base_out, self.mm_tokens, prompt=base_out.input_text
         )
 
-        return {
+        payload = {
             "mm_items": mm_items,
             "input_ids": input_ids.tolist(),
             "im_start_id": self._processor.image_start_id,
             "im_end_id": self._processor.image_end_id,
             "im_token_id": self.mm_tokens.image_token_id,
         }
+        payload.update(self._get_fast_image_processor_metadata(ret))
+        return payload

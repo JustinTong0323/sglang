@@ -72,10 +72,12 @@ class Sarashina2VisionProcessor(BaseMultimodalProcessor):
             mm_tokens=self.mm_tokens,
         )
 
-        return {
+        payload = {
             "mm_items": mm_items,
             "input_ids": input_ids.tolist(),
             "im_token_id": self.mm_tokens.image_token_id,
             "im_start_id": self.IM_START_ID,
             "im_end_id": self.IM_END_ID,
         }
+        payload.update(self._get_fast_image_processor_metadata(ret))
+        return payload

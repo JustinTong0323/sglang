@@ -36,14 +36,16 @@ class Mllama4ImageProcessor(BaseMultimodalProcessor):
         )
 
         # Process the prompt and images
-        mm_items, input_ids, _ = self.process_and_combine_mm_data(
+        mm_items, input_ids, ret = self.process_and_combine_mm_data(
             base_output, self.mm_tokens
         )
 
-        return {
+        payload = {
             "input_ids": input_ids.tolist(),
             "mm_items": mm_items,
             "im_start_id": self.IM_START_TOKEN_ID,
             "im_end_id": self.IM_END_TOKEN_ID,
             "im_token_id": self.IM_TOKEN_ID,
         }
+        payload.update(self._get_fast_image_processor_metadata(ret))
+        return payload

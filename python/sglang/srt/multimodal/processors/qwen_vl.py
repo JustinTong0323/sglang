@@ -344,7 +344,7 @@ class QwenVLImageProcessor(SGLangBaseProcessor):
         )
         mrope_positions = mrope_positions.squeeze(1)
 
-        return {
+        payload = {
             "input_ids": input_ids.tolist(),
             "mm_items": mm_items,
             "im_start_id": self.IM_START_TOKEN_ID,
@@ -355,3 +355,5 @@ class QwenVLImageProcessor(SGLangBaseProcessor):
             "mrope_positions": mrope_positions,
             "mrope_position_delta": mrope_position_delta,
         }
+        payload.update(self._get_fast_image_processor_metadata(ret))
+        return payload
