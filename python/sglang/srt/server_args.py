@@ -78,6 +78,7 @@ LOAD_FORMAT_CHOICES = [
     "layered",
     "remote",
     "remote_instance",
+    "serverless_llm",
 ]
 
 QUANTIZATION_CHOICES = [
