@@ -88,13 +88,15 @@ class PixtralProcessor(BaseMultimodalProcessor):
             resize_tasks = [self._resize(image) for image in mm_data.images]
             mm_data.images = await asyncio.gather(*resize_tasks)
 
-        mm_items, input_ids, _ = self.process_and_combine_mm_data(
+        mm_items, input_ids, ret = self.process_and_combine_mm_data(
             mm_data, self.mm_tokens
         )
 
-        return {
+        payload = {
             "mm_items": mm_items,
             "input_ids": input_ids.tolist(),
             "im_token_id": self.IM_TOKEN_ID,
             "im_token": self._processor.image_token,
         }
+        payload.update(self._get_fast_image_processor_metadata(ret))
+        return payload

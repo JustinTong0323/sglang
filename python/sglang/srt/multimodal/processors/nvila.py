@@ -62,16 +62,18 @@ class NVILAMultimodalProcessor(BaseMultimodalProcessor):
         for i, video in enumerate(base_output.videos):  # type: ignore
             base_output.videos[i] = [x.asnumpy() for x in video]  # type: ignore
 
-        mm_items, input_ids, _ = self.process_and_combine_mm_data(
+        mm_items, input_ids, ret = self.process_and_combine_mm_data(
             base_output,
             self.mm_tokens,
             do_sample_frames=True,
             num_frames=NUM_VIDEO_FRAMES,
         )
 
-        return {
+        payload = {
             "input_ids": input_ids.tolist(),
             "mm_items": mm_items,
             "im_token_id": self.mm_tokens.image_token_id,
             "video_token_id": self.mm_tokens.video_token_id,
         }
+        payload.update(self._get_fast_image_processor_metadata(ret))
+        return payload
