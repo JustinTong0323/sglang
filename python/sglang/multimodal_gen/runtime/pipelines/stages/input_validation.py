@@ -123,7 +123,7 @@ class InputValidationStage(PipelineStage):
             height = None if batch.height_not_provided else batch.height
             width = None if batch.width_not_provided else batch.width
             width, height = server_args.pipeline_config.set_width_and_height(
-                height, width, batch.pil_image
+                width, height, batch.pil_image
             )
             batch.width = width
             batch.height = height
