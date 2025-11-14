@@ -1,6 +1,7 @@
 #include <ATen/OpMathType.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <c10/util/Logging.h>
 #include <cuda.h>
 #include <cudaTypedefs.h>
 #include <cuda_runtime.h>
@@ -245,14 +246,15 @@ void moe_sum_reduce(at::Tensor& input, at::Tensor& output, double routed_scaling
 
   auto stream = at::cuda::getCurrentCUDAStream();
 
-  const bool fast_bf16_vec_ok = (input.scalar_type() == at::kBFloat16) && (token_num > 256) && (hidden_dim % 8 == 0);
+  const bool fast_bf16_vec_ok = (input.scalar_type() == at::kBFloat16) && (token_num > 256) && (hidden_dim >= 16) &&
+      (hidden_dim % 16 == 0);
 
   // Fast path for bf16 vectorize
   if (fast_bf16_vec_ok) {
     constexpr int WARPS_PER_BLOCK = 8;
     constexpr int THREADS = WARPS_PER_BLOCK * 32;
 
-    const int64_t n_chunks = hidden_dim / 8;
+    const int64_t n_chunks = hidden_dim / 16;
     int64_t grid_x = (n_chunks + 32 - 1) / 32;
     if (grid_x > 65535) grid_x = 65535;
 
@@ -276,8 +278,21 @@ void moe_sum_reduce(at::Tensor& input, at::Tensor& output, double routed_scaling
         out_stride_token,
         scale);
 
-    TORCH_CHECK(cudaGetLastError() == cudaSuccess, "moe_sum_reduce CUDA kernel (bf16 vec) launch failed");
-    return;
+    const auto err = cudaGetLastError();
+    if (err == cudaSuccess) {
+      return;
+    }
+
+    TORCH_WARN_ONCE(
+        "moe_sum_reduce CUDA kernel (bf16 vec) launch failed with error ",
+        cudaGetErrorString(err),
+        " for token_num=",
+        token_num,
+        ", hidden_dim=",
+        hidden_dim,
+        ", topk_num=",
+        topk_num,
+        ". Falling back to the generic kernels.");
   }
 
   const bool per_token_use_one_warp = (token_num > 128);
