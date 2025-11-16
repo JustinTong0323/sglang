@@ -103,7 +103,7 @@ If you want to keep some experts on CPUs (e.g., AMX INT4) while others run on GP
 | Scenario | Command | Notes |
 | --- | --- | --- |
 | 8×H200 DeepSeek-V3.2 with DeepEP | `python -m sglang.launch_server --model deepseek-ai/DeepSeek-V3.2-Exp --tp 8 --ep 8 --dp 8 --enable-dp-attention --moe-a2a-backend deepep --deepep-mode auto` | Matches the template in `docs/basic_usage/deepseek_v32.md`; DP attention is recommended for DeepSeek models. |
-| 8×H200 Qwen3-VL-235B FP8 (no external A2A) | `python -m sglang.launch_server --model Qwen/Qwen3-VL-235B-A22B-Instruct-FP8 --tp 8 --ep 1 --dp 2 --moe-a2a-backend none --moe-runner-backend deep_gemm` | FP8 variants require `(moe_intermediate_size=1536 / moe_tp_size=8) % weight_block_size_n=128 == 0`, which forces `moe_tp_size = tp_size / ep_size = 8` → `ep_size = 1`. |
+| 8×H200 Qwen3-VL-235B FP8 | `python -m sglang.launch_server --model Qwen/Qwen3-VL-235B-A22B-Instruct-FP8 --tp 8 --ep 8` | FP8 variants require `(moe_intermediate_size=1536 / moe_tp_size) % weight_block_size_n=128 == 0`, where `moe_tp_size = tp_size / ep_size` → You can choose `ep_size` in 2, 4 or 8. |
 
 ## Related docs
 
