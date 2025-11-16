@@ -6,7 +6,7 @@ SGLang’s Mixture-of-Experts (MoE) stack can scale beyond one GPU by splitting 
 
 - `--tp-size` (`tp_size`) controls how many ranks participate in tensor-parallel compute inside each MoE layer. `--ep-size` (`ep_size`) partitions those TP ranks into EP subgroups. SGLang enforces `tp_size % ep_size == 0` and uses `moe_tp_size = tp_size / ep_size` when building MoE kernels; misconfigured shapes raise validation errors in `python/sglang/srt/model_executor/model_runner.py`.
 - `--moe-runner-backend` chooses the per-expert GEMM backend (DeepGEMM, Triton, FlashInfer variants, Cutlass, etc.). Some backends enforce constraints: FP8 Cutlass only works with `ep_size == 1`, and FlashInfer Cutlass (FP4) requires `ep_size ∈ {1, tp_size}` because each backend determines how activations are split (`python/sglang/srt/server_args.py`).
-- `--moe-a2a-backend` decides how router outputs are exchanged: `"none"` uses NCCL all-to-all, `"deepep"` uses DeepSeek’s DeepEP transport, `"mooncake"` uses Mooncake EP (`python/sglang/srt/layers/moe/utils.py`).
+- `--moe-a2a-backend` decides how router outputs are exchanged: `"none"` keeps the default all-reduce broadcast, `"deepep"` uses DeepSeek’s DeepEP transport, `"mooncake"` uses Mooncake EP (`python/sglang/srt/layers/moe/utils.py`).
 - `--moe-dense-tp-size` (currently `None` or `1`) lets you clamp dense MLP tensor parallel size when large EP groups make GEMM tile sizes too small.
 - EP-aware models read `get_moe_expert_parallel_world_size()` inside their constructors – for example `python/sglang/srt/models/deepseek_v2.py`, `python/sglang/srt/models/qwen3_moe.py`, `python/sglang/srt/models/glm4_moe.py`, `python/sglang/srt/models/minimax_m2.py`, `python/sglang/srt/models/gpt_oss.py`, and `python/sglang/srt/models/qwen3_vl_moe.py`. These families (and their quantized variants) are the primary beneficiaries of EP today.
 
@@ -43,7 +43,7 @@ Use `--moe-runner-backend auto` unless you have to pin a kernel. The enum in `py
 
 | Backend | When to use | Notes |
 | --- | --- | --- |
-| `none` | Small clusters or when NCCL A2A is sufficient. | Allows `ep_size != tp_size`. |
+| `none` | Use the default NCCL all-reduce broadcast for token exchange. | Allows `ep_size != tp_size`; relies on the standard fused MoE dispatcher. |
 | `deepep` | GPU-only DeepEP deployments. | Forces `ep_size = tp_size`, supports both normal (prefill) and low-latency (decode) modes, and requires DeepEP + DeepGEMM for low-latency unless you run on Ascend NPUs or FlashInfer CuTeDSL FP4. |
 | `mooncake` | Clusters with Mooncake EP installed. | Forces `ep_size = tp_size`, currently low-latency only, integrates with Elastic EP for rank health tracking. |
 
