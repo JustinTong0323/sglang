@@ -37,24 +37,25 @@ Its core features include:
    :maxdepth: 1
    :caption: Advanced Features
 
-   advanced_features/server_arguments.md
-   advanced_features/hyperparameter_tuning.md
-   advanced_features/attention_backend.md
-   advanced_features/speculative_decoding.ipynb
-   advanced_features/structured_outputs.ipynb
-   advanced_features/structured_outputs_for_reasoning_models.ipynb
-   advanced_features/tool_parser.ipynb
-   advanced_features/separate_reasoning.ipynb
-   advanced_features/quantization.md
-   advanced_features/lora.ipynb
-   advanced_features/pd_disaggregation.md
-   advanced_features/hicache.rst
-   advanced_features/pd_multiplexing.md
-   advanced_features/vlm_query.ipynb
-   advanced_features/router.md
-   advanced_features/deterministic_inference.md
-   advanced_features/observability.md
-   advanced_features/checkpoint_engine.md
+    advanced_features/server_arguments.md
+    advanced_features/expert_parallelism.md
+    advanced_features/hyperparameter_tuning.md
+    advanced_features/attention_backend.md
+    advanced_features/speculative_decoding.ipynb
+    advanced_features/structured_outputs.ipynb
+    advanced_features/structured_outputs_for_reasoning_models.ipynb
+    advanced_features/tool_parser.ipynb
+    advanced_features/separate_reasoning.ipynb
+    advanced_features/quantization.md
+    advanced_features/lora.ipynb
+    advanced_features/pd_disaggregation.md
+    advanced_features/hicache.rst
+    advanced_features/pd_multiplexing.md
+    advanced_features/vlm_query.ipynb
+    advanced_features/router.md
+    advanced_features/deterministic_inference.md
+    advanced_features/observability.md
+    advanced_features/checkpoint_engine.md
 
 .. toctree::
    :maxdepth: 1
