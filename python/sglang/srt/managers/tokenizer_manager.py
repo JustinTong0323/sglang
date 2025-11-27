@@ -1610,13 +1610,12 @@ class TokenizerManager(TokenizerCommunicatorMixin):
 
             if isinstance(recv_obj, BatchStrOutput):
                 state.text += recv_obj.output_strs[i]
-                if state.obj.stream:
-                    state.output_ids.extend(recv_obj.output_ids[i])
-                    output_token_ids = state.output_ids[state.last_output_offset :]
-                    state.last_output_offset = len(state.output_ids)
-                else:
-                    state.output_ids.extend(recv_obj.output_ids[i])
-                    output_token_ids = state.output_ids.copy()
+                state.output_ids.extend(recv_obj.output_ids[i])
+                # Always use last_output_offset to only return new tokens, not all accumulated tokens.
+                # This is important for multi-turn conversations where state.output_ids accumulates
+                # tokens across multiple turns.
+                output_token_ids = state.output_ids[state.last_output_offset :]
+                state.last_output_offset = len(state.output_ids)
 
                 out_dict = {
                     "text": state.text,
@@ -1624,13 +1623,12 @@ class TokenizerManager(TokenizerCommunicatorMixin):
                     "meta_info": meta_info,
                 }
             elif isinstance(recv_obj, BatchTokenIDOutput):
-                if self.server_args.stream_output and state.obj.stream:
-                    state.output_ids.extend(recv_obj.output_ids[i])
-                    output_token_ids = state.output_ids[state.last_output_offset :]
-                    state.last_output_offset = len(state.output_ids)
-                else:
-                    state.output_ids.extend(recv_obj.output_ids[i])
-                    output_token_ids = state.output_ids.copy()
+                state.output_ids.extend(recv_obj.output_ids[i])
+                # Always use last_output_offset to only return new tokens, not all accumulated tokens.
+                # This is important for multi-turn conversations (e.g., GPT OSS tool calls) where
+                # state.output_ids accumulates tokens across multiple turns.
+                output_token_ids = state.output_ids[state.last_output_offset :]
+                state.last_output_offset = len(state.output_ids)
 
                 out_dict = {
                     "output_ids": output_token_ids,
