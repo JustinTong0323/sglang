@@ -373,7 +373,6 @@ class TestSessionControl(unittest.TestCase):
                         "skip_special_tokens": False,
                     },
                     "stream": False,
-                    "stream_output": True,
                 }
                 response = requests.post(
                     url=self.base_url + "/generate", json=payload2
@@ -412,7 +411,6 @@ class TestSessionControl(unittest.TestCase):
                     "skip_special_tokens": False,
                 },
                 "stream": False,
-                "stream_output": True,
             }
             response = requests.post(
                 url=self.base_url + "/generate", json=payload

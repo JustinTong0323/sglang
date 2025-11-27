@@ -146,7 +146,6 @@ Please consult the documentation below and [server_args.py](https://github.com/s
 | `--pipeline-parallel-size`<br>`--pp-size` | The pipeline parallelism size. | `1` | Type: int |
 | `--pp-max-micro-batch-size` | The maximum micro batch size in pipeline parallelism. | `None` | Type: int |
 | `--stream-interval` | The interval (or buffer size) for streaming in terms of the token length. A smaller value makes streaming smoother, while a larger value makes the throughput higher | `1` | Type: int |
-| `--stream-output` | Whether to output as a sequence of disjoint segments. | `False` | bool flag (set to enable) |
 | `--random-seed` | The random seed. | `None` | Type: int |
 | `--constrained-json-whitespace-pattern` | (outlines and llguidance backends only) Regex pattern for syntactic whitespaces allowed in JSON constrained output. For example, to allow the model to generate consecutive whitespaces, set the pattern to [\n\t ]* | `None` | Type: str |
 | `--constrained-json-disable-any-whitespace` | (xgrammar and llguidance backends only) Enforce compact representation in JSON constrained output. | `False` | bool flag (set to enable) |
