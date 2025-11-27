@@ -46,6 +46,7 @@ Its core features include:
    advanced_features/hicache.rst
    advanced_features/pd_multiplexing.md
    advanced_features/vlm_query.ipynb
+   advanced_features/vlm_encoder_dp.md
    advanced_features/router.md
    advanced_features/deterministic_inference.md
    advanced_features/observability.md
