@@ -19,6 +19,7 @@ import logging
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
+from transformers import PreTrainedTokenizerBase
 from xgrammar import (
     CompiledGrammar,
     GrammarCompiler,
@@ -44,6 +45,20 @@ else:
     from sglang.srt.constrained.triton_ops.bitmask_ops import (
         apply_token_bitmask_inplace_triton,
     )
+
+
+def _unwrap_hf_tokenizer(tokenizer) -> Optional[PreTrainedTokenizerBase]:
+    """Return a HuggingFace tokenizer instance if the provided tokenizer wraps one."""
+    if isinstance(tokenizer, PreTrainedTokenizerBase):
+        return tokenizer
+
+    # Common wrapper patterns encapsulate the actual tokenizer under these attributes.
+    for attr in ("tokenizer", "hf_tokenizer", "_tokenizer", "processor"):
+        inner = getattr(tokenizer, attr, None)
+        if isinstance(inner, PreTrainedTokenizerBase):
+            return inner
+
+    return None
 
 
 logger = logging.getLogger(__name__)
@@ -176,6 +191,9 @@ class XGrammarGrammarBackend(BaseGrammarBackend):
     ):
         super().__init__()
 
+        tokenizer_info = None
+        override_stop_tokens = None
+
         if hasattr(tokenizer, "init_xgrammar"):
             # For special tokenizer
             tokenizer_info, override_stop_tokens = tokenizer.init_xgrammar()
@@ -184,12 +202,20 @@ class XGrammarGrammarBackend(BaseGrammarBackend):
                 # Not supported tokenizer
                 return
         else:
+            resolved_tokenizer = _unwrap_hf_tokenizer(tokenizer)
+            if resolved_tokenizer is None:
+                raise ValueError(
+                    f"Unsupported tokenizer type: {type(tokenizer)}. "
+                    "Provide a tokenizer with `init_xgrammar` or wrap a HuggingFace tokenizer."
+                )
+
             # Create TokenizerInfo with model's EOS tokens as the authoritative stop tokens
             # This ensures consistency between what the model considers EOS and what XGrammar uses
             tokenizer_info = TokenizerInfo.from_huggingface(
-                tokenizer, vocab_size=vocab_size, stop_token_ids=model_eos_token_ids
+                resolved_tokenizer,
+                vocab_size=vocab_size,
+                stop_token_ids=model_eos_token_ids,
             )
-            override_stop_tokens = None
 
         self.grammar_compiler = GrammarCompiler(tokenizer_info=tokenizer_info)
         self.vocab_size = vocab_size
