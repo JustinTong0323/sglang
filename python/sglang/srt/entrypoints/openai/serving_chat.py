@@ -365,8 +365,7 @@ class OpenAIServingChat(OpenAIServingBase):
                 )
             except jinja2.TemplateError as e:
                 # Template errors (e.g., from raise_exception in Jinja templates)
-                # should be treated as client errors (400 BadRequest) rather than
-                # server errors (500 InternalServerError)
+                # should be treated as client errors (400 BadRequest)
                 raise ValueError(str(e)) from e
             except Exception:
                 # This except branch will be triggered when the chosen model
