@@ -114,7 +114,15 @@ class OpenAIServingChat(OpenAIServingBase):
             if not request.tools:
                 return "Tools cannot be empty if tool choice is set to a specific tool."
             tool_name = request.tool_choice.function.name
-            tool_exists = any(tool.function.name == tool_name for tool in request.tools)
+            tool_exists = any(
+                (
+                    tool.function.get("name")
+                    if isinstance(tool.function, dict)
+                    else tool.function.name
+                )
+                == tool_name
+                for tool in request.tools
+            )
             if not tool_exists:
                 return f"Tool '{tool_name}' not found in tools list."
 

@@ -143,15 +143,22 @@ class FunctionCallParser:
         get_structure_info = self.detector.structure_info()
         for tool in self.tools:
             function = tool.function
-            name = function.name
+            if isinstance(function, dict):
+                name = function.get("name")
+                is_strict = (
+                    function.get("strict", False)
+                    or self.tool_strict_level >= ToolStrictLevel.PARAMETER
+                )
+                schema = function.get("parameters") if is_strict else {}
+            else:
+                name = function.name
+                is_strict = (
+                    function.strict
+                    or self.tool_strict_level >= ToolStrictLevel.PARAMETER
+                )
+                schema = function.parameters if is_strict else {}
             assert name is not None
             info = get_structure_info(name)
-
-            # accept all if not strict, otherwise only accept the schema
-            is_strict = (
-                function.strict or self.tool_strict_level >= ToolStrictLevel.PARAMETER
-            )
-            schema = function.parameters if is_strict else {}
 
             tool_structures.append(
                 StructuresResponseFormat(
@@ -190,7 +197,14 @@ class FunctionCallParser:
             self.detector.supports_structural_tag()
             and tool_choice == "auto"
             and (
-                any(tool.function.strict for tool in self.tools)
+                any(
+                    (
+                        tool.function.get("strict", False)
+                        if isinstance(tool.function, dict)
+                        else tool.function.strict
+                    )
+                    for tool in self.tools
+                )
                 or self.tool_strict_level >= ToolStrictLevel.FUNCTION
             )
         ):
