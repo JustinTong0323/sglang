@@ -312,9 +312,12 @@ class BaseMultimodalProcessor(ABC):
 
         processor = self._processor
         if (
-            hasattr(processor, "image_processor")
-            and isinstance(processor.image_processor, BaseImageProcessorFast)
-            and not self.server_args.disable_fast_image_processor
+            (
+                hasattr(processor, "image_processor")
+                and isinstance(processor.image_processor, BaseImageProcessorFast)
+                and not self.server_args.disable_fast_image_processor
+            )
+            or (videos is not None and len(videos) > 0)
         ):
             if not _is_npu:
                 kwargs["device"] = "cuda"
