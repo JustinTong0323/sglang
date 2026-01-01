@@ -179,7 +179,15 @@ class OpenAIServingChat(OpenAIServingBase):
             if isinstance(processed_messages.prompt_ids, str):
                 prompt_kwargs = {"text": processed_messages.prompt_ids}
             else:
-                prompt_kwargs = {"input_ids": processed_messages.prompt_ids}
+                # Convert BatchEncoding or other tokenizer outputs to plain list
+                prompt_ids = processed_messages.prompt_ids
+                if hasattr(prompt_ids, 'input_ids'):
+                    # Handle transformers.BatchEncoding
+                    prompt_ids = prompt_ids.input_ids
+                elif hasattr(prompt_ids, 'ids'):
+                    # Handle tokenizers.Encoding
+                    prompt_ids = prompt_ids.ids
+                prompt_kwargs = {"input_ids": prompt_ids}
 
         # Extract custom labels from raw request headers
         custom_labels = self.extract_custom_labels(raw_request)

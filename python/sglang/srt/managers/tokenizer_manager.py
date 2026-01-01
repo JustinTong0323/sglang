@@ -1396,6 +1396,9 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
         # Abort the request if the client is disconnected.
         async def abort_request():
             await asyncio.sleep(2)
+            # Safety check: if rid is None, skip abort (normalization may have failed)
+            if obj.rid is None:
+                return
             if obj.is_single:
                 self.abort_request(obj.rid)
             else:
