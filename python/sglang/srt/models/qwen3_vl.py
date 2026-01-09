@@ -35,7 +35,7 @@ from sglang.srt.layers.attention.vision import VisionAttention
 from sglang.srt.layers.dp_attention import is_dp_attention_enabled
 from sglang.srt.layers.linear import ColumnParallelLinear, RowParallelLinear
 from sglang.srt.layers.logits_processor import LogitsProcessor
-from sglang.srt.layers.pooler import Pooler, PoolingType
+from sglang.srt.layers.pooler import DecoderOnlyRerankerScorer, Pooler, PoolingType
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.rotary_embedding import get_rope
 from sglang.srt.layers.utils import PPMissingLayer, get_layer_id
@@ -733,6 +733,16 @@ class Qwen3VLForConditionalGeneration(nn.Module):
         self.num_deepstack_embeddings = len(self.deepstack_visual_indexes)
         self.use_deepstack = {Modality.IMAGE: True, Modality.VIDEO: True}
 
+        # Reranker support - detect if this is a reranker model
+        # The scorer will be initialized after weights are loaded
+        server_args = get_global_server_args()
+        model_path = server_args.model_path.lower() if server_args else ""
+        self.is_reranker = "reranker" in model_path or "rerank" in model_path
+        self.reranker_scorer: Optional[DecoderOnlyRerankerScorer] = None
+        # Qwen3 yes/no token IDs (consistent across model sizes)
+        self._reranker_yes_token_id = 9693
+        self._reranker_no_token_id = 2152
+
     def separate_deepstack_embeds(self, embedding):
         assert (
             embedding.shape[-1] % (1 + self.num_deepstack_embeddings) == 0
@@ -883,6 +893,7 @@ class Qwen3VLForConditionalGeneration(nn.Module):
         positions: torch.Tensor,
         forward_batch: ForwardBatch,
         get_embedding: bool = False,
+        get_reranker_score: bool = False,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ):
         """Run forward pass for Qwen3-VL.
@@ -896,6 +907,9 @@ class Qwen3VLForConditionalGeneration(nn.Module):
                 opensource models), the shape will be `(3, seq_len)`,
                 otherwise it will be `(seq_len,).
                 (Use input_metadata.mrope_positions to replace it)
+            get_embedding: If True, return pooled embeddings instead of logits.
+            get_reranker_score: If True, return reranker scores using the official
+                scoring method (sigmoid of last hidden state @ score_weights).
         """
         if self.is_mrope_enabled:
             positions = forward_batch.mrope_positions
@@ -921,15 +935,31 @@ class Qwen3VLForConditionalGeneration(nn.Module):
         )
 
         if self.pp_group.is_last_rank:
-            if not get_embedding:
+            # Debug logging
+            logger.info(
+                f"[DEBUG] forward: get_reranker_score={get_reranker_score}, "
+                f"get_embedding={get_embedding}, is_reranker={self.is_reranker}, "
+                f"reranker_scorer={self.reranker_scorer is not None}"
+            )
+            if get_reranker_score and self.reranker_scorer is not None:
+                # Use the official reranker scoring method for generation mode
+                # Returns LogitsProcessorOutput with scores in customized_info
+                logger.info("[DEBUG] Using reranker_scorer.forward_for_generation()")
+                return self.reranker_scorer.forward_for_generation(
+                    hidden_states, forward_batch
+                )
+            elif get_embedding:
+                # For reranker models with scorer, use it instead of pooler
+                if self.is_reranker and self.reranker_scorer is not None:
+                    return self.reranker_scorer(hidden_states, forward_batch)
+                return self.pooler(hidden_states, forward_batch)
+            else:
                 return self.logits_processor(
                     input_ids,
                     hidden_states,
                     self.lm_head,
                     forward_batch,
                 )
-            else:
-                return self.pooler(hidden_states, forward_batch)
         else:
             return hidden_states
 
@@ -1011,6 +1041,22 @@ class Qwen3VLForConditionalGeneration(nn.Module):
 
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
+
+        # Initialize reranker scorer after weights are loaded
+        if self.is_reranker and self.pp_group.is_last_rank and self.lm_head is not None:
+            try:
+                self.reranker_scorer = DecoderOnlyRerankerScorer(
+                    lm_head=self.lm_head,
+                    yes_token_id=self._reranker_yes_token_id,
+                    no_token_id=self._reranker_no_token_id,
+                )
+                logger.info(
+                    f"Initialized reranker scorer with yes_token_id={self._reranker_yes_token_id}, "
+                    f"no_token_id={self._reranker_no_token_id}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to initialize reranker scorer: {e}")
+                self.reranker_scorer = None
 
 
 EntryClass = Qwen3VLForConditionalGeneration

@@ -508,6 +508,7 @@ class Req:
         require_reasoning: bool = False,
         return_hidden_states: bool = False,
         return_routed_experts: bool = False,
+        is_reranker: bool = False,
         eos_token_ids: Optional[Set[int]] = None,
         bootstrap_host: Optional[str] = None,
         bootstrap_port: Optional[int] = None,
@@ -568,6 +569,7 @@ class Req:
         self.sampling_params = sampling_params
         self.custom_logit_processor = custom_logit_processor
         self.return_hidden_states = return_hidden_states
+        self.is_reranker = is_reranker
 
         # extra key for classifying the request (e.g. cache_salt)
         if lora_id is not None:
@@ -1267,6 +1269,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
     # Whether to return captured experts
     return_routed_experts: bool = False
 
+    # Whether this batch contains reranker requests (uses official reranker scoring)
+    is_reranker_batch: bool = False
+
     # Whether this batch is prefill-only (no token generation needed)
     is_prefill_only: bool = False
 
@@ -1313,6 +1318,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             spec_algorithm=spec_algorithm,
             return_hidden_states=any(req.return_hidden_states for req in reqs),
             return_routed_experts=any(req.return_routed_experts for req in reqs),
+            is_reranker_batch=any(req.is_reranker for req in reqs),
             is_prefill_only=all(req.is_prefill_only for req in reqs),
             chunked_req=chunked_req,
             dllm_config=dllm_config,
@@ -2143,6 +2149,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             ),
             extend_input_logprob_token_ids=self.extend_input_logprob_token_ids,
             is_prefill_only=self.is_prefill_only,
+            is_reranker_batch=self.is_reranker_batch,
             dimensions=self.dimensions,
             dllm_block_offsets=[req.dllm_block_offset for req in self.reqs],
             dllm_config=self.dllm_config,
@@ -2268,6 +2275,9 @@ class ModelWorkerBatch:
 
     # Whether this batch is prefill-only (no token generation needed)
     is_prefill_only: bool = False
+
+    # Whether this batch contains reranker requests (uses official reranker scoring)
+    is_reranker_batch: bool = False
 
     # Diffusion LLM
     dllm_block_offsets: Optional[List[int]] = None

@@ -376,7 +376,11 @@ class OpenAIServingRerank(OpenAIServingBase):
         raw_request: Request,
         _chat_template: str,
     ) -> Union[List[RerankResponse], ErrorResponse]:
-        """Handle multimodal VL reranker request using chat completion with logprobs."""
+        """Handle multimodal VL reranker request using official reranker scoring.
+
+        The official method uses: score = sigmoid(last_hidden_state @ (weight_yes - weight_no))
+        This is triggered by setting is_reranker=True in the request.
+        """
         if not self.tokenizer_manager.model_config.is_generation:
             return self.create_error_response(
                 "Detected Qwen3-VL reranker, but the server is not in generation mode. "
@@ -404,27 +408,32 @@ class OpenAIServingRerank(OpenAIServingBase):
                     instruct=instruct,
                 )
 
-                # Create generate request with logprobs
+                # Create generate request with is_reranker=True for official scoring method
+                # The model will use sigmoid(hidden_state @ (weight_yes - weight_no))
+                logger.info(
+                    f"[DEBUG] Creating VL reranker request with is_reranker=True, "
+                    f"prompt length={len(prompt)}"
+                )
                 gen_request = GenerateReqInput(
                     text=prompt,
                     image_data=image_data if image_data else None,
                     video_data=video_data if video_data else None,
                     sampling_params={
-                        "max_new_tokens": 1,
+                        "max_new_tokens": 1,  # Need at least 1 for proper output processing
                         "temperature": 0,
                     },
-                    return_logprob=True,
-                    top_logprobs_num=50,  # Get enough logprobs to find yes/no tokens
-                    logprob_start_len=0,
+                    is_reranker=True,  # Triggers official reranker scoring in model
                 )
+                logger.info(f"[DEBUG] gen_request.is_reranker={gen_request.is_reranker}")
 
                 # Execute generation request
                 ret = await self.tokenizer_manager.generate_request(
                     gen_request, raw_request
                 ).__anext__()
 
-                # Extract yes/no probabilities from logprobs
-                score = self._extract_score_from_logprobs(ret)
+                # Extract score from the response
+                # When is_reranker=True, the model returns EmbeddingPoolerOutput with scores
+                score = self._extract_reranker_score(ret)
                 scores.append(score)
 
             responses = self._build_rerank_response(scores, request)
@@ -435,6 +444,35 @@ class OpenAIServingRerank(OpenAIServingBase):
         except Exception as e:
             logger.exception("Error handling VL reranker request")
             return self.create_error_response(str(e))
+
+    def _extract_reranker_score(self, ret: Dict[str, Any]) -> float:
+        """Extract reranker score from the response.
+
+        When is_reranker=True is set, the model returns the score in meta_info.reranker_scores.
+        """
+        # Debug: log the response structure
+        logger.info(f"[DEBUG] Reranker response keys: {ret.keys()}")
+        meta_info = ret.get("meta_info", {})
+        logger.info(f"[DEBUG] meta_info keys: {meta_info.keys() if meta_info else 'None'}")
+
+        # The score is returned directly in meta_info.reranker_scores
+        # (tokenizer_manager extracts from customized_info and puts directly in meta_info)
+        reranker_scores = meta_info.get("reranker_scores")
+        logger.info(f"[DEBUG] reranker_scores from meta_info: {reranker_scores}")
+
+        if reranker_scores is not None:
+            # The score is a single float value for this request
+            if isinstance(reranker_scores, list):
+                score = float(reranker_scores[0]) if reranker_scores else 0.0
+            else:
+                score = float(reranker_scores)
+            logger.info(f"[DEBUG] Got reranker score: {score}")
+            return score
+
+        # Fallback: try to extract from logprobs if reranker mode wasn't used
+        # (for backwards compatibility or if model doesn't support reranker mode)
+        logger.info("[DEBUG] Falling back to logprobs extraction")
+        return self._extract_score_from_logprobs(ret)
 
     def _build_vl_reranker_content(
         self,

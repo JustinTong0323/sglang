@@ -1937,6 +1937,13 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 )
             if not self.is_generation:
                 kwargs["get_embedding"] = True
+            # Pass get_reranker_score if this is a reranker batch and the model supports it
+            elif (
+                forward_batch.is_reranker_batch
+                and "get_reranker_score"
+                in inspect.signature(self.model.forward).parameters
+            ):
+                kwargs["get_reranker_score"] = True
 
             logits_output_or_pp_proxy_tensors = self.model.forward(
                 buffers.input_ids,
@@ -2134,6 +2141,17 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             kwargs["input_embeds"] = forward_batch.input_embeds.bfloat16()
         if not self.is_generation:
             kwargs["get_embedding"] = True
+        # Pass get_reranker_score if this is a reranker batch and the model supports it
+        elif forward_batch.is_reranker_batch:
+            has_reranker_param = "get_reranker_score" in inspect.signature(
+                self.model.forward
+            ).parameters
+            logger.info(
+                f"[DEBUG] forward_extend: is_reranker_batch=True, "
+                f"model has get_reranker_score param: {has_reranker_param}"
+            )
+            if has_reranker_param:
+                kwargs["get_reranker_score"] = True
 
         if (
             self.piecewise_cuda_graph_runner is not None

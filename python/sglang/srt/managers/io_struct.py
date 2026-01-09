@@ -203,6 +203,9 @@ class GenerateReqInput(BaseReq, APIServingTimingMixin):
     # Whether to return captured routed experts
     return_routed_experts: bool = False
 
+    # Whether this is a reranker request (uses official reranker scoring method)
+    is_reranker: Union[List[bool], bool] = False
+
     # The modalities of the image data [image, multi-images, video]
     modalities: Optional[List[str]] = None
     # Session info for continual prompting
@@ -634,6 +637,11 @@ class GenerateReqInput(BaseReq, APIServingTimingMixin):
                 else self.return_hidden_states
             ),
             return_routed_experts=self.return_routed_experts,
+            is_reranker=(
+                self.is_reranker[i]
+                if isinstance(self.is_reranker, list)
+                else self.is_reranker
+            ),
             modalities=self.modalities[i] if self.modalities else None,
             session_params=self.session_params,
             lora_path=self.lora_path[i] if self.lora_path is not None else None,
@@ -706,6 +714,9 @@ class TokenizedGenerateReqInput(BaseReq):
 
     # Whether to return captured routed experts
     return_routed_experts: bool = False
+
+    # Whether this is a reranker request (uses official reranker scoring method)
+    is_reranker: bool = False
 
     # The input embeds
     input_embeds: Optional[Union[List[List[List[float]]], List[List[float]]]] = None

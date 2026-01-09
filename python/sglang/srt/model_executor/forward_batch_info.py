@@ -372,6 +372,9 @@ class ForwardBatch:
     # Whether this batch is prefill-only (no token generation needed)
     is_prefill_only: bool = False
 
+    # Whether this batch contains reranker requests (uses official reranker scoring)
+    is_reranker_batch: bool = False
+
     # Speculative decoding
     spec_info: Optional[SpecInput] = None
     spec_algorithm: SpeculativeAlgorithm = None
@@ -431,6 +434,7 @@ class ForwardBatch:
             can_run_dp_cuda_graph=batch.can_run_dp_cuda_graph,
             global_forward_mode=batch.global_forward_mode,
             is_prefill_only=batch.is_prefill_only,
+            is_reranker_batch=batch.is_reranker_batch,
             lora_ids=batch.lora_ids,
             sampling_info=batch.sampling_info,
             req_to_token_pool=model_runner.req_to_token_pool,

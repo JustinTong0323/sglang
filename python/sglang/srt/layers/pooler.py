@@ -129,3 +129,127 @@ class CrossEncodingPooler(nn.Module):
         scores = self.default_activation_function(pooled_output).squeeze(-1)
 
         return EmbeddingPoolerOutput(embeddings=scores)
+
+
+class DecoderOnlyRerankerScorer(nn.Module):
+    """Scorer for decoder-only reranker models (e.g., Qwen3-VL-Reranker).
+
+    This implements the official scoring method which uses the difference of
+    lm_head weights for yes/no tokens applied to the last hidden state:
+
+        score = sigmoid(last_hidden_state @ (weight_yes - weight_no))
+
+    This approach is more robust than extracting logprobs from model outputs,
+    especially for larger model sizes.
+    """
+
+    def __init__(
+        self,
+        lm_head: nn.Module,
+        yes_token_id: int,
+        no_token_id: int,
+    ):
+        """Initialize the reranker scorer.
+
+        Args:
+            lm_head: The language model head (nn.Linear or ParallelLMHead).
+            yes_token_id: Token ID for "yes".
+            no_token_id: Token ID for "no".
+        """
+        super().__init__()
+        self.yes_token_id = yes_token_id
+        self.no_token_id = no_token_id
+
+        # Extract and cache the weight difference for scoring
+        # weight_yes - weight_no gives us a vector that, when dotted with
+        # hidden states, produces a score where positive = yes, negative = no
+        self._init_score_weights(lm_head)
+
+    def _init_score_weights(self, lm_head: nn.Module):
+        """Initialize the scoring weights from lm_head."""
+        with torch.no_grad():
+            # Handle both regular Linear and ParallelLMHead
+            if hasattr(lm_head, "weight"):
+                lm_head_weights = lm_head.weight.data
+            else:
+                raise ValueError(
+                    f"Cannot extract weights from lm_head of type {type(lm_head)}"
+                )
+
+            # Get weights for yes and no tokens
+            weight_yes = lm_head_weights[self.yes_token_id]
+            weight_no = lm_head_weights[self.no_token_id]
+
+            # Store the weight difference
+            # score = hidden @ (weight_yes - weight_no)
+            self.register_buffer(
+                "score_weights", weight_yes - weight_no, persistent=False
+            )
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        forward_batch: ForwardBatch,
+    ) -> EmbeddingPoolerOutput:
+        """Compute reranker scores from hidden states.
+
+        Args:
+            hidden_states: Hidden states from the model. Shape: (total_tokens, hidden_size)
+            forward_batch: Batch information containing sequence lengths.
+
+        Returns:
+            EmbeddingPoolerOutput with scores for each sequence in the embeddings field.
+            Scores are returned as shape (batch_size, 1) for compatibility with embedding pipeline.
+        """
+        # Extract last token hidden state for each sequence
+        last_token_indices = torch.cumsum(forward_batch.extend_seq_lens, dim=0) - 1
+        last_hidden_states = hidden_states[last_token_indices]
+
+        # Compute scores: hidden @ score_weights
+        # score_weights shape: (hidden_size,)
+        # last_hidden_states shape: (batch_size, hidden_size)
+        logits = torch.matmul(last_hidden_states, self.score_weights)
+
+        # Apply sigmoid to get probabilities in [0, 1]
+        scores = torch.sigmoid(logits)
+
+        # Return as (batch_size, 1) for embedding pipeline compatibility
+        return EmbeddingPoolerOutput(embeddings=scores.unsqueeze(-1))
+
+    def forward_for_generation(
+        self,
+        hidden_states: torch.Tensor,
+        forward_batch: ForwardBatch,
+    ):
+        """Compute reranker scores for use in generation mode.
+
+        This returns a LogitsProcessorOutput-compatible result with scores
+        stored in customized_info for processing by the scheduler.
+
+        Args:
+            hidden_states: Hidden states from the model. Shape: (total_tokens, hidden_size)
+            forward_batch: Batch information containing sequence lengths.
+
+        Returns:
+            LogitsProcessorOutput with scores stored in customized_info["reranker_scores"].
+        """
+        from sglang.srt.layers.logits_processor import LogitsProcessorOutput
+
+        # Extract last token hidden state for each sequence
+        last_token_indices = torch.cumsum(forward_batch.extend_seq_lens, dim=0) - 1
+        last_hidden_states = hidden_states[last_token_indices]
+
+        # Compute scores: hidden @ score_weights
+        logits = torch.matmul(last_hidden_states, self.score_weights)
+
+        # Apply sigmoid to get probabilities in [0, 1]
+        scores = torch.sigmoid(logits)
+
+        # Convert to list for JSON serialization
+        scores_list = scores.cpu().tolist()
+
+        # Return LogitsProcessorOutput with scores in customized_info
+        return LogitsProcessorOutput(
+            next_token_logits=None,  # No logits needed for reranker
+            customized_info={"reranker_scores": scores_list},
+        )
