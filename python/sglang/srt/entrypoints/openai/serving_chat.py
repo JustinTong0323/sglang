@@ -338,12 +338,12 @@ class OpenAIServingChat(OpenAIServingBase):
             request.skip_special_tokens = False
             if not isinstance(request.tool_choice, str):
                 tools = [
-                    item.function.model_dump()
+                    item.model_dump()
                     for item in request.tools
                     if item.function.name == request.tool_choice.function.name
                 ]
             else:
-                tools = [item.function.model_dump() for item in request.tools]
+                tools = [item.model_dump() for item in request.tools]
             if self.tool_call_parser:
                 parser = FunctionCallParser(request.tools, self.tool_call_parser)
                 tool_call_constraint = parser.get_structure_constraint(
@@ -481,14 +481,9 @@ class OpenAIServingChat(OpenAIServingBase):
                     return_dict=False,
                 )
             except Exception as e:
-                # If the first attempt fails, try transforming the tools format
-                # This handles models like Mistral that have a different tools input format
-                # that is not compatible with OpenAI's apply_chat_template tool_call format
-                tools = (
-                    [t if "function" in t else {"function": t} for t in tools]
-                    if tools
-                    else None
-                )
+                # Start from OpenAI-compatible tool schema and fallback to function-only
+                # schema for legacy templates that expect tool["name"] / tool["parameters"].
+                tools = [t.get("function", t) for t in tools] if tools else None
                 try:
                     prompt_ids = self.tokenizer_manager.tokenizer.apply_chat_template(
                         openai_compatible_messages,
