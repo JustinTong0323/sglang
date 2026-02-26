@@ -770,8 +770,7 @@ class NativeSparseAttnBackend(
             # overflow during target_verify when max_seqlen_k = seq_len + num_draft_tokens
             "page_table": torch.zeros(
                 max_num_tokens,
-                self.max_context_len
-                + (self.speculative_num_draft_tokens or 0),
+                self.max_context_len + (self.speculative_num_draft_tokens or 0),
                 dtype=torch.int32,
                 device=self.device,
             ),
