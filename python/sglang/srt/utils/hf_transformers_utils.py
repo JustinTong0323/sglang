@@ -336,6 +336,24 @@ def _ensure_llama_flash_attention2_compat() -> None:
             modeling_llama.LlamaFlashAttention2 = modeling_llama.LlamaAttention
 
 
+def _ensure_gguf_version():
+    """Workaround for transformers v5 bug where is_gguf_available() fails
+    when the gguf package lacks __version__ and metadata lookup also fails,
+    resulting in packaging.version.InvalidVersion: Invalid version: 'N/A'."""
+    try:
+        import gguf
+
+        if not hasattr(gguf, "__version__"):
+            import importlib.metadata
+
+            try:
+                gguf.__version__ = importlib.metadata.version("gguf")
+            except Exception:
+                gguf.__version__ = "0.0.0"
+    except ImportError:
+        pass
+
+
 @lru_cache_frozenset(maxsize=32)
 def get_config(
     model: str,
@@ -346,6 +364,7 @@ def get_config(
 ):
     is_gguf = check_gguf_file(model)
     if is_gguf:
+        _ensure_gguf_version()
         kwargs["gguf_file"] = model
         model = Path(model).parent
 
