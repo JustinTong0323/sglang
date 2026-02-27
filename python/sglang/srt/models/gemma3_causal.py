@@ -579,10 +579,9 @@ class Gemma3TextModel(PreTrainedModel):
 class Gemma3ForCausalLM(PreTrainedModel):
     config_class = Gemma3TextConfig
 
-    _tied_weights_keys = {"lm_head.weight": "model.embed_tokens.weight"}
+    _tied_weights_keys = ["lm_head.weight"]
     _tp_plan = {"lm_head": "colwise_rep"}
     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
-    config_class = Gemma3TextConfig
     base_model_prefix = "language_model"
 
     # BitandBytes specific attributes

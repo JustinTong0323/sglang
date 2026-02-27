@@ -617,8 +617,6 @@ async def benchmark(
             "std_itl_ms": metrics.std_itl_ms,
             "p99_itl_ms": metrics.p99_itl_ms,
             "concurrency": metrics.concurrency,
-            "input_throughput": metrics.input_throughput,
-            "output_throughput": metrics.output_throughput,
             "fixed_output_len": args.fixed_output_len,
             "random_input_len": args.random_input_len,
             "random_output_len": args.random_output_len,

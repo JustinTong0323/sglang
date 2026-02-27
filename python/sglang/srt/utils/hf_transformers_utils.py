@@ -138,9 +138,11 @@ def get_rope_config(config):
     Falls back to the v4-style config.rope_theta / config.rope_scaling attributes.
     """
     rope_params = getattr(config, "rope_parameters", None)
-    if rope_params is not None:
-        return rope_params["rope_theta"], rope_params
-    return config.rope_theta, getattr(config, "rope_scaling", None)
+    if rope_params is not None and isinstance(rope_params, dict) and rope_params:
+        return rope_params.get("rope_theta", 10000.0), rope_params
+    return getattr(config, "rope_theta", 10000.0), getattr(
+        config, "rope_scaling", None
+    )
 
 
 def _patch_text_config(parent_config: PretrainedConfig, text_config):
@@ -197,15 +199,13 @@ def get_hf_text_config(config: PretrainedConfig):
         # if transformers config doesn't align with this assumption.
         assert hasattr(config.text_config, "num_attention_heads")
         text_config = config.text_config
-
-    if hasattr(config, "llm_config"):
+    elif hasattr(config, "llm_config"):
         # PointsV1.5 Chat Model
         assert hasattr(config.llm_config, "num_attention_heads")
         text_config = config.llm_config
-
-    if hasattr(config, "language_config"):
+    elif hasattr(config, "language_config"):
         text_config = config.language_config
-    if hasattr(config, "thinker_config"):
+    elif hasattr(config, "thinker_config"):
         # qwen2.5 omni
         thinker_config = config.thinker_config
         if hasattr(thinker_config, "text_config"):
@@ -217,9 +217,6 @@ def get_hf_text_config(config: PretrainedConfig):
             text_config = thinker_config.text_config
         else:
             text_config = thinker_config
-
-    if hasattr(config, "llm_config"):
-        text_config = config.llm_config
 
     if text_config is not None:
         return _patch_text_config(config, text_config)

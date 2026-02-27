@@ -433,13 +433,22 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
         self.scaling = self.head_dim**-0.5
         self.max_position_embeddings = getattr(config, "max_position_embeddings", 8192)
 
-        if hasattr(config, "rope_parameters"):
-            self.rope_scaling = getattr(config, "rope_parameters", None)
+        rope_params = getattr(config, "rope_parameters", None)
+        if rope_params is not None and isinstance(rope_params, dict) and rope_params:
+            self.rope_scaling = rope_params
         else:
             self.rope_scaling = getattr(config, "rope_scaling", None)
 
-        self.rope_theta = self.rope_scaling.get("rope_theta", 10000)
-        self.partial_rotary_factor = self.rope_scaling.get("partial_rotary_factor", 1.0)
+        if self.rope_scaling is not None and isinstance(self.rope_scaling, dict):
+            self.rope_theta = self.rope_scaling.get("rope_theta", 10000)
+            self.partial_rotary_factor = self.rope_scaling.get(
+                "partial_rotary_factor", 1.0
+            )
+        else:
+            self.rope_theta = getattr(config, "rope_theta", 10000)
+            self.partial_rotary_factor = getattr(
+                config, "partial_rotary_factor", 1.0
+            )
         self.layer_id = layer_id
 
         self.attn_output_gate = getattr(config, "attn_output_gate", True)
