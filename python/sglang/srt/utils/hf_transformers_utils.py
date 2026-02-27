@@ -140,9 +140,7 @@ def get_rope_config(config):
     rope_params = getattr(config, "rope_parameters", None)
     if rope_params is not None and isinstance(rope_params, dict) and rope_params:
         return rope_params.get("rope_theta", 10000.0), rope_params
-    return getattr(config, "rope_theta", 10000.0), getattr(
-        config, "rope_scaling", None
-    )
+    return getattr(config, "rope_theta", 10000.0), getattr(config, "rope_scaling", None)
 
 
 def _patch_text_config(parent_config: PretrainedConfig, text_config):

@@ -446,9 +446,7 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
             )
         else:
             self.rope_theta = getattr(config, "rope_theta", 10000)
-            self.partial_rotary_factor = getattr(
-                config, "partial_rotary_factor", 1.0
-            )
+            self.partial_rotary_factor = getattr(config, "partial_rotary_factor", 1.0)
         self.layer_id = layer_id
 
         self.attn_output_gate = getattr(config, "attn_output_gate", True)
