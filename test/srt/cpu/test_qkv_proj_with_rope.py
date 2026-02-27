@@ -8,7 +8,9 @@ from utils import (
     precision,
 )
 
-from sglang.srt.layers.rotary_embedding import _apply_rotary_emb
+from sglang.srt.layers.rotary_embedding.utils import (
+    apply_rotary_emb as _apply_rotary_emb,
+)
 from sglang.test.test_utils import CustomTestCase
 
 convert_weight_packed = torch.ops.sgl_kernel.convert_weight_packed
