@@ -199,16 +199,22 @@ class TestQwenVLUnderstandsImage(VLMInputTestBase, unittest.IsolatedAsyncioTestC
 
     @classmethod
     def _init_visual(cls):
-        cls.visual_model = (
-            Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                cls.model_path, torch_dtype=torch.bfloat16
+        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            cls.model_path, torch_dtype=torch.bfloat16
+        ).eval()
+        # In transformers v5, .visual moved under .model
+        visual = model.model.visual
+        cls.visual_model = visual.to(cls.device)
+
+        # In transformers v5, the visual encoder returns BaseModelOutputWithPooling;
+        # pooler_output has the spatially-merged embeddings we need.
+        def visual(processor_output):
+            out = cls.visual_model(
+                processor_output["pixel_values"], processor_output["image_grid_thw"]
             )
-            .eval()
-            .visual.to(cls.device)
-        )
-        cls.visual = lambda processor_output: cls.visual_model(
-            processor_output["pixel_values"], processor_output["image_grid_thw"]
-        )
+            return out.pooler_output if hasattr(out, "pooler_output") else out
+
+        cls.visual = visual
 
     def _processor_output_image_data(self, processor_output):
         return dict(processor_output, format="processor_output")
