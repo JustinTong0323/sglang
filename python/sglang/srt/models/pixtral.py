@@ -82,9 +82,14 @@ class PixtralForConditionalGeneration(nn.Module):
         super().__init__()
         self.config = config
         dataclass_fields = {field.name for field in fields(VisionEncoderArgs)}
+        config_dict = self.config.vision_config.to_dict()
+        if config_dict.get("rope_parameters"): # transformers v5 compatibility
+            config_dict["rope_theta"] = config_dict["rope_parameters"].get("rope_theta")
+            config_dict["rope_scaling"] = config_dict["rope_parameters"]
+            config_dict.pop("rope_parameters")
         vision_args = {
             key: value
-            for key, value in self.config.vision_config.to_dict().items()
+            for key, value in config_dict.items()
             if key in dataclass_fields
         }
 

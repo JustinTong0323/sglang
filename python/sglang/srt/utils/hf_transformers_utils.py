@@ -14,6 +14,7 @@
 """Utilities for Huggingface Transformers."""
 
 import contextlib
+from functools import lru_cache
 import json
 import logging
 import os
@@ -207,11 +208,11 @@ def _load_deepseek_v32_model(
 
 
 # Temporary hack for Mistral Large
+@lru_cache(maxsize=2)
 def _load_mistral_large_3_for_causal_LM(
     model_path: str,
     trust_remote_code: bool = False,
     revision: Optional[str] = None,
-    **kwargs,
 ):
     # first get the local path
     local_path = download_from_hf(model_path)
@@ -223,7 +224,7 @@ def _load_mistral_large_3_for_causal_LM(
         json.dump(config_dict, f)
         f.flush()
         loaded_config = AutoConfig.from_pretrained(
-            f.name, trust_remote_code=trust_remote_code, revision=revision, **kwargs
+            f.name, trust_remote_code=trust_remote_code, revision=revision
         )
     text_config = getattr(loaded_config, "text_config", None)
     if text_config is not None and isinstance(text_config, dict):
@@ -305,9 +306,9 @@ def get_config(
         client.pull_files(ignore_pattern=["*.pt", "*.safetensors", "*.bin"])
         model = client.get_local_dir()
 
-    if "mistral-large-3" in str(model).lower():
+    if "mistral-large-3" in str(model).lower() or "mistral-small-4" in str(model).lower():
         config = _load_mistral_large_3_for_causal_LM(
-            model, trust_remote_code=trust_remote_code, revision=revision, **kwargs
+            model, trust_remote_code=trust_remote_code, revision=revision
         )
     else:
         _ensure_llama_flash_attention2_compat()
@@ -583,12 +584,11 @@ def get_processor(
 ):
     # pop 'revision' from kwargs if present.
     revision = kwargs.pop("revision", tokenizer_revision)
-    if "mistral-large-3" in str(tokenizer_name).lower():
+    if "mistral-large-3" in str(tokenizer_name).lower() or "mistral-small-4" in str(tokenizer_name).lower():
         config = _load_mistral_large_3_for_causal_LM(
             tokenizer_name,
             trust_remote_code=trust_remote_code,
             revision=revision,
-            **kwargs,
         )
     else:
         _ensure_llama_flash_attention2_compat()

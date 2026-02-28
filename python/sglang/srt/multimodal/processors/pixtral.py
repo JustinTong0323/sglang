@@ -10,6 +10,8 @@ from sglang.srt.models.pixtral import (
     PixtralForConditionalGeneration,
     PixtralVisionModel,
 )
+from transformers import PreTrainedTokenizerBase
+
 from sglang.srt.multimodal.processors.base_processor import (
     BaseMultimodalProcessor,
     MultimodalSpecialTokens,
@@ -20,6 +22,7 @@ class PixtralProcessor(BaseMultimodalProcessor):
     models = [PixtralVisionModel, PixtralForConditionalGeneration]
 
     PAD_TOKEN = "<pad>"
+    DEFAULT_IMAGE_TOKEN = "[IMG]"
     IMG_BREAK_TOKEN_ID = 12
     IMG_END_TOKEN_ID = 13
 
@@ -59,11 +62,22 @@ class PixtralProcessor(BaseMultimodalProcessor):
         if hasattr(self.vision_config, "spatial_merge_size"):
             self._processor.spatial_merge_size = self.vision_config.spatial_merge_size
 
+        # When the model lacks processor_config.json (e.g. Mistral-Small-4),
+        # AutoProcessor returns a bare tokenizer without an image_token attribute.
+        tokenizer = (
+            _processor
+            if isinstance(_processor, PreTrainedTokenizerBase)
+            else _processor.tokenizer
+        )
+        self.image_token = getattr(
+            _processor, "image_token", self.DEFAULT_IMAGE_TOKEN
+        )
+
         self.mm_tokens = MultimodalSpecialTokens(
-            image_token=_processor.image_token,
+            image_token=self.image_token,
             image_token_id=self.IM_TOKEN_ID,
         ).build(_processor)
-        _processor.tokenizer.add_special_tokens(
+        tokenizer.add_special_tokens(
             {
                 "pad_token": getattr(hf_config, "pad_token", self.PAD_TOKEN),
             }
@@ -103,5 +117,5 @@ class PixtralProcessor(BaseMultimodalProcessor):
             "mm_items": mm_items,
             "input_ids": input_ids.tolist(),
             "im_token_id": self.IM_TOKEN_ID,
-            "im_token": self._processor.image_token,
+            "im_token": self.image_token,
         }
