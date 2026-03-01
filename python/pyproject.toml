@@ -123,6 +123,7 @@ tracing = [
 
 test = [
   "accelerate",
+  "addict",
   "bitsandbytes",
   "expecttest",
   "jsonlines",
