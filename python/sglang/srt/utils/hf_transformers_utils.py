@@ -580,6 +580,28 @@ def get_tokenizer(
     if tokenizer_name == "mistralai/Devstral-Small-2505":
         tokenizer_name = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
 
+    # Monkey-patch clean_up_tokenization for transformers v5+ compatibility.
+    # This method was removed in v5 but remote tokenizers (trust_remote_code)
+    # may still call it via the base class.
+    if not hasattr(PreTrainedTokenizer, "clean_up_tokenization"):
+
+        def _clean_up_tokenization(out_string: str) -> str:
+            out_string = (
+                out_string.replace(" .", ".")
+                .replace(" ?", "?")
+                .replace(" !", "!")
+                .replace(" ,", ",")
+                .replace(" ' ", "'")
+                .replace(" n't", "n't")
+                .replace(" 'm", "'m")
+                .replace(" 's", "'s")
+                .replace(" 've", "'ve")
+                .replace(" 're", "'re")
+            )
+            return out_string
+
+        PreTrainedTokenizer.clean_up_tokenization = staticmethod(_clean_up_tokenization)
+
     is_gguf = check_gguf_file(tokenizer_name)
     if is_gguf:
         kwargs["gguf_file"] = tokenizer_name
