@@ -325,9 +325,7 @@ class TestKimiK2Detector(CustomTestCase):
         """Test KimiK2Detector initialization."""
         self.assertEqual(self.detector.think_start_token, "<think>")
         self.assertEqual(self.detector.think_end_token, "</think>")
-        self.assertEqual(
-            self.detector.tool_start_token, "<|tool_calls_section_begin|>"
-        )
+        self.assertEqual(self.detector.tool_start_token, "<|tool_calls_section_begin|>")
         self.assertFalse(self.detector._in_reasoning)
         self.assertTrue(self.detector.stream_reasoning)
 
@@ -356,9 +354,7 @@ class TestKimiK2Detector(CustomTestCase):
     def test_streaming_after_interrupt_is_normal(self):
         """After interruption, subsequent chunks should be normal text."""
         self.detector.parse_streaming_increment("<think>")
-        self.detector.parse_streaming_increment(
-            "reasoning<|tool_calls_section_begin|>"
-        )
+        self.detector.parse_streaming_increment("reasoning<|tool_calls_section_begin|>")
         result = self.detector.parse_streaming_increment("<|tool_call_begin|>")
         self.assertEqual(result.reasoning_text, "")
         self.assertEqual(result.normal_text, "<|tool_call_begin|>")
@@ -627,9 +623,7 @@ class TestReasoningParser(CustomTestCase):
             "<think>thinking<|tool_calls_section_begin|><|tool_call_begin|>"
         )
         self.assertEqual(reasoning, "thinking")
-        self.assertEqual(
-            normal, "<|tool_calls_section_begin|><|tool_call_begin|>"
-        )
+        self.assertEqual(normal, "<|tool_calls_section_begin|><|tool_call_begin|>")
 
         # Streaming: tool interrupt
         parser = ReasoningParser("kimi_k2")
@@ -649,9 +643,7 @@ class TestReasoningParser(CustomTestCase):
                 all_normal += normal
 
         self.assertEqual(all_reasoning, "reasoning")
-        self.assertEqual(
-            all_normal, "<|tool_calls_section_begin|><|tool_call_begin|>"
-        )
+        self.assertEqual(all_normal, "<|tool_calls_section_begin|><|tool_call_begin|>")
 
 
 class TestIntegrationScenarios(CustomTestCase):
