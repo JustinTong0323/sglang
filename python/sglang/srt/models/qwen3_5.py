@@ -73,7 +73,7 @@ from sglang.srt.models.qwen3_vl import Qwen3VLForConditionalGeneration
 
 # Utils
 from sglang.srt.utils import add_prefix, is_cuda, is_npu, make_layers, set_weight_attrs
-from sglang.srt.utils.hf_transformers_utils import get_processor
+from sglang.srt.utils.hf_transformers_utils import get_processor, get_rope_config
 
 logger = logging.getLogger(__name__)
 _is_cuda = is_cuda()
@@ -434,14 +434,13 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
         self.scaling = self.head_dim**-0.5
         self.max_position_embeddings = getattr(config, "max_position_embeddings", 8192)
 
-        if hasattr(config, "rope_parameters"):
-            self.rope_scaling = getattr(config, "rope_parameters", None)
-        else:
-            self.rope_scaling = getattr(config, "rope_scaling", None)
-
-        self.rope_theta = self.rope_scaling.get("rope_theta", 10000)
-        self.partial_rotary_factor = self.rope_scaling.get("partial_rotary_factor", 1.0)
+        self.rope_theta, rope_scaling = get_rope_config(config)
+        self.partial_rotary_factor = getattr(config, "partial_rotary_factor", 1.0)
         self.layer_id = layer_id
+
+        # If rope_scaling doesn't specify a scaling type, treat as no scaling
+        if rope_scaling and not ("rope_type" in rope_scaling or "type" in rope_scaling):
+            rope_scaling = None
 
         self.attn_output_gate = getattr(config, "attn_output_gate", True)
         if self.attn_output_gate:
@@ -451,7 +450,7 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
             head_size=self.head_dim,
             rotary_dim=self.head_dim,
             max_position=self.max_position_embeddings,
-            rope_scaling=self.rope_scaling,
+            rope_scaling=rope_scaling,
             base=self.rope_theta,
             partial_rotary_factor=self.partial_rotary_factor,
             is_neox_style=True,
