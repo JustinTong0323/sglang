@@ -383,7 +383,10 @@ class TestInternVLUnderstandsImage(VLMInputTestBase, unittest.IsolatedAsyncioTes
     @classmethod
     def _init_visual(cls):
         model = AutoModel.from_pretrained(
-            cls.model_path, trust_remote_code=True, torch_dtype=torch.bfloat16
+            cls.model_path,
+            trust_remote_code=True,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=False,
         )
         cls.vision_model = model.vision_model.eval().to(cls.device)
         cls.mlp1 = model.mlp1.eval().to(cls.device)

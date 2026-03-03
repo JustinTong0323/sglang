@@ -677,6 +677,64 @@ def _fix_special_tokens_pattern(tokenizer):
         tokenizer.special_tokens_pattern = "none"
 
 
+def _fix_added_tokens_encoding(tokenizer):
+    """Ensure added special tokens encode as single tokens in transformers v5.
+
+    Some model tokenizers (e.g. MiniCPM-V-4) define special tokens like <image>,
+    <slice> in tokenizer.json's added_tokens list that may not be correctly
+    recognized during encode() in transformers v5. This causes these tokens to be
+    split into subwords, breaking multimodal pipelines that rely on finding them
+    in input_ids.
+
+    This function detects mis-encoded added tokens and re-registers them so the
+    tokenizer backend recognizes them during encoding.
+    """
+    added_vocab = tokenizer.get_added_vocab()
+    if not added_vocab:
+        return
+
+    # Only check angle-bracket tokens that look like model-specific special tokens.
+    # Skip standard tokens that are always handled correctly.
+    standard = {"<s>", "</s>", "<unk>", "<pad>"}
+    candidates = {
+        tok: tid
+        for tok, tid in added_vocab.items()
+        if isinstance(tok, str)
+        and tok.startswith("<")
+        and tok.endswith(">")
+        and tok not in standard
+    }
+    if not candidates:
+        return
+
+    # Spot-check: if any candidate fails to encode as a single token, fix all.
+    needs_fix = False
+    for token_str, expected_id in list(candidates.items())[:5]:
+        try:
+            ids = tokenizer.encode(token_str, add_special_tokens=False)
+            if len(ids) != 1 or ids[0] != expected_id:
+                needs_fix = True
+                break
+        except Exception:
+            needs_fix = True
+            break
+
+    if not needs_fix:
+        return
+
+    from transformers import AddedToken
+
+    tokens_to_add = [
+        AddedToken(tok, special=True, normalized=False) for tok in candidates
+    ]
+    tokenizer.add_tokens(tokens_to_add, special_tokens=True)
+    logger.info(
+        "Re-registered %d added tokens for correct v5 encoding: %s",
+        len(candidates),
+        list(candidates.keys())[:10],
+    )
+
+
 # Some models doesn't have an available processor, e.g.: InternVL
 def get_tokenizer_from_processor(processor):
     if isinstance(processor, PreTrainedTokenizerBase):
@@ -773,6 +831,7 @@ def get_processor(
     tokenizer = get_tokenizer_from_processor(processor)
 
     _fix_special_tokens_pattern(tokenizer)
+    _fix_added_tokens_encoding(tokenizer)
     attach_additional_stop_token_ids(tokenizer)
     return processor
 
