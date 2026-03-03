@@ -325,6 +325,41 @@ def _override_v_head_dim_if_zero(config: PretrainedConfig, patch: int = 128) -> 
         )
 
 
+def _ensure_clean_up_tokenization_compat() -> None:
+    """Re-add ``clean_up_tokenization`` removed in transformers v5.
+
+    Remote-code tokenizers (e.g. InternLM2Tokenizer) call
+    ``self.clean_up_tokenization()`` which was a static method on
+    ``PreTrainedTokenizerBase`` in v4 but removed in v5. Patch it back
+    so existing HuggingFace Hub tokenizer code keeps working.
+    """
+    if hasattr(PreTrainedTokenizerBase, "clean_up_tokenization"):
+        return
+
+    @staticmethod
+    def clean_up_tokenization(out_string: str) -> str:
+        out_string = (
+            out_string.replace(" .", ".")
+            .replace(" ?", "?")
+            .replace(" !", "!")
+            .replace(" ,", ",")
+            .replace(" ' ", "'")
+            .replace(" n't", "n't")
+            .replace(" 'm", "'m")
+            .replace(" 's", "'s")
+            .replace(" 've", "'ve")
+            .replace(" 're", "'re")
+        )
+        return out_string
+
+    PreTrainedTokenizerBase.clean_up_tokenization = clean_up_tokenization
+
+
+# Apply immediately so all code paths (get_tokenizer, get_processor,
+# and any external callers) benefit without needing an explicit call.
+_ensure_clean_up_tokenization_compat()
+
+
 def _ensure_llama_flash_attention2_compat() -> None:
     """Ensure LlamaFlashAttention2 symbol exists for remote code compatibility."""
     try:
@@ -580,28 +615,6 @@ def get_tokenizer(
     if tokenizer_name == "mistralai/Devstral-Small-2505":
         tokenizer_name = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
 
-    # Monkey-patch clean_up_tokenization for transformers v5+ compatibility.
-    # This method was removed in v5 but remote tokenizers (trust_remote_code)
-    # may still call it via the base class.
-    if not hasattr(PreTrainedTokenizer, "clean_up_tokenization"):
-
-        def _clean_up_tokenization(out_string: str) -> str:
-            out_string = (
-                out_string.replace(" .", ".")
-                .replace(" ?", "?")
-                .replace(" !", "!")
-                .replace(" ,", ",")
-                .replace(" ' ", "'")
-                .replace(" n't", "n't")
-                .replace(" 'm", "'m")
-                .replace(" 's", "'s")
-                .replace(" 've", "'ve")
-                .replace(" 're", "'re")
-            )
-            return out_string
-
-        PreTrainedTokenizer.clean_up_tokenization = staticmethod(_clean_up_tokenization)
-
     is_gguf = check_gguf_file(tokenizer_name)
     if is_gguf:
         kwargs["gguf_file"] = tokenizer_name
@@ -745,6 +758,71 @@ def get_tokenizer_from_processor(processor):
     return processor.tokenizer
 
 
+def _build_processor_manually(
+    model_path, config, trust_remote_code, revision, **kwargs
+):
+    """Build processor when AutoProcessor fails to resolve feature_extractor_type.
+
+    In transformers v5, AutoProcessor.from_pretrained calls
+    AutoFeatureExtractor.from_pretrained which fails if
+    preprocessor_config.json lacks 'feature_extractor_type'. This loads the
+    processor class from the hub and constructs it with individually-loaded
+    components.
+    """
+    import transformers
+    from transformers import AutoImageProcessor, AutoTokenizer
+    from transformers.dynamic_module_utils import get_class_from_dynamic_module
+
+    # Resolve processor class from auto_map — check both the model config
+    # and the preprocessor_config.json (some models like MiniCPM-o only
+    # declare AutoProcessor in the latter).
+    auto_map = getattr(config, "auto_map", None) or {}
+    proc_ref = auto_map.get("AutoProcessor")
+    if not proc_ref:
+        try:
+            pp_config_path = snapshot_download(
+                model_path,
+                allow_patterns=["preprocessor_config.json"],
+                revision=revision,
+            )
+            pp_file = os.path.join(pp_config_path, "preprocessor_config.json")
+            if os.path.isfile(pp_file):
+                with open(pp_file) as f:
+                    pp_auto_map = json.load(f).get("auto_map", {})
+                proc_ref = pp_auto_map.get("AutoProcessor")
+        except Exception:
+            pass
+    if not proc_ref:
+        raise ValueError(f"Cannot determine processor class for {model_path}")
+
+    proc_cls = get_class_from_dynamic_module(
+        proc_ref, model_path, code_revision=revision
+    )
+
+    # Load sub-components individually (these succeed)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_path, trust_remote_code=trust_remote_code, revision=revision
+    )
+    init_kwargs = {"tokenizer": tokenizer}
+
+    if "image_processor" in getattr(proc_cls, "attributes", []):
+        try:
+            init_kwargs["image_processor"] = AutoImageProcessor.from_pretrained(
+                model_path, trust_remote_code=trust_remote_code, revision=revision
+            )
+        except Exception:
+            pass
+
+    # Instantiate feature extractor from its declared class
+    fe_class_name = getattr(proc_cls, "feature_extractor_class", None)
+    if fe_class_name:
+        fe_class = getattr(transformers, fe_class_name, None)
+        if fe_class is not None:
+            init_kwargs["feature_extractor"] = fe_class()
+
+    return proc_cls(**init_kwargs)
+
+
 def get_processor(
     tokenizer_name: str,
     *args,
@@ -827,6 +905,19 @@ def get_processor(
                 *args,
                 trust_remote_code=trust_remote_code,
                 revision=revision,
+                **kwargs,
+            )
+        elif "Unrecognized feature extractor" in error_message:
+            logger.info(
+                "AutoProcessor failed on feature extractor for %s, "
+                "constructing processor manually",
+                tokenizer_name,
+            )
+            processor = _build_processor_manually(
+                tokenizer_name,
+                config,
+                trust_remote_code,
+                revision,
                 **kwargs,
             )
         else:

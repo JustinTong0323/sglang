@@ -382,12 +382,41 @@ class TestInternVLUnderstandsImage(VLMInputTestBase, unittest.IsolatedAsyncioTes
 
     @classmethod
     def _init_visual(cls):
-        model = AutoModel.from_pretrained(
-            cls.model_path,
-            trust_remote_code=True,
-            torch_dtype=torch.bfloat16,
-            low_cpu_mem_usage=False,
-        )
+        try:
+            model = AutoModel.from_pretrained(
+                cls.model_path,
+                trust_remote_code=True,
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=False,
+            )
+        except RuntimeError as e:
+            if "meta" not in str(e):
+                raise
+            # Transformers v5 always uses meta tensors for init, which breaks
+            # models calling .item() in __init__ (e.g. InternVL's drop_path_rate).
+            # Fall back to from_config + manual weight loading.
+            import gc
+            import glob
+            import os
+
+            from huggingface_hub import snapshot_download
+            from safetensors.torch import load_file
+            from transformers import AutoConfig
+
+            config = AutoConfig.from_pretrained(cls.model_path, trust_remote_code=True)
+            with torch.device("cpu"):
+                model = AutoModel.from_config(
+                    config,
+                    trust_remote_code=True,
+                    torch_dtype=torch.bfloat16,
+                )
+            model_dir = snapshot_download(cls.model_path)
+            for f in sorted(glob.glob(os.path.join(model_dir, "*.safetensors"))):
+                shard = load_file(f)
+                model.load_state_dict(shard, strict=False)
+                del shard
+            gc.collect()
+
         cls.vision_model = model.vision_model.eval().to(cls.device)
         cls.mlp1 = model.mlp1.eval().to(cls.device)
 
