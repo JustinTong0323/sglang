@@ -678,60 +678,63 @@ def _fix_special_tokens_pattern(tokenizer):
 
 
 def _fix_added_tokens_encoding(tokenizer):
-    """Ensure added special tokens encode as single tokens in transformers v5.
+    """Ensure special tokens encode as single tokens in transformers v5.
 
     Some model tokenizers (e.g. MiniCPM-V-4) define special tokens like <image>,
-    <slice> in tokenizer.json's added_tokens list that may not be correctly
-    recognized during encode() in transformers v5. This causes these tokens to be
-    split into subwords, breaking multimodal pipelines that rely on finding them
-    in input_ids.
+    <slice> as attributes on the tokenizer class with corresponding IDs in the
+    vocabulary (via tokenizer.json's added_tokens). In transformers v5, these
+    tokens may not appear in get_added_vocab() and encode() splits them into
+    subwords, breaking multimodal pipelines that rely on finding them in input_ids.
 
-    This function detects mis-encoded added tokens and re-registers them so the
-    tokenizer backend recognizes them during encoding.
+    This function discovers such tokens by scanning tokenizer attributes, checks
+    if they encode correctly, and re-registers any that don't.
     """
-    added_vocab = tokenizer.get_added_vocab()
-    if not added_vocab:
-        return
+    # Discover special token strings from tokenizer attributes.
+    # Model tokenizers (e.g. MiniCPMVTokenizerFast) store them as attributes
+    # like im_start="<image>", slice_start="<slice>", etc.
+    candidates = {}
+    for attr in dir(tokenizer):
+        if attr.startswith("_"):
+            continue
+        try:
+            val = getattr(tokenizer, attr)
+        except Exception:
+            continue
+        if (
+            not isinstance(val, str)
+            or not val.startswith("<")
+            or not val.endswith(">")
+            or len(val) > 20
+        ):
+            continue
+        token_id = tokenizer.convert_tokens_to_ids(val)
+        if token_id is not None and token_id != tokenizer.unk_token_id:
+            candidates[val] = token_id
 
-    # Only check angle-bracket tokens that look like model-specific special tokens.
-    # Skip standard tokens that are always handled correctly.
-    standard = {"<s>", "</s>", "<unk>", "<pad>"}
-    candidates = {
-        tok: tid
-        for tok, tid in added_vocab.items()
-        if isinstance(tok, str)
-        and tok.startswith("<")
-        and tok.endswith(">")
-        and tok not in standard
-    }
     if not candidates:
         return
 
-    # Spot-check: if any candidate fails to encode as a single token, fix all.
-    needs_fix = False
-    for token_str, expected_id in list(candidates.items())[:5]:
+    # Check which tokens fail to encode as single tokens.
+    broken = []
+    for token_str, expected_id in candidates.items():
         try:
             ids = tokenizer.encode(token_str, add_special_tokens=False)
             if len(ids) != 1 or ids[0] != expected_id:
-                needs_fix = True
-                break
+                broken.append(token_str)
         except Exception:
-            needs_fix = True
-            break
+            broken.append(token_str)
 
-    if not needs_fix:
+    if not broken:
         return
 
     from transformers import AddedToken
 
-    tokens_to_add = [
-        AddedToken(tok, special=True, normalized=False) for tok in candidates
-    ]
+    tokens_to_add = [AddedToken(tok, special=True, normalized=False) for tok in broken]
     tokenizer.add_tokens(tokens_to_add, special_tokens=True)
     logger.info(
-        "Re-registered %d added tokens for correct v5 encoding: %s",
-        len(candidates),
-        list(candidates.keys())[:10],
+        "Re-registered %d special tokens for correct v5 encoding: %s",
+        len(broken),
+        broken[:10],
     )
 
 
