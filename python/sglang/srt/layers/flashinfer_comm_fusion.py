@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Optional, Tuple
 
 import torch
@@ -16,6 +17,8 @@ logger = logging.getLogger(__name__)
 _flashinfer_comm = None
 _workspace_manager = None
 _use_legacy_api = False
+_has_unified_api = False
+_has_legacy_api = False
 
 if is_flashinfer_available():
     try:
@@ -28,28 +31,8 @@ if is_flashinfer_available():
             comm, "trtllm_create_ipc_workspace_for_all_reduce_fusion"
         )
 
-        # Detect Blackwell (SM >= 10.0) where the unified allreduce_fusion API
-        # produces incorrect results. Fall back to legacy trtllm_* API.
-        # See: https://github.com/sgl-project/sglang/issues/19884
-        _is_gb300 = False
-        if torch.cuda.is_available():
-            major, minor = torch.cuda.get_device_capability()
-            # GB300 is SM 10.3; B200 (SM 10.0) works fine with unified API
-            _is_gb300 = (major, minor) == (10, 3)
-
-        if _is_gb300 and _has_legacy_api:
-            logger.info(
-                "GB300 (SM 10.3) detected, using legacy trtllm_* "
-                "allreduce fusion API to avoid known issue with unified API"
-            )
+        if _has_unified_api or _has_legacy_api:
             _flashinfer_comm = comm
-            _use_legacy_api = True
-        elif _has_unified_api:
-            _flashinfer_comm = comm
-            _use_legacy_api = False
-        elif _has_legacy_api:
-            _flashinfer_comm = comm
-            _use_legacy_api = True
         else:
             logger.warning(
                 "flashinfer.comm allreduce_fusion API is not available, "
@@ -180,6 +163,7 @@ class FlashInferWorkspaceManager:
                 self.max_token_num is not None
                 and token_num <= self.max_token_num
                 and self.hidden_dim == hidden_dim
+                and self.dtype == dtype
             )
 
         if self.workspace is None:
@@ -201,9 +185,16 @@ class FlashInferWorkspaceManager:
         if _use_legacy_api:
             if self.initialized and self.ipc_handles is not None:
                 try:
-                    _flashinfer_comm.trtllm_destroy_ipc_workspace_for_all_reduce(
-                        self.ipc_handles, group=self.process_group
+                    destroy_fn = getattr(
+                        _flashinfer_comm,
+                        "trtllm_destroy_ipc_workspace_for_all_reduce_fusion",
+                        None,
                     )
+                    if destroy_fn is None:
+                        destroy_fn = (
+                            _flashinfer_comm.trtllm_destroy_ipc_workspace_for_all_reduce
+                        )
+                    destroy_fn(self.ipc_handles, group=self.process_group)
                 except Exception as e:
                     logger.warning(
                         f"Failed to cleanup FlashInfer legacy workspace: {e}"
@@ -225,6 +216,37 @@ class FlashInferWorkspaceManager:
                     self._reset_metadata()
 
 
+def _is_gb_platform() -> bool:
+    """Detect GB200/GB300 family by GPU name."""
+    if not torch.cuda.is_available():
+        return False
+    try:
+        name = torch.cuda.get_device_properties(torch.cuda.current_device()).name
+    except Exception:
+        return False
+    return re.search(r"\bGB(200|300)\b", name, flags=re.IGNORECASE) is not None
+
+
+def _select_comm_api() -> bool:
+    """Select legacy/unified API lazily after CUDA device setup."""
+    global _use_legacy_api
+
+    if _has_unified_api and _has_legacy_api:
+        # Unified workspace transport can fail on GB platforms.
+        # See: https://github.com/sgl-project/sglang/issues/19884
+        _use_legacy_api = _is_gb_platform()
+        if _use_legacy_api:
+            logger.info(
+                "GB platform detected, using legacy trtllm_* allreduce fusion API"
+            )
+    elif _has_unified_api:
+        _use_legacy_api = False
+    else:
+        _use_legacy_api = _has_legacy_api
+
+    return _use_legacy_api
+
+
 _workspace_manager = FlashInferWorkspaceManager()
 
 
@@ -238,6 +260,8 @@ def ensure_workspace_initialized(
     """Ensure workspace is initialized"""
     if not is_flashinfer_available() or _flashinfer_comm is None:
         return False
+
+    _select_comm_api()
 
     world_size = get_tensor_model_parallel_world_size()
     if world_size <= 1:
