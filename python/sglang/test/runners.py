@@ -108,6 +108,10 @@ def _get_sentence_transformer_embedding_model(
         model = SentenceTransformer(
             model_path,
             model_kwargs={"torch_dtype": torch_dtype},
+            # Force causal attention to match SGLang's RadixAttention behavior.
+            # In transformers v5, models with config.is_causal=false use
+            # bidirectional attention, but SGLang always uses causal attention.
+            config_kwargs={"is_causal": True},
             truncate_dim=matryoshka_dim,
         )
     else:  # if no pre-trained sentence-transformers model

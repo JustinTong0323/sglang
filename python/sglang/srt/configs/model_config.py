@@ -51,10 +51,15 @@ class ModelImpl(str, Enum):
     MINDSPORE = "mindspore"
 
 
-def is_deepseek_nsa(config: PretrainedConfig) -> bool:
+def is_deepseek_nsa(config) -> bool:
+    architectures = (
+        config.get("architectures")
+        if isinstance(config, dict)
+        else getattr(config, "architectures", None)
+    )
     return (
-        config.architectures is not None
-        and config.architectures[0]
+        architectures is not None
+        and architectures[0]
         in [
             "DeepseekV3ForCausalLM",
             "DeepseekV32ForCausalLM",
@@ -63,7 +68,12 @@ def is_deepseek_nsa(config: PretrainedConfig) -> bool:
             "PixtralForConditionalGeneration",
             "GlmMoeDsaForCausalLM",
         ]
-        and getattr(config, "index_topk", None) is not None
+        and (
+            config.get("index_topk")
+            if isinstance(config, dict)
+            else getattr(config, "index_topk", None)
+        )
+        is not None
     )
 
 

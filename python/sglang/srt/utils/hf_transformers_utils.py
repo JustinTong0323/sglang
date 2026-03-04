@@ -617,6 +617,7 @@ def get_tokenizer(
 
     is_gguf = check_gguf_file(tokenizer_name)
     if is_gguf:
+        _ensure_gguf_version()
         kwargs["gguf_file"] = tokenizer_name
         tokenizer_name = Path(tokenizer_name).parent
 
