@@ -4,9 +4,9 @@ from typing import Optional, Tuple
 import torch
 
 from sglang.srt.distributed import (
-    get_tp_group,
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
+    get_tp_group,
 )
 from sglang.srt.utils import is_flashinfer_available
 from sglang.srt.utils.custom_op import register_custom_op
