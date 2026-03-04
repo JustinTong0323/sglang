@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 import torch
 
 from sglang.srt.distributed import (
+    get_tp_group,
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
 )
@@ -14,18 +15,44 @@ logger = logging.getLogger(__name__)
 
 _flashinfer_comm = None
 _workspace_manager = None
+_use_legacy_api = False
 
 if is_flashinfer_available():
     try:
         import flashinfer.comm as comm
 
-        if hasattr(comm, "allreduce_fusion") and hasattr(
+        _has_unified_api = hasattr(comm, "allreduce_fusion") and hasattr(
             comm, "create_allreduce_fusion_workspace"
-        ):
+        )
+        _has_legacy_api = hasattr(comm, "trtllm_allreduce_fusion") and hasattr(
+            comm, "trtllm_create_ipc_workspace_for_all_reduce_fusion"
+        )
+
+        # Detect Blackwell (SM >= 10.0) where the unified allreduce_fusion API
+        # produces incorrect results. Fall back to legacy trtllm_* API.
+        # See: https://github.com/sgl-project/sglang/issues/19884
+        _is_gb300 = False
+        if torch.cuda.is_available():
+            major, minor = torch.cuda.get_device_capability()
+            # GB300 is SM 10.3; B200 (SM 10.0) works fine with unified API
+            _is_gb300 = (major, minor) == (10, 3)
+
+        if _is_gb300 and _has_legacy_api:
+            logger.info(
+                "GB300 (SM 10.3) detected, using legacy trtllm_* "
+                "allreduce fusion API to avoid known issue with unified API"
+            )
             _flashinfer_comm = comm
+            _use_legacy_api = True
+        elif _has_unified_api:
+            _flashinfer_comm = comm
+            _use_legacy_api = False
+        elif _has_legacy_api:
+            _flashinfer_comm = comm
+            _use_legacy_api = True
         else:
             logger.warning(
-                "flashinfer.comm unified allreduce_fusion API is not available, "
+                "flashinfer.comm allreduce_fusion API is not available, "
                 "falling back to standard implementation"
             )
     except ImportError:
@@ -37,13 +64,27 @@ if is_flashinfer_available():
 
 class FlashInferWorkspaceManager:
     def __init__(self):
+        # Unified API state
         self.workspace = None
+        # Legacy API state
+        self.workspace_tensor = None
+        self.ipc_handles = None
+        # Common state
         self.world_size = None
         self.rank = None
         self.max_token_num = None
         self.hidden_dim = None
         self.dtype = None
         self.initialized = False
+        self.process_group = None
+
+    def _reset_metadata(self):
+        self.world_size = None
+        self.rank = None
+        self.max_token_num = None
+        self.hidden_dim = None
+        self.dtype = None
+        self.process_group = None
 
     def initialize(
         self,
@@ -62,21 +103,46 @@ class FlashInferWorkspaceManager:
             return
 
         self.cleanup()
-        try:
-            self.workspace = _flashinfer_comm.create_allreduce_fusion_workspace(
-                backend="trtllm",
-                world_size=world_size,
-                rank=rank,
-                max_token_num=max_token_num,
-                hidden_dim=hidden_dim,
-                dtype=dtype,
-                force_oneshot_support=bool(use_oneshot),
-            )
-        except Exception as e:
-            logger.warning(f"Failed to initialize FlashInfer workspace: {e}")
-            self.workspace = None
-            self.initialized = False
-            return
+
+        if _use_legacy_api:
+            try:
+                use_fp32_lamport = dtype == torch.float32
+                tp_group = get_tp_group().device_group
+                self.ipc_handles, self.workspace_tensor = (
+                    _flashinfer_comm.trtllm_create_ipc_workspace_for_all_reduce_fusion(
+                        rank,
+                        world_size,
+                        max_token_num,
+                        hidden_dim,
+                        group=tp_group,
+                        use_fp32_lamport=use_fp32_lamport,
+                    )
+                )
+                self.process_group = tp_group
+            except Exception as e:
+                logger.warning(f"Failed to initialize FlashInfer legacy workspace: {e}")
+                self.workspace_tensor = None
+                self.ipc_handles = None
+                self.initialized = False
+                self._reset_metadata()
+                return
+        else:
+            try:
+                self.workspace = _flashinfer_comm.create_allreduce_fusion_workspace(
+                    backend="trtllm",
+                    world_size=world_size,
+                    rank=rank,
+                    max_token_num=max_token_num,
+                    hidden_dim=hidden_dim,
+                    dtype=dtype,
+                    force_oneshot_support=bool(use_oneshot),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to initialize FlashInfer workspace: {e}")
+                self.workspace = None
+                self.initialized = False
+                self._reset_metadata()
+                return
 
         self.world_size = world_size
         self.rank = rank
@@ -85,11 +151,17 @@ class FlashInferWorkspaceManager:
         self.dtype = dtype
         self.initialized = True
 
-        backend = getattr(self.workspace, "backend", "unknown")
-        logger.info(
-            f"FlashInfer workspace initialized for rank {rank}, "
-            f"world_size {world_size}, backend {backend}"
-        )
+        if _use_legacy_api:
+            logger.info(
+                f"FlashInfer legacy workspace initialized for rank {rank}, "
+                f"world_size {world_size}"
+            )
+        else:
+            backend = getattr(self.workspace, "backend", "unknown")
+            logger.info(
+                f"FlashInfer workspace initialized for rank {rank}, "
+                f"world_size {world_size}, backend {backend}"
+            )
 
     def is_buffer_size_sufficient(
         self,
@@ -98,7 +170,19 @@ class FlashInferWorkspaceManager:
         dtype: torch.dtype,
         use_oneshot: Optional[bool] = None,
     ) -> bool:
-        if not self.initialized or self.workspace is None:
+        if not self.initialized:
+            return False
+
+        if _use_legacy_api:
+            # Legacy API does not support dynamic buffer size checks;
+            # re-initialize if max_token_num or hidden_dim changed.
+            return (
+                self.max_token_num is not None
+                and token_num <= self.max_token_num
+                and self.hidden_dim == hidden_dim
+            )
+
+        if self.workspace is None:
             return False
         try:
             return self.workspace.is_buffer_size_sufficient(
@@ -114,19 +198,31 @@ class FlashInferWorkspaceManager:
 
     def cleanup(self):
         """Clean up workspace"""
-        if self.workspace is not None:
-            try:
-                self.workspace.destroy()
-            except Exception as e:
-                logger.warning(f"Failed to cleanup FlashInfer workspace: {e}")
-            finally:
-                self.workspace = None
-                self.initialized = False
-                self.world_size = None
-                self.rank = None
-                self.max_token_num = None
-                self.hidden_dim = None
-                self.dtype = None
+        if _use_legacy_api:
+            if self.initialized and self.ipc_handles is not None:
+                try:
+                    _flashinfer_comm.trtllm_destroy_ipc_workspace_for_all_reduce(
+                        self.ipc_handles, group=self.process_group
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to cleanup FlashInfer legacy workspace: {e}"
+                    )
+                finally:
+                    self.workspace_tensor = None
+                    self.ipc_handles = None
+                    self.initialized = False
+                    self._reset_metadata()
+        else:
+            if self.workspace is not None:
+                try:
+                    self.workspace.destroy()
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup FlashInfer workspace: {e}")
+                finally:
+                    self.workspace = None
+                    self.initialized = False
+                    self._reset_metadata()
 
 
 _workspace_manager = FlashInferWorkspaceManager()
@@ -251,19 +347,45 @@ def flashinfer_allreduce_residual_rmsnorm(
     residual_out = torch.empty_like(residual)
     norm_out = torch.empty_like(input_tensor)
 
-    _flashinfer_comm.allreduce_fusion(
-        input=input_tensor,
-        workspace=_workspace_manager.workspace,
-        pattern=_flashinfer_comm.AllReduceFusionPattern.kARResidualRMSNorm,
-        launch_with_pdl=True,
-        residual_out=residual_out,
-        norm_out=norm_out,
-        residual_in=residual,
-        rms_gamma=weight,
-        rms_eps=eps,
-        use_oneshot=use_oneshot,
-        fp32_acc=fp32_acc,
-    )
+    if _use_legacy_api:
+        token_num, hidden_dim = input_tensor.shape
+        _flashinfer_comm.trtllm_allreduce_fusion(
+            allreduce_in=input_tensor,
+            world_size=world_size,
+            world_rank=get_tensor_model_parallel_rank(),
+            token_num=token_num,
+            hidden_dim=hidden_dim,
+            workspace_ptrs=_workspace_manager.workspace_tensor,
+            launch_with_pdl=True,
+            use_oneshot=use_oneshot,
+            trigger_completion_at_end=trigger_completion_at_end,
+            fp32_acc=fp32_acc,
+            pattern_code=(_flashinfer_comm.AllReduceFusionPattern.kARResidualRMSNorm),
+            allreduce_out=None,
+            residual_in=residual,
+            residual_out=residual_out,
+            norm_out=norm_out,
+            quant_out=None,
+            scale_out=None,
+            rms_gamma=weight,
+            rms_eps=eps,
+            scale_factor=None,
+            layout_code=None,
+        )
+    else:
+        _flashinfer_comm.allreduce_fusion(
+            input=input_tensor,
+            workspace=_workspace_manager.workspace,
+            pattern=_flashinfer_comm.AllReduceFusionPattern.kARResidualRMSNorm,
+            launch_with_pdl=True,
+            residual_out=residual_out,
+            norm_out=norm_out,
+            residual_in=residual,
+            rms_gamma=weight,
+            rms_eps=eps,
+            use_oneshot=use_oneshot,
+            fp32_acc=fp32_acc,
+        )
 
     return norm_out, residual_out
 
