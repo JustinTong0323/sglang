@@ -347,7 +347,6 @@ def alloc_for_extend(
     prefix_lens_device = prefix_lens_cpu.to(batch.device, non_blocking=True)
     extend_lens_device = extend_lens_cpu.to(batch.device, non_blocking=True)
 
-    # print("req_pool_idx for each request:", [i for i, r in enumerate(batch.reqs) if r.req_pool_idx is not None])
     # Allocate req slots
     req_pool_indices = alloc_req_slots(
         batch.req_to_token_pool, batch.reqs, batch.tree_cache

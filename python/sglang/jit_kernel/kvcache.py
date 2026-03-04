@@ -65,7 +65,6 @@ def store_cache(
         v_cache (torch.Tensor): Value cache tensor of shape (num_pages, H * D).
         indices (torch.Tensor): Indices tensor of shape (batch_size,).
     """
-    # print(f"store_cache called with k.shape={k.shape}, v.shape={v.shape}, k_cache.shape={k_cache.shape}, v_cache.shape={v_cache.shape}, indices.shape={indices.shape}, row_bytes={row_bytes}, num_split={num_split}")
     row_bytes = row_bytes or k.shape[-1] * k.element_size()
     module = _jit_kvcache_module(row_bytes)
     if num_split <= 0:

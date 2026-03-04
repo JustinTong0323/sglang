@@ -300,7 +300,6 @@ class Gemma4Attention(nn.Module):
                 self.kv_shared_layer_index = len(prev_layers) - 1 - prev_layers[::-1].index(
                     current_layer_type
                 )
-        # print(f"layer {layer_id} rope_parameters: ", rope_parameters, self.head_dim)
         self.rotary_emb = get_rope(
             self.head_dim,
             rotary_dim=self.head_dim,
@@ -357,7 +356,6 @@ class Gemma4Attention(nn.Module):
         # Apply rotary embedding
         if k is not None:
             k = k.flatten(-2, -1)
-            # print(f"positions: {positions.shape}, q.shape: {q.shape}, k.shape: {k.shape}, self.head_dim: {self.head_dim}") 
             q, k = self.rotary_emb(positions, q, k)
             k = k.unflatten(-1, (self.num_kv_heads, self.head_dim))
         else:
@@ -368,10 +366,8 @@ class Gemma4Attention(nn.Module):
             q, _ = self.rotary_emb(positions, q, dummy_k)
 
         q = q.unflatten(-1, (self.num_heads, self.head_dim))
-        # print(f"attn positions: {positions.shape}, q.shape: {q.shape}, k.shape: {k.shape}, v.shape: {v.shape}, self.head_dim: {self.head_dim}")
         attn_output = self.attn(q, k, v, forward_batch=forward_batch,
             save_kv_cache=not self.is_kv_shared_layer)
-        # print(attn_output.shape)
         if attn_output.dim() == 3:
             attn_output = attn_output.flatten(-2, -1)
         output, _ = self.o_proj(attn_output)
@@ -411,13 +407,6 @@ class Gemma4DecoderLayer(nn.Module):
             quant_config=quant_config,
             prefix=add_prefix("self_attn", prefix),
         )
-
-        # Get intermediate_size for this layer
-        # Gemma4 may have variable intermediate_size per layer (e.g., 6144 for layers 0-14, 12288 for layers 15+)
-        # if hasattr(config, 'intermediate_sizes') and config.intermediate_sizes is not None:
-        #     layer_intermediate_size = config.intermediate_sizes[self.layer_id]
-        # else:
-        #     layer_intermediate_size = config.intermediate_size
         
         first_kv_shared_layer_idx = config.num_hidden_layers - getattr(
             config, "num_kv_shared_layers", 0
@@ -874,8 +863,6 @@ class Gemma4ForCausalLM(PreTrainedModel):
                 # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:
                     continue
-                # if name not in params_dict:
-                #     continue
                 param = params_dict[name]
                 weight_loader = param.weight_loader
                 weight_loader(param, loaded_weight, shard_id)

@@ -100,11 +100,6 @@ class Gemma3MLP(nn.Module):
         self.prefix = prefix
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # if "layers.0.mlp" in self.prefix:
-        #     print("---start", self.prefix)
-        #     for p in self.gate_up_proj.parameters():
-        #         print(p)
-        #     print("---end")
         gate_up, _ = self.gate_up_proj(x)
         x = self.act_fn(gate_up)
         x, _ = self.down_proj(x)

@@ -121,6 +121,7 @@ class RMSNorm(MultiPlatformOp):
         residual: Optional[torch.Tensor] = None,
         post_residual_addition: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        # # TODO: fix cuda: having some shape issue with sgl kernel
         return self.forward_native(x, residual, post_residual_addition)
         if x.numel() == 0:
             return x

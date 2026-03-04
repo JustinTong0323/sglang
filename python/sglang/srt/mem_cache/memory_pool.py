@@ -98,15 +98,8 @@ def _set_kv_buffer_impl(
     alt_stream: Optional[torch.cuda.Stream] = None,
     same_kv_dim: bool = True,
 ) -> None:
-    # print("dtype of k_cache: ", k_cache.dtype)
-    # print("dtype of v_cache: ", v_cache.dtype)
-    # print("dtype of k: ", k.dtype)
-    # print("dtype of v: ", v.dtype)
-    # print("dtype store_dtype: ", store_dtype)
-    # print("row_dim: ", row_dim, "store_dtype.itemsize: ", store_dtype.itemsize)
-    # print("shape of k: ", k.shape, "shape of v: ", v.shape, "shape of k_cache: ", k_cache.shape, "shape of v_cache: ", v_cache.shape)
     row_bytes = row_dim * store_dtype.itemsize
-    if (_is_cuda or _is_hip) and same_kv_dim and can_use_store_cache(row_bytes):
+    if _is_cuda and same_kv_dim and can_use_store_cache(row_bytes):
         return store_cache(
             k.view(-1, row_dim),
             v.view(-1, row_dim),
@@ -126,10 +119,6 @@ def _set_kv_buffer_impl(
             v_cache[indices] = v
         current_stream.wait_stream(alt_stream)
     else:  # fallback to naive implementation
-        # if k_cache.shape[-1] != k.shape[-1]:
-        #     k_cache[indices, ..., :k.shape[-1]] = k
-        #     v_cache[indices, ..., :v.shape[-1]] = v
-        # else:
         k_cache[indices] = k
         v_cache[indices] = v
 
