@@ -98,6 +98,13 @@ def _set_kv_buffer_impl(
     alt_stream: Optional[torch.cuda.Stream] = None,
     same_kv_dim: bool = True,
 ) -> None:
+    # print("dtype of k_cache: ", k_cache.dtype)
+    # print("dtype of v_cache: ", v_cache.dtype)
+    # print("dtype of k: ", k.dtype)
+    # print("dtype of v: ", v.dtype)
+    # print("dtype store_dtype: ", store_dtype)
+    # print("row_dim: ", row_dim, "store_dtype.itemsize: ", store_dtype.itemsize)
+    # print("shape of k: ", k.shape, "shape of v: ", v.shape, "shape of k_cache: ", k_cache.shape, "shape of v_cache: ", v_cache.shape)
     row_bytes = row_dim * store_dtype.itemsize
     if (_is_cuda or _is_hip) and same_kv_dim and can_use_store_cache(row_bytes):
         return store_cache(
@@ -119,6 +126,10 @@ def _set_kv_buffer_impl(
             v_cache[indices] = v
         current_stream.wait_stream(alt_stream)
     else:  # fallback to naive implementation
+        # if k_cache.shape[-1] != k.shape[-1]:
+        #     k_cache[indices, ..., :k.shape[-1]] = k
+        #     v_cache[indices, ..., :v.shape[-1]] = v
+        # else:
         k_cache[indices] = k
         v_cache[indices] = v
 
@@ -754,6 +765,7 @@ class MHATokenToKVPool(KVCache):
         )
         self.head_num = swa_head_num if swa_head_num is not None else head_num
         self.head_dim = swa_head_dim if swa_head_dim is not None else head_dim
+        print("head_num: ", self.head_num, "head_dim: ", self.head_dim, "swa_head_num: ", swa_head_num, "swa_head_dim: ", swa_head_dim, "head_num: ", head_num, "head_dim: ", head_dim)
         self.v_head_dim = (
             swa_v_head_dim
             if swa_v_head_dim is not None
@@ -832,8 +844,10 @@ class MHATokenToKVPool(KVCache):
                 if self.enable_custom_mem_pool
                 else nullcontext()
             ):
+                print(f"Allocating KV cache buffers with size {self.size}, page_size {self.page_size}, head_num {self.head_num}, head_dim {self.head_dim}, v_head_dim {self.v_head_dim}, dtype {self.store_dtype}, device {self.device}")
                 # [size, head_num, head_dim] for each layer
                 # The padded slot 0 is used for writing dummy outputs from padded tokens.
+                # adjust for global
                 self.k_buffer = [
                     torch.zeros(
                         (self.size + self.page_size, self.head_num, self.head_dim),
@@ -977,13 +991,14 @@ class MHATokenToKVPool(KVCache):
 
     def set_kv_buffer(
         self,
-        layer: RadixAttention,
+        layer: Optional[RadixAttention],
         loc: torch.Tensor,
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
         k_scale: Optional[float] = None,
         v_scale: Optional[float] = None,
         layer_id_override: Optional[int] = None,
+        row_dim: Optional[int] = None,
     ):
         if layer_id_override is not None:
             layer_id = layer_id_override

@@ -121,6 +121,7 @@ class RMSNorm(MultiPlatformOp):
         residual: Optional[torch.Tensor] = None,
         post_residual_addition: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        return self.forward_native(x, residual, post_residual_addition)
         if x.numel() == 0:
             return x
         if self.variance_size_override is not None:
@@ -476,7 +477,7 @@ class GemmaRMSNorm(MultiPlatformOp):
         residual: Optional[torch.Tensor] = None,
         post_residual_addition: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        return self._forward_impl(x, residual, post_residual_addition)
+        return self.forward_native(x, residual, post_residual_addition)
 
     def forward_cpu(
         self,
@@ -554,3 +555,65 @@ class Gemma3RMSNorm(MultiPlatformOp):
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.eps}"
+
+
+class Gemma4RMSNorm(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        eps: float = 1e-6,
+        scale_shift: float = 1.0,
+        with_scale: bool = True,
+    ):
+        super().__init__()
+        self.with_scale = with_scale
+
+        if self.with_scale:
+            self.weight = nn.Parameter(torch.zeros(dim))
+        else:
+            self.register_buffer("weight", torch.tensor(1.0), persistent=False)
+
+        self.eps = eps
+        self.scale_shift = scale_shift
+
+    def __repr__(self):
+        dim = self.weight.shape[-1] if self.weight.shape else None
+        return (
+            f"{self.__class__.__name__}(dim={dim}, eps={self.eps}, "
+            f"with_scale={self.with_scale}, scale_shift={self.scale_shift})"
+        )
+
+    def _norm(self, x):
+        mean_squared = x.pow(2).mean(-1, keepdim=True) + self.eps
+        # Use torch.pow() (over torch.sqrt() or torch.rsqrt()) to addess compiler differences between Torch and JAX
+        return x * torch.pow(mean_squared, -0.5)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        normed_output = self._norm(x.float())
+        if self.with_scale:
+            normed_output = normed_output * (self.weight.float() + self.scale_shift)
+        return normed_output.type_as(x)
+
+
+
+class RMSNormWithoutScale(MultiPlatformOp):
+    def __init__(self, hidden_size: int, eps=1e-6):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.eps = eps
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward_native(self, x):
+        orig_dtype = x.dtype
+        x = x.float()
+        variance = x.pow(2).mean(dim=-1, keepdim=True)
+        x = x * torch.rsqrt(variance + self.eps)
+        return x.to(orig_dtype)
+
+    def forward_cuda(self, x):
+        return self.forward_native(x)
+
+    def extra_repr(self):
+        return f"{self.hidden_size}, eps={self.eps}"

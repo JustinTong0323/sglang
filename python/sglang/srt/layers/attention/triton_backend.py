@@ -819,26 +819,32 @@ class TritonAttnBackend(AttentionBackend):
         else:
             o = torch.empty_like(q)
 
-        # Save KV cache first (must do this before unified kernel)
-        if save_kv_cache:
-            if (
-                self.use_mla or layer.k_scale is None
-            ):  # Triton MLA currently doesn't support quantized kv cache
-                forward_batch.token_to_kv_pool.set_kv_buffer(
-                    layer,
-                    forward_batch.out_cache_loc,
-                    k,
-                    v,
-                )
-            else:
-                forward_batch.token_to_kv_pool.set_kv_buffer(
-                    layer,
-                    forward_batch.out_cache_loc,
-                    k.clone(),  # cloned to protect k,v from in-place mutation in set_kv_buffer
-                    v.clone(),
-                    layer.k_scale,
-                    layer.v_scale,
-                )
+        if k is None and v is None:
+            k, v = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
+            # print(layer.layer_id, k.cpu(), v.cpu())
+        elif k is None or v is None:
+            raise ValueError("Both k and v should be None or not None")
+        else:
+            # Save KV cache first (must do this before unified kernel)
+            if save_kv_cache:
+                if (
+                    self.use_mla or layer.k_scale is None
+                ):  # Triton MLA currently doesn't support quantized kv cache
+                        forward_batch.token_to_kv_pool.set_kv_buffer(
+                            layer,
+                        forward_batch.out_cache_loc,
+                        k,
+                        v,
+                    )
+                else:
+                    forward_batch.token_to_kv_pool.set_kv_buffer(
+                        layer,
+                        forward_batch.out_cache_loc,
+                        k.clone(),  # cloned to protect k,v from in-place mutation in set_kv_buffer
+                        v.clone(),
+                        layer.k_scale,
+                        layer.v_scale,
+                        )
 
         logits_soft_cap = logit_capping_mod(layer.logit_capping_method, layer.logit_cap)
 

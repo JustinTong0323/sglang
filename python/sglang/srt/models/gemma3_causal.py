@@ -92,13 +92,19 @@ class Gemma3MLP(nn.Module):
         )
         if hidden_activation != "gelu_pytorch_tanh":
             raise ValueError(
-                "Gemma3 uses `gelu_pytorch_tanh` as the hidden activation "
+                f"{self.__class__.__name__} uses `gelu_pytorch_tanh` as the hidden activation "
                 "function. Please set `hidden_activation` to "
                 "`gelu_pytorch_tanh`."
             )
         self.act_fn = GeluAndMul()
+        self.prefix = prefix
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # if "layers.0.mlp" in self.prefix:
+        #     print("---start", self.prefix)
+        #     for p in self.gate_up_proj.parameters():
+        #         print(p)
+        #     print("---end")
         gate_up, _ = self.gate_up_proj(x)
         x = self.act_fn(gate_up)
         x, _ = self.down_proj(x)

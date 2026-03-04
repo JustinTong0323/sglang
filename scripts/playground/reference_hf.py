@@ -124,8 +124,8 @@ def normal_text(args):
 
     prompts = [
         "The capital of France is",
-        "The capital of the United Kindom is",
-        "Today is a sunny day and I like",
+        # "The capital of the United Kindom is",
+        # "Today is a sunny day and I like",
     ]
     max_new_tokens = args.max_new_tokens
 
@@ -164,10 +164,8 @@ def synthetic_tokens(args):
     for p in prompts:
         input_ids = p
         for i in range(output_len + 1):
-            prefill_logits = m.forward(torch.tensor([input_ids], device="cuda")).logits[
-                0
-            ][-1]
-
+            output = m.forward(torch.tensor([input_ids], device="cuda"), output_hidden_states=True).logits[0][-1]
+            prefill_logits = output
             if i == 0:
                 print("prefill logits", prefill_logits)
             else:

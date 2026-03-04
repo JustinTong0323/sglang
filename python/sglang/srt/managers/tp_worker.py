@@ -474,6 +474,7 @@ class TpModelWorker(BaseTpWorker):
                 pp_proxy_tensors=pp_proxy_tensors,
                 skip_attn_backend_init=skip_attn_backend_init,
             )
+            # print(out)
             logits_output, can_run_cuda_graph = out.logits_output, out.can_run_graph
             batch_result = GenerationBatchResult(
                 logits_output=logits_output,
