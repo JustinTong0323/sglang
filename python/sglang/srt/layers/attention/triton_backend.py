@@ -821,6 +821,10 @@ class TritonAttnBackend(AttentionBackend):
 
         if k is None and v is None:
             k, v = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
+            # FIXME: hacky way to make kv cache aligned
+            # why???
+            k = k[1:q.shape[0]+1]
+            v = v[1:q.shape[0]+1]
             # print(layer.layer_id, k.cpu(), v.cpu())
         elif k is None or v is None:
             raise ValueError("Both k and v should be None or not None")
@@ -845,6 +849,7 @@ class TritonAttnBackend(AttentionBackend):
                         layer.k_scale,
                         layer.v_scale,
                         )
+
 
         logits_soft_cap = logit_capping_mod(layer.logit_capping_method, layer.logit_cap)
 

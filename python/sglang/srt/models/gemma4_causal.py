@@ -832,9 +832,8 @@ class Gemma4ForCausalLM(PreTrainedModel):
         hidden_states = self.model(
             input_ids, positions, forward_batch, input_embeds, per_layer_inputs, **kwargs
         )
-
         return self.logits_processor(
-            input_ids, hidden_states, self.model.embed_tokens, forward_batch
+            input_ids, hidden_states, self.lm_head, forward_batch
         )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
