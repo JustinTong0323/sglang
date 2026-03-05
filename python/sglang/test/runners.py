@@ -118,6 +118,16 @@ def _get_sentence_transformer_embedding_model(
         from sentence_transformers import models
 
         word_embedding_model = models.Transformer(model_path).to(dtype=torch_dtype)
+        # In transformers v5, composite configs (e.g. Qwen2VLConfig) may not
+        # expose hidden_size at the top level.  Patch it from the text sub-config
+        # so sentence_transformers' get_word_embedding_dimension() works.
+        _cfg = word_embedding_model.auto_model.config
+        if not hasattr(_cfg, "hidden_size"):
+            for _sub_attr in ("text_config", "language_config", "llm_config"):
+                _sub = getattr(_cfg, _sub_attr, None)
+                if _sub and hasattr(_sub, "hidden_size"):
+                    _cfg.hidden_size = _sub.hidden_size
+                    break
         pooling_model = models.Pooling(
             word_embedding_model.get_word_embedding_dimension(),
             pooling_mode="lasttoken",

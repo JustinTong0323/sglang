@@ -35,6 +35,7 @@ if not hasattr(_hf_activations, "PytorchGELUTanh"):
 from sglang import Engine
 from sglang.srt.entrypoints.openai.protocol import ChatCompletionRequest
 from sglang.srt.parser.conversation import generate_chat_conv
+from sglang.srt.utils.hf_transformers_utils import _fix_added_tokens_encoding
 
 register_cuda_ci(est_time=447, suite="stage-b-test-large-1-gpu")
 
@@ -61,6 +62,7 @@ class VLMInputTestBase:
         cls.processor = AutoProcessor.from_pretrained(
             cls.model_path, trust_remote_code=True, use_fast=True
         )
+        _fix_added_tokens_encoding(cls.processor.tokenizer)
         cls._init_visual()
 
     @classmethod
@@ -257,7 +259,19 @@ class TestKimiVLImageUnderstandsImage(
 
     @classmethod
     def _init_visual(cls):
-        model = AutoModel.from_pretrained(cls.model_path, trust_remote_code=True)
+        from transformers import AutoConfig
+
+        from sglang.srt.utils.hf_transformers_utils import (
+            normalize_rope_scaling_compat,
+        )
+
+        # In transformers v5, rope_scaling may only have "rope_type" (no "type"),
+        # which breaks remote model code that reads rope_scaling["type"].
+        config = AutoConfig.from_pretrained(cls.model_path, trust_remote_code=True)
+        normalize_rope_scaling_compat(config)
+        model = AutoModel.from_pretrained(
+            cls.model_path, config=config, trust_remote_code=True
+        )
         cls.vision_tower = model.vision_tower.eval().to(cls.device)
         cls.mm_projector = model.multi_modal_projector.eval().to(cls.device)
 
@@ -558,6 +572,7 @@ class TestMiniCPMVUnderstandsImage(VLMInputTestBase, unittest.IsolatedAsyncioTes
         cls.processor = AutoProcessor.from_pretrained(
             cls.model_path, trust_remote_code=True
         )
+        _fix_added_tokens_encoding(cls.processor.tokenizer)
         cls._init_visual()
 
     @classmethod

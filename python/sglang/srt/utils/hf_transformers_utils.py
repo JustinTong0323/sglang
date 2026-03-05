@@ -242,6 +242,9 @@ def get_hf_text_config(config: PretrainedConfig):
     if hasattr(config, "llm_config"):
         text_config = config.llm_config
 
+    # Ensure rope_scaling dicts have "type" for remote-code compat (v5).
+    normalize_rope_scaling_compat(config)
+
     if text_config is not None:
         return _patch_text_config(config, text_config)
     return config
@@ -398,6 +401,40 @@ def _ensure_is_torch_fx_available_compat() -> None:
 
 
 _ensure_is_torch_fx_available_compat()
+
+
+def normalize_rope_scaling_compat(config: "PretrainedConfig") -> None:
+    """Ensure rope_scaling dicts have ``"type"`` alongside ``"rope_type"``.
+
+    Transformers v5 standardises rope_scaling to use ``"rope_type"`` and may
+    omit the legacy ``"type"`` key.  Remote-code models (e.g. Kimi-VL) still
+    read ``rope_scaling["type"]``, causing a ``KeyError``.  This helper adds
+    ``"type"`` from ``"rope_type"`` whenever it is missing, recursively across
+    the config and all its sub-configs.
+    """
+
+    def _patch(cfg):
+        rs = getattr(cfg, "rope_scaling", None)
+        if isinstance(rs, dict) and "rope_type" in rs and "type" not in rs:
+            rs["type"] = rs["rope_type"]
+        # Also check rope_parameters (v5 alias)
+        rp = getattr(cfg, "rope_parameters", None)
+        if isinstance(rp, dict) and rp is not rs:
+            if "rope_type" in rp and "type" not in rp:
+                rp["type"] = rp["rope_type"]
+        # Recurse into sub-configs
+        for attr in (
+            "text_config",
+            "llm_config",
+            "language_config",
+            "vision_config",
+            "thinker_config",
+        ):
+            sub = getattr(cfg, attr, None)
+            if sub is not None and hasattr(sub, "rope_scaling"):
+                _patch(sub)
+
+    _patch(config)
 
 
 def _ensure_llama_flash_attention2_compat() -> None:
