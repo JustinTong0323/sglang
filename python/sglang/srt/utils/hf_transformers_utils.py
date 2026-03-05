@@ -155,9 +155,16 @@ def _patch_text_config(parent_config: PretrainedConfig, text_config):
     (See https://github.com/huggingface/transformers/pull/41541)
     """
     # Some models store text_config as a plain dict rather than a
-    # PretrainedConfig object. Skip patching in that case.
+    # PretrainedConfig object.  Convert to PretrainedConfig so downstream
+    # code can use attribute access uniformly (e.g. config.hidden_size).
     if isinstance(text_config, dict):
-        return text_config
+        text_config = PretrainedConfig(**text_config)
+        # Propagate any parent-level torch_dtype so weight loading uses the
+        # correct precision.
+        if not hasattr(text_config, "torch_dtype") and hasattr(
+            parent_config, "torch_dtype"
+        ):
+            text_config.torch_dtype = parent_config.torch_dtype
 
     _ATTRS_TO_PROPAGATE = [
         "pad_token_id",
