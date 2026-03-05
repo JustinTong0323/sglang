@@ -2,6 +2,7 @@ import asyncio
 import math
 from typing import List, Union
 
+from transformers import PreTrainedTokenizerBase
 from transformers.models.pixtral.image_processing_pixtral import (
     _num_image_tokens as _get_pixtral_hf_num_image_tokens,
 )
@@ -10,8 +11,6 @@ from sglang.srt.models.pixtral import (
     PixtralForConditionalGeneration,
     PixtralVisionModel,
 )
-from transformers import PreTrainedTokenizerBase
-
 from sglang.srt.multimodal.processors.base_processor import (
     BaseMultimodalProcessor,
     MultimodalSpecialTokens,
@@ -69,9 +68,7 @@ class PixtralProcessor(BaseMultimodalProcessor):
             if isinstance(_processor, PreTrainedTokenizerBase)
             else _processor.tokenizer
         )
-        self.image_token = getattr(
-            _processor, "image_token", self.DEFAULT_IMAGE_TOKEN
-        )
+        self.image_token = getattr(_processor, "image_token", self.DEFAULT_IMAGE_TOKEN)
 
         self.mm_tokens = MultimodalSpecialTokens(
             image_token=self.image_token,
