@@ -381,6 +381,25 @@ def _ensure_clean_up_tokenization_compat() -> None:
 _ensure_clean_up_tokenization_compat()
 
 
+def _ensure_is_torch_fx_available_compat() -> None:
+    """Re-add ``is_torch_fx_available`` removed in transformers v5.
+
+    Remote-code models (e.g. MiniCPM-V) import ``is_torch_fx_available``
+    from ``transformers.utils.import_utils``.  The function was removed
+    in v5.  Patch it back so existing HuggingFace Hub model code keeps
+    working.  torch.fx is always available in PyTorch >= 2.0.
+    """
+    import transformers.utils.import_utils as _import_utils
+
+    if hasattr(_import_utils, "is_torch_fx_available"):
+        return
+
+    _import_utils.is_torch_fx_available = lambda: True
+
+
+_ensure_is_torch_fx_available_compat()
+
+
 def _ensure_llama_flash_attention2_compat() -> None:
     """Ensure LlamaFlashAttention2 symbol exists for remote code compatibility."""
     try:

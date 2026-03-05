@@ -562,9 +562,39 @@ class TestMiniCPMVUnderstandsImage(VLMInputTestBase, unittest.IsolatedAsyncioTes
 
     @classmethod
     def _init_visual(cls):
-        model = AutoModel.from_pretrained(
-            cls.model_path, trust_remote_code=True, torch_dtype=torch.bfloat16
-        )
+        try:
+            model = AutoModel.from_pretrained(
+                cls.model_path, trust_remote_code=True, torch_dtype=torch.bfloat16
+            )
+        except (AttributeError, RuntimeError) as e:
+            err = str(e)
+            if "all_tied_weights_keys" not in err and "meta" not in err:
+                raise
+            # Transformers v5: remote model code may lack all_tied_weights_keys
+            # or meta-tensor init may break .item() calls.  Fall back to
+            # from_config + manual weight loading.
+            import gc
+            import glob
+            import os
+
+            from huggingface_hub import snapshot_download
+            from safetensors.torch import load_file
+            from transformers import AutoConfig
+
+            config = AutoConfig.from_pretrained(cls.model_path, trust_remote_code=True)
+            with torch.device("cpu"):
+                model = AutoModel.from_config(
+                    config,
+                    trust_remote_code=True,
+                    torch_dtype=torch.bfloat16,
+                )
+            model_dir = snapshot_download(cls.model_path)
+            for f in sorted(glob.glob(os.path.join(model_dir, "*.safetensors"))):
+                shard = load_file(f)
+                model.load_state_dict(shard, strict=False)
+                del shard
+            gc.collect()
+
         cls.vpm_model = model.vpm.eval().to(cls.device)
         cls.resampler_model = model.resampler.eval().to(cls.device)
         del model
