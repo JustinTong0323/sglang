@@ -17,6 +17,31 @@ from sglang.srt.layers.moe.moe_runner.base import (
     MoeRunnerConfig,
     register_fused_func,
 )
+
+
+def _get_flashinfer_activation_type(activation: str, is_gated: bool) -> int:
+    """Map SGLang activation config to flashinfer ActivationType int values.
+
+    See flashinfer.fused_moe.core.ActivationType for the enum definition.
+    """
+    if is_gated:
+        if activation == "silu":
+            return 3  # Swiglu
+        elif activation == "gelu":
+            return 4  # Geglu
+        else:
+            raise ValueError(f"Unsupported gated activation: {activation}")
+    else:
+        if activation == "silu":
+            return 2  # Silu
+        elif activation == "gelu":
+            return 0  # Gelu
+        elif activation == "relu":
+            return 1  # Relu
+        else:
+            raise ValueError(f"Unsupported activation: {activation}")
+
+
 from sglang.srt.layers.quantization.fp8_kernel import (
     per_token_group_quant_fp8,
     scaled_fp8_quant,
@@ -328,6 +353,9 @@ def fused_experts_none_to_flashinfer_trtllm_fp8(
                 use_routing_scales_on_input=quant_info.use_routing_scales_on_input,
                 routing_method_type=routing_method_type,
                 tune_max_num_tokens=next_power_of_2(a_q.shape[0]),
+                activation_type=_get_flashinfer_activation_type(
+                    runner_config.activation, runner_config.is_gated
+                ),
             )
 
     return StandardCombineInput(hidden_states=output)
