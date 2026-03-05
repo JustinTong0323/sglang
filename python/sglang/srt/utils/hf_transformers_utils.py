@@ -198,6 +198,20 @@ def get_hf_text_config(config: PretrainedConfig):
 
     text_config = None
 
+    # Some models (e.g. DeepSeek-OCR) store sub-configs as plain dicts.
+    # Convert to PretrainedConfig early so hasattr() checks and asserts work.
+    for _attr in ("text_config", "llm_config", "language_config"):
+        _sub = getattr(config, _attr, None)
+        if isinstance(_sub, dict):
+            _converted = PretrainedConfig(**_sub)
+            # Propagate torch_dtype from parent so weight loading uses correct precision.
+            if (
+                getattr(_converted, "torch_dtype", None) is None
+                and getattr(config, "torch_dtype", None) is not None
+            ):
+                _converted.torch_dtype = config.torch_dtype
+            setattr(config, _attr, _converted)
+
     if hasattr(config, "text_config"):
         # The code operates under the assumption that text_config should have
         # `num_attention_heads` (among others). Assert here to fail early
