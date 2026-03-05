@@ -14,12 +14,12 @@
 """Utilities for Huggingface Transformers."""
 
 import contextlib
-from functools import lru_cache
 import json
 import logging
 import os
 import tempfile
 import warnings
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, Union
 
@@ -306,7 +306,10 @@ def get_config(
         client.pull_files(ignore_pattern=["*.pt", "*.safetensors", "*.bin"])
         model = client.get_local_dir()
 
-    if "mistral-large-3" in str(model).lower() or "mistral-small-4" in str(model).lower():
+    if (
+        "mistral-large-3" in str(model).lower()
+        or "mistral-small-4" in str(model).lower()
+    ):
         config = _load_mistral_large_3_for_causal_LM(
             model, trust_remote_code=trust_remote_code, revision=revision
         )
@@ -584,7 +587,10 @@ def get_processor(
 ):
     # pop 'revision' from kwargs if present.
     revision = kwargs.pop("revision", tokenizer_revision)
-    if "mistral-large-3" in str(tokenizer_name).lower() or "mistral-small-4" in str(tokenizer_name).lower():
+    if (
+        "mistral-large-3" in str(tokenizer_name).lower()
+        or "mistral-small-4" in str(tokenizer_name).lower()
+    ):
         config = _load_mistral_large_3_for_causal_LM(
             tokenizer_name,
             trust_remote_code=trust_remote_code,
@@ -658,6 +664,42 @@ def get_processor(
             )
         else:
             raise e
+    # If processor is a bare tokenizer (e.g. Mistral-Small-4 has no processor_config.json)
+    # and the model is a vision model (pixtral), wrap it in a proper PixtralProcessor
+    # so that image data is actually processed through the image processor.
+    if (
+        isinstance(processor, PreTrainedTokenizerBase)
+        and getattr(config, "model_type", None) == "pixtral"
+    ):
+        from transformers.models.pixtral.image_processing_pixtral import (
+            PixtralImageProcessor,
+        )
+        from transformers.models.pixtral.processing_pixtral import (
+            PixtralProcessor as HFPixtralProcessor,
+        )
+
+        vision_config = config.vision_config
+        if isinstance(vision_config, dict):
+            patch_size = vision_config.get("patch_size", 16)
+            image_size = vision_config.get("image_size", 1024)
+            spatial_merge_size = vision_config.get("spatial_merge_size", 1)
+        else:
+            patch_size = getattr(vision_config, "patch_size", 16)
+            image_size = getattr(vision_config, "image_size", 1024)
+            spatial_merge_size = getattr(vision_config, "spatial_merge_size", 1)
+
+        image_processor = PixtralImageProcessor(
+            do_resize=True,
+            size={"longest_edge": image_size},
+            patch_size={"height": patch_size, "width": patch_size},
+        )
+        processor = HFPixtralProcessor(
+            image_processor=image_processor,
+            tokenizer=processor,
+            patch_size=patch_size,
+            spatial_merge_size=spatial_merge_size,
+        )
+
     tokenizer = get_tokenizer_from_processor(processor)
 
     attach_additional_stop_token_ids(tokenizer)
