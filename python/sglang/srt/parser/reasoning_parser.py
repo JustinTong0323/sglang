@@ -361,6 +361,33 @@ class NanoV3Detector(BaseReasoningFormatDetector):
         )
 
 
+class MistralDetector(BaseReasoningFormatDetector):
+    """
+    Detector for Mistral models with reasoning (e.g., Mistral-Small-4-119B-2602).
+    Assumes reasoning format:
+      [THINK]reasoning content[/THINK]answer
+
+    Reasoning is optional — it only appears when reasoning_effort="high" is set.
+    When reasoning_effort="none", the model outputs directly without thinking tokens.
+    """
+
+    def __init__(
+        self,
+        stream_reasoning: bool = True,
+        force_reasoning: bool = False,
+        continue_final_message: bool = False,
+        previous_content: str = "",
+    ):
+        super().__init__(
+            "[THINK]",
+            "[/THINK]",
+            force_reasoning=force_reasoning,
+            stream_reasoning=stream_reasoning,
+            continue_final_message=continue_final_message,
+            previous_content=previous_content,
+        )
+
+
 class ReasoningParser:
     """
     Parser that handles both streaming and non-streaming scenarios for extracting
@@ -385,6 +412,7 @@ class ReasoningParser:
         "minimax-append-think": MiniMaxAppendThinkDetector,
         "step3": DeepSeekR1Detector,
         "step3p5": DeepSeekR1Detector,
+        "mistral": MistralDetector,
         "nano_v3": NanoV3Detector,
         "interns1": Qwen3Detector,
     }
