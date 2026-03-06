@@ -414,14 +414,12 @@ def normalize_rope_scaling_compat(config: "PretrainedConfig") -> None:
     """
 
     def _patch(cfg):
-        rs = getattr(cfg, "rope_scaling", None)
+        try:
+            rs = getattr(cfg, "rope_scaling", None)
+        except AttributeError:
+            rs = None
         if isinstance(rs, dict) and "rope_type" in rs and "type" not in rs:
             rs["type"] = rs["rope_type"]
-        # Also check rope_parameters (v5 alias)
-        rp = getattr(cfg, "rope_parameters", None)
-        if isinstance(rp, dict) and rp is not rs:
-            if "rope_type" in rp and "type" not in rp:
-                rp["type"] = rp["rope_type"]
         # Recurse into sub-configs
         for attr in (
             "text_config",
@@ -431,7 +429,7 @@ def normalize_rope_scaling_compat(config: "PretrainedConfig") -> None:
             "thinker_config",
         ):
             sub = getattr(cfg, attr, None)
-            if sub is not None and hasattr(sub, "rope_scaling"):
+            if sub is not None:
                 _patch(sub)
 
     _patch(config)
