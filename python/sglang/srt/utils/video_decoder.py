@@ -47,7 +47,17 @@ class VideoDecoderWrapper:
             kwargs = {"dimension_order": "NHWC"}
             if device == "cuda" and _try_cuda_backend():
                 kwargs["device"] = "cuda"
-            self._decoder = VideoDecoder(source, **kwargs)
+            try:
+                self._decoder = VideoDecoder(source, **kwargs)
+            except RuntimeError:
+                if "device" in kwargs:
+                    logger.warning(
+                        "CUDA video decoding failed, falling back to CPU."
+                    )
+                    kwargs.pop("device")
+                    self._decoder = VideoDecoder(source, **kwargs)
+                else:
+                    raise
         else:
             from decord import VideoReader, cpu
 
