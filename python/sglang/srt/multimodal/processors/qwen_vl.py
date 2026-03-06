@@ -171,24 +171,23 @@ async def preprocess_video(
 
     if _HAS_TORCHCODEC:
         total_frames, video_fps = len(vr), vr.metadata.average_fps
-        nframes = smart_nframes(
-            video_config, total_frames=total_frames, video_fps=video_fps
-        )
-        idx = np.linspace(0, total_frames - 1, num=nframes, dtype=np.int64)
-        idx = np.unique(idx)
-        frames_batch = vr.get_frames_at(idx.tolist())
-        video = frames_batch.data.pin_memory()
-        video = video.permute(0, 3, 1, 2)  # NHWC -> TCHW
     else:
         total_frames, video_fps = len(vr), vr.get_avg_fps()
-        nframes = smart_nframes(
-            video_config, total_frames=total_frames, video_fps=video_fps
-        )
-        idx = np.linspace(0, total_frames - 1, num=nframes, dtype=np.int64)
-        idx = np.unique(idx)
+
+    nframes = smart_nframes(
+        video_config, total_frames=total_frames, video_fps=video_fps
+    )
+    idx = np.linspace(0, total_frames - 1, num=nframes, dtype=np.int64)
+    idx = np.unique(idx)
+
+    if _HAS_TORCHCODEC:
+        frames_batch = vr.get_frames_at(idx.tolist())
+        video = frames_batch.data.pin_memory()
+    else:
         video_np = vr.get_batch(idx).asnumpy()
         video = torch.from_numpy(video_np).pin_memory()
-        video = video.permute(0, 3, 1, 2)  # NHWC -> TCHW
+
+    video = video.permute(0, 3, 1, 2)  # NHWC -> TCHW
 
     nframes, _, height, width = video.shape
     min_pixels = video_config.get("min_pixels", VIDEO_MIN_PIXELS)

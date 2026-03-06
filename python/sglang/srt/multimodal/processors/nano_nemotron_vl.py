@@ -111,10 +111,14 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
         if _HAS_TORCHCODEC and hasattr(video, "metadata"):
             frames_batch = video.get_frames_at(frames)
             video_array = frames_batch.data.numpy()  # NHWC uint8
-            frame_duration_ms = int(1000 / video.metadata.average_fps)
+            avg_fps = video.metadata.average_fps
         else:
             video_array = video.get_batch(frames).asnumpy()
-            frame_duration_ms = int(1000 / video.get_avg_fps())
+            avg_fps = video.get_avg_fps()
+        if avg_fps > 0:
+            frame_duration_ms = int(1000 / avg_fps)
+        else:
+            frame_duration_ms = 0
         timestamps = [i * frame_duration_ms / 1000.0 for i in frames]
         return video_array, timestamps
 
