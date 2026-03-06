@@ -679,14 +679,9 @@ def get_processor(
         )
 
         vision_config = config.vision_config
-        if isinstance(vision_config, dict):
-            patch_size = vision_config.get("patch_size", 16)
-            image_size = vision_config.get("image_size", 1024)
-            spatial_merge_size = vision_config.get("spatial_merge_size", 1)
-        else:
-            patch_size = getattr(vision_config, "patch_size", 16)
-            image_size = getattr(vision_config, "image_size", 1024)
-            spatial_merge_size = getattr(vision_config, "spatial_merge_size", 1)
+        patch_size = vision_config.patch_size
+        image_size = vision_config.image_size
+        spatial_merge_size = getattr(vision_config, "spatial_merge_size", 1)
 
         image_processor = PixtralImageProcessor(
             do_resize=True,
