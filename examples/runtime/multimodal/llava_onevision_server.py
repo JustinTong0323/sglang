@@ -15,11 +15,11 @@ import numpy as np
 import openai
 import pybase64
 import requests
-from decord import VideoReader, cpu
 from PIL import Image
+from torchcodec.decoders import VideoDecoder
 
 # pip install httpx==0.23.3
-# pip install decord
+# pip install torchcodec
 # pip install protobuf==3.20.0
 
 
@@ -200,13 +200,14 @@ def video_speed_test(client, video_path):
 
 def prepare_video_messages(video_path):
     max_frames_num = 32
-    vr = VideoReader(video_path, ctx=cpu(0))
-    total_frame_num = len(vr)
+    decoder = VideoDecoder(video_path, dimension_order="NHWC")
+    total_frame_num = len(decoder)
     uniform_sampled_frames = np.linspace(
         0, total_frame_num - 1, max_frames_num, dtype=int
     )
     frame_idx = uniform_sampled_frames.tolist()
-    frames = vr.get_batch(frame_idx).asnumpy()
+    frames_batch = decoder.get_frames_at(frame_idx)
+    frames = frames_batch.data.numpy()
 
     base64_frames = []
     for frame in frames:

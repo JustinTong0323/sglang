@@ -40,19 +40,16 @@ logger = logging.getLogger(__name__)
 class TestVisionChunkedPrefill(CustomTestCase):
 
     def prepare_video_messages(self, video_path, max_frames_num=8):
-        # We import decord here to avoid a strange Segmentation fault (core dumped) issue.
-        # The following import order will cause Segmentation fault.
-        # import decord
-        # from transformers import AutoTokenizer
-        from decord import VideoReader, cpu
+        from torchcodec.decoders import VideoDecoder
 
-        vr = VideoReader(video_path, ctx=cpu(0))
-        total_frame_num = len(vr)
+        decoder = VideoDecoder(video_path, dimension_order="NHWC")
+        total_frame_num = len(decoder)
         uniform_sampled_frames = np.linspace(
             0, total_frame_num - 1, max_frames_num, dtype=int
         )
         frame_idx = uniform_sampled_frames.tolist()
-        frames = vr.get_batch(frame_idx).asnumpy()
+        frames_batch = decoder.get_frames_at(frame_idx)
+        frames = frames_batch.data.numpy()
 
         base64_frames = []
         for frame in frames:

@@ -6,7 +6,7 @@ from typing import List
 
 import numpy as np
 import torch
-from decord import VideoReader, cpu, gpu
+from torchcodec.decoders import VideoDecoder
 from PIL import Image
 
 from sglang.srt.managers.schedule_batch import (
@@ -205,14 +205,8 @@ class InternVLProcessor(BaseMultimodalProcessor):
         return torch.stack(tiles).to(torch.bfloat16)
 
     @staticmethod
-    def _open_video_reader(path: str) -> VideoReader:
-        try:
-            return VideoReader(path, ctx=gpu(0), num_threads=1)
-        except (RuntimeError, OSError) as e:
-            logger.warning(
-                "[internvl] VideoReader gpu decode failed (%s), fallback CPU", e
-            )
-            return VideoReader(path, ctx=cpu(0), num_threads=1)
+    def _open_video_reader(path: str) -> VideoDecoder:
+        return VideoDecoder(path, dimension_order="NHWC")
 
     def _ensure_placeholders_before_assistant(
         self, prompt: str, placeholder: str, want: int
@@ -490,7 +484,7 @@ class InternVLProcessor(BaseMultimodalProcessor):
             for video in base_output.videos:
                 vr = (
                     video
-                    if isinstance(video, VideoReader)
+                    if isinstance(video, VideoDecoder)
                     else self._open_video_reader(str(video))
                 )
                 max_frame = len(vr) - 1
@@ -503,12 +497,9 @@ class InternVLProcessor(BaseMultimodalProcessor):
                 per_video_tiles = []
                 per_video_patch_cnt = []
                 for fi in frame_indices:
+                    # VideoDecoder returns NHWC tensor for single frame
                     frame = vr[int(fi)]
-                    img_np = (
-                        frame.asnumpy()
-                        if hasattr(frame, "asnumpy")
-                        else np.array(frame)
-                    )
+                    img_np = frame.numpy()
                     frame_t = (
                         torch.from_numpy(img_np).permute(2, 0, 1).cuda().float() / 255.0
                     )
