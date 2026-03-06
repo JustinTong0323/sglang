@@ -14,15 +14,22 @@ except ImportError:
     _BACKEND = "decord"
 
 
+_cuda_backend_enabled: bool | None = None
+
+
 def _try_cuda_backend() -> bool:
-    """Try to enable torchcodec CUDA backend. Returns True on success."""
+    """Try to enable torchcodec CUDA backend. Caches result after first call."""
+    global _cuda_backend_enabled
+    if _cuda_backend_enabled is not None:
+        return _cuda_backend_enabled
     try:
         from torchcodec.decoders import set_cuda_backend
 
         set_cuda_backend("beta")
-        return True
+        _cuda_backend_enabled = True
     except Exception:
-        return False
+        _cuda_backend_enabled = False
+    return _cuda_backend_enabled
 
 
 class VideoDecoderWrapper:
@@ -35,6 +42,7 @@ class VideoDecoderWrapper:
         """source: file path (str) or video bytes.
         device: "cpu" or "cuda". GPU decoding only supported with torchcodec.
         """
+        self._tmp_path = None
         if _BACKEND == "torchcodec":
             kwargs = {"dimension_order": "NHWC"}
             if device == "cuda" and _try_cuda_backend():
@@ -44,14 +52,17 @@ class VideoDecoderWrapper:
             from decord import VideoReader, cpu
 
             if isinstance(source, bytes):
+                import os
                 import tempfile
 
-                self._tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-                self._tmp.write(source)
-                self._tmp.close()
-                self._decoder = VideoReader(self._tmp.name, ctx=cpu(0))
+                fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
+                try:
+                    os.write(fd, source)
+                finally:
+                    os.close(fd)
+                self._tmp_path = tmp_path
+                self._decoder = VideoReader(tmp_path, ctx=cpu(0))
             else:
-                self._tmp = None
                 self._decoder = VideoReader(source, ctx=cpu(0))
 
     def __len__(self):
@@ -91,9 +102,20 @@ class VideoDecoderWrapper:
             arr = self._decoder.get_batch(indices).asnumpy()
             return torch.from_numpy(arr).pin_memory()
 
-    def __del__(self):
-        if _BACKEND == "decord" and hasattr(self, "_tmp") and self._tmp is not None:
+    def close(self):
+        """Explicitly clean up temporary files."""
+        if self._tmp_path is not None:
             import os
 
-            if os.path.exists(self._tmp.name):
-                os.unlink(self._tmp.name)
+            if os.path.exists(self._tmp_path):
+                os.unlink(self._tmp_path)
+            self._tmp_path = None
+
+    def __del__(self):
+        self.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
