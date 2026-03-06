@@ -17,7 +17,7 @@ classifiers = [
 dependencies = [
   "torch==2.9.0",
   "torchcodec==0.9.1 ; sys_platform != 'linux' or (sys_platform == 'linux' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l')", # torchcodec does not exist in those systems. torch==2.9.0 on XPU uses 0.9.1
-  "av ; sys_platform == 'linux' and (platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'armv7l')",
+  "av ; sys_platform == 'linux' and (platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'armv7l')", # av as fallback for Linux ARM where torchcodec wheels are not available
   "torchaudio==2.9.0",
   "torchvision",
   "sgl-kernel @ git+https://github.com/sgl-project/sgl-kernel-xpu.git",
