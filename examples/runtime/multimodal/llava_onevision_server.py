@@ -16,6 +16,7 @@ import openai
 import pybase64
 import requests
 from PIL import Image
+
 from sglang.srt.utils.video_decoder import VideoDecoderWrapper
 
 # pip install httpx==0.23.3
