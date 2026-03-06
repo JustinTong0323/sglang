@@ -33,16 +33,28 @@ class PixtralProcessor(BaseMultimodalProcessor):
     ) -> tuple[int, int]:
         max_width = max_height = self.image_size
         patch_width = patch_height = self.patch_size
+        spatial_merge_size = getattr(self.vision_config, "spatial_merge_size", 1)
 
         ratio = max(image_width / max_width, image_height / max_height)
         if ratio > 1:
             image_width = int(math.floor(image_width / ratio))
             image_height = int(math.floor(image_height / ratio))
 
+        # Use effective_patch_size = patch_size * spatial_merge_size so that
+        # the resulting patch grid dimensions are divisible by spatial_merge_size.
+        # This matches the reference mistral_common implementation and ensures
+        # the PatchMerger (which groups spatial_merge_size^2 patches) works correctly.
+        effective_patch_width = patch_width * spatial_merge_size
+        effective_patch_height = patch_height * spatial_merge_size
+
         nrows, ncols = _get_pixtral_hf_num_image_tokens(
             (image_height, image_width),
-            (patch_height, patch_width),
+            (effective_patch_height, effective_patch_width),
         )
+
+        # Scale back: each "effective token" is spatial_merge_size actual patch tokens
+        nrows *= spatial_merge_size
+        ncols *= spatial_merge_size
 
         return ncols, nrows
 
