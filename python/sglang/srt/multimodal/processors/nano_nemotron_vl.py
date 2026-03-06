@@ -28,8 +28,13 @@ from sglang.srt.multimodal.processors.base_processor import (
 )
 from sglang.srt.utils.common import sample_video_frames
 
+from sglang.srt.utils.common import _HAS_TORCHCODEC
+
 if TYPE_CHECKING:
-    from torchcodec.decoders import VideoDecoder
+    if _HAS_TORCHCODEC:
+        from torchcodec.decoders import VideoDecoder
+    else:
+        from decord import VideoReader as VideoDecoder
 
 DEFAULT_NUM_TILES = 12
 NUM_VIDEO_TILES = 1
@@ -99,14 +104,17 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
         return f"Frame {frame_index + 1} sampled at {timestamp:.2f} seconds: {self.PLACEHOLDER}{self.IMG_CONTEXT_TOKEN * num_tokens}{self.IMG_END_TOKEN}"
 
     @staticmethod
-    def parse_video(video: "VideoDecoder") -> tuple[np.ndarray, list[float]]:
+    def parse_video(video) -> tuple[np.ndarray, list[float]]:
         frames = sample_video_frames(
             video, desired_fps=DESIRED_FPS, max_frames=MAX_FRAMES
         )
-        frames_batch = video.get_frames_at(frames)
-        video_array = frames_batch.data.numpy()  # NHWC uint8
-        # doing the `1000 /` and then `/ 1000` is to match vllm's timestamping *exactly*, for reference.
-        frame_duration_ms = int(1000 / video.metadata.average_fps)
+        if _HAS_TORCHCODEC and hasattr(video, "metadata"):
+            frames_batch = video.get_frames_at(frames)
+            video_array = frames_batch.data.numpy()  # NHWC uint8
+            frame_duration_ms = int(1000 / video.metadata.average_fps)
+        else:
+            video_array = video.get_batch(frames).asnumpy()
+            frame_duration_ms = int(1000 / video.get_avg_fps())
         timestamps = [i * frame_duration_ms / 1000.0 for i in frames]
         return video_array, timestamps
 

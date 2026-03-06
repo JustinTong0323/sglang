@@ -6,8 +6,14 @@ from typing import List
 
 import numpy as np
 import torch
-from torchcodec.decoders import VideoDecoder
 from PIL import Image
+
+try:
+    from torchcodec.decoders import VideoDecoder
+
+    _HAS_TORCHCODEC = True
+except ImportError:
+    _HAS_TORCHCODEC = False
 
 from sglang.srt.managers.schedule_batch import (
     Modality,
@@ -205,8 +211,18 @@ class InternVLProcessor(BaseMultimodalProcessor):
         return torch.stack(tiles).to(torch.bfloat16)
 
     @staticmethod
-    def _open_video_reader(path: str) -> VideoDecoder:
-        return VideoDecoder(path, dimension_order="NHWC")
+    def _open_video_reader(path: str):
+        if _HAS_TORCHCODEC:
+            return VideoDecoder(path, dimension_order="NHWC")
+        from decord import VideoReader, cpu, gpu
+
+        try:
+            return VideoReader(path, ctx=gpu(0), num_threads=1)
+        except (RuntimeError, OSError) as e:
+            logger.warning(
+                "[internvl] VideoReader gpu decode failed (%s), fallback CPU", e
+            )
+            return VideoReader(path, ctx=cpu(0), num_threads=1)
 
     def _ensure_placeholders_before_assistant(
         self, prompt: str, placeholder: str, want: int
@@ -482,11 +498,10 @@ class InternVLProcessor(BaseMultimodalProcessor):
 
         if base_output.videos and num_frames > 0 and self.video_token_id is not None:
             for video in base_output.videos:
-                vr = (
-                    video
-                    if isinstance(video, VideoDecoder)
-                    else self._open_video_reader(str(video))
+                is_video_obj = (_HAS_TORCHCODEC and isinstance(video, VideoDecoder)) or (
+                    not _HAS_TORCHCODEC and hasattr(video, "get_avg_fps")
                 )
+                vr = video if is_video_obj else self._open_video_reader(str(video))
                 max_frame = len(vr) - 1
                 frame_indices = (
                     [0]
@@ -497,9 +512,12 @@ class InternVLProcessor(BaseMultimodalProcessor):
                 per_video_tiles = []
                 per_video_patch_cnt = []
                 for fi in frame_indices:
-                    # VideoDecoder returns NHWC tensor for single frame
                     frame = vr[int(fi)]
-                    img_np = frame.numpy()
+                    img_np = (
+                        frame.numpy()
+                        if hasattr(frame, "numpy")
+                        else np.array(frame)
+                    )
                     frame_t = (
                         torch.from_numpy(img_np).permute(2, 0, 1).cuda().float() / 255.0
                     )

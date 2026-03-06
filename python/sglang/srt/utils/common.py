@@ -95,9 +95,14 @@ from typing_extensions import Literal
 from sglang.srt.environ import envs
 from sglang.srt.observability.func_timer import enable_func_timer
 
-if TYPE_CHECKING:
+try:
     from torchcodec.decoders import VideoDecoder
 
+    _HAS_TORCHCODEC = True
+except ImportError:
+    _HAS_TORCHCODEC = False
+
+if TYPE_CHECKING:
     from sglang.srt.server_args import ServerArgs
 
 logger = logging.getLogger(__name__)
@@ -951,8 +956,69 @@ def get_image_bytes(image_file: Union[str, bytes]):
         raise NotImplementedError(f"Invalid image: {image_file}")
 
 
+def _load_video_decord(video_file: Union[str, bytes], use_gpu: bool = True):
+    """Fallback video loader using decord (for platforms without torchcodec)."""
+    from decord import VideoReader, cpu, gpu
+
+    try:
+        from decord.bridge import decord_bridge
+
+        ctx = gpu(0)
+        _ = decord_bridge.get_ctx_device(ctx)
+    except Exception:
+        ctx = cpu(0)
+
+    tmp_file = None
+    vr = None
+    try:
+        if isinstance(video_file, bytes):
+            tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+            tmp_file.write(video_file)
+            tmp_file.close()
+            vr = VideoReader(tmp_file.name, ctx=ctx)
+        elif isinstance(video_file, str):
+            if video_file.startswith(("http://", "https://")):
+                timeout = int(os.getenv("REQUEST_TIMEOUT", "10"))
+                response = requests.get(video_file, stream=True, timeout=timeout)
+                response.raise_for_status()
+                tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+                for chunk in response.iter_content(chunk_size=8192):
+                    tmp_file.write(chunk)
+                tmp_file.close()
+                vr = VideoReader(tmp_file.name, ctx=ctx)
+            elif video_file.startswith("data:"):
+                _, encoded = video_file.split(",", 1)
+                video_bytes = pybase64.b64decode(encoded, validate=True)
+                tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+                tmp_file.write(video_bytes)
+                tmp_file.close()
+                vr = VideoReader(tmp_file.name, ctx=ctx)
+            elif video_file.startswith("file://"):
+                video_file = unquote(urlparse(video_file).path)
+                vr = VideoReader(video_file, ctx=ctx)
+            elif os.path.isfile(unquote(urlparse(video_file).path)):
+                vr = VideoReader(video_file, ctx=ctx)
+            else:
+                video_bytes = pybase64.b64decode(video_file, validate=True)
+                tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+                tmp_file.write(video_bytes)
+                tmp_file.close()
+                vr = VideoReader(tmp_file.name, ctx=ctx)
+        elif isinstance(video_file, (list, tuple, torch.Tensor, np.ndarray)):
+            vr = video_file
+        else:
+            raise ValueError(f"Unsupported video input type: {type(video_file)}")
+
+        return vr
+
+    finally:
+        if tmp_file and os.path.exists(tmp_file.name):
+            os.unlink(tmp_file.name)
+
+
 def load_video(video_file: Union[str, bytes], use_gpu: bool = True):
-    from torchcodec.decoders import VideoDecoder
+    if not _HAS_TORCHCODEC:
+        return _load_video_decord(video_file, use_gpu)
 
     tmp_file = None
     decoder = None
@@ -994,12 +1060,15 @@ def load_video(video_file: Union[str, bytes], use_gpu: bool = True):
 
 
 def sample_video_frames(
-    video: "VideoDecoder", *, desired_fps: int, max_frames: int
+    video, *, desired_fps: int, max_frames: int
 ) -> list[int]:
     total_frames = len(video)
     assert total_frames > 0, "Video must have at least one frame"
 
-    avg_fps = video.metadata.average_fps
+    if _HAS_TORCHCODEC and hasattr(video, "metadata"):
+        avg_fps = video.metadata.average_fps
+    else:
+        avg_fps = video.get_avg_fps()
     duration = total_frames / avg_fps
     fps = min(desired_fps, avg_fps)
 
@@ -1013,8 +1082,6 @@ def sample_video_frames(
 
 
 def encode_video(video_path, frame_count_limit=None):
-    from torchcodec.decoders import VideoDecoder
-
     if not os.path.exists(video_path):
         logger.error(f"Video {video_path} does not exist")
         return []
@@ -1027,14 +1094,25 @@ def encode_video(video_path, frame_count_limit=None):
         idxs = [int(i * gap + gap / 2) for i in range(n)]
         return [l[i] for i in idxs]
 
-    decoder = VideoDecoder(video_path, dimension_order="NHWC")
-    sample_fps = round(decoder.metadata.average_fps / 1)  # FPS
-    frame_indices = [i for i in range(0, len(decoder), sample_fps)]
-    if frame_count_limit is not None and len(frame_indices) > frame_count_limit:
-        frame_indices = uniform_sample(frame_indices, frame_count_limit)
+    if _HAS_TORCHCODEC:
+        decoder = VideoDecoder(video_path, dimension_order="NHWC")
+        sample_fps = round(decoder.metadata.average_fps / 1)  # FPS
+        frame_indices = [i for i in range(0, len(decoder), sample_fps)]
+        if frame_count_limit is not None and len(frame_indices) > frame_count_limit:
+            frame_indices = uniform_sample(frame_indices, frame_count_limit)
+        frames_batch = decoder.get_frames_at(frame_indices)
+        frames = [Image.fromarray(f.numpy().astype("uint8")) for f in frames_batch.data]
+    else:
+        from decord import VideoReader, cpu
 
-    frames_batch = decoder.get_frames_at(frame_indices)
-    frames = [Image.fromarray(f.numpy().astype("uint8")) for f in frames_batch.data]
+        vr = VideoReader(video_path, ctx=cpu(0))
+        sample_fps = round(vr.get_avg_fps() / 1)  # FPS
+        frame_indices = [i for i in range(0, len(vr), sample_fps)]
+        if frame_count_limit is not None and len(frame_indices) > frame_count_limit:
+            frame_indices = uniform_sample(frame_indices, frame_count_limit)
+        frames = vr.get_batch(frame_indices).asnumpy()
+        frames = [Image.fromarray(v.astype("uint8")) for v in frames]
+
     return frames
 
 
