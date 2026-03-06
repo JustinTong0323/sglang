@@ -51,9 +51,7 @@ class VideoDecoderWrapper:
                 self._decoder = VideoDecoder(source, **kwargs)
             except RuntimeError:
                 if "device" in kwargs:
-                    logger.warning(
-                        "CUDA video decoding failed, falling back to CPU."
-                    )
+                    logger.warning("CUDA video decoding failed, falling back to CPU.")
                     kwargs.pop("device")
                     self._decoder = VideoDecoder(source, **kwargs)
                 else:
