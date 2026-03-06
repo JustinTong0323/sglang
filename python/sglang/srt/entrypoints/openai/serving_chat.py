@@ -1209,7 +1209,9 @@ class OpenAIServingChat(OpenAIServingBase):
         return idx
 
     def _get_reasoning_from_request(self, request: ChatCompletionRequest) -> bool:
-        """Judge whether the request needs reasoning"""
+        """Judge whether the request needs reasoning for hybrid reasoning models
+        NOTE: This is predefined based on model's chat template
+        """
         if not self.reasoning_parser:
             return False
         if self.reasoning_parser in ["deepseek-v3"]:
@@ -1230,6 +1232,9 @@ class OpenAIServingChat(OpenAIServingBase):
                 not request.chat_template_kwargs
                 or request.chat_template_kwargs.get("enable_thinking") is not False
             )
+        if self.reasoning_parser in ["mistral"]:
+            # Mistral models only reason when reasoning_effort="high"
+            return request.reasoning_effort == "high"
         return True  # default
 
     async def _process_tool_call_stream(
