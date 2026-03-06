@@ -16,7 +16,7 @@ import openai
 import pybase64
 import requests
 from PIL import Image
-from torchcodec.decoders import VideoDecoder
+from sglang.srt.utils.video_decoder import VideoDecoderWrapper
 
 # pip install httpx==0.23.3
 # pip install torchcodec
@@ -200,14 +200,13 @@ def video_speed_test(client, video_path):
 
 def prepare_video_messages(video_path):
     max_frames_num = 32
-    decoder = VideoDecoder(video_path, dimension_order="NHWC")
+    decoder = VideoDecoderWrapper(video_path)
     total_frame_num = len(decoder)
     uniform_sampled_frames = np.linspace(
         0, total_frame_num - 1, max_frames_num, dtype=int
     )
     frame_idx = uniform_sampled_frames.tolist()
-    frames_batch = decoder.get_frames_at(frame_idx)
-    frames = frames_batch.data.numpy()
+    frames = decoder.get_frames_at(frame_idx)
 
     base64_frames = []
     for frame in frames:

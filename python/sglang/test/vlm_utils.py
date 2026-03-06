@@ -378,17 +378,16 @@ class ImageOpenAITestMixin(TestOpenAIMLLMServerBase):
         # the memory consumed by the Vision Attention varies a lot, e.g. blocked qkv vs full-sequence sdpa
         # the size of the video embeds differs from the `modality` argument when preprocessed
 
-        from torchcodec.decoders import VideoDecoder
+        from sglang.srt.utils.video_decoder import VideoDecoderWrapper
 
         max_frames_num = 10
-        decoder = VideoDecoder(video_path, dimension_order="NHWC")
+        decoder = VideoDecoderWrapper(video_path)
         total_frame_num = len(decoder)
         uniform_sampled_frames = np.linspace(
             0, total_frame_num - 1, max_frames_num, dtype=int
         )
         frame_idx = uniform_sampled_frames.tolist()
-        frames_batch = decoder.get_frames_at(frame_idx)
-        frames = frames_batch.data.numpy()
+        frames = decoder.get_frames_at(frame_idx)
 
         base64_frames = []
         for frame in frames:
