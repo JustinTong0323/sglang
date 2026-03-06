@@ -11,25 +11,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-import copy
+
+import logging
 from typing import Iterable, Optional, Set, Tuple
 
-import einops
 import torch
 import torch.nn.functional as F
 from torch import nn
 from transformers import (
-    ROPE_INIT_FUNCTIONS,
+    AutoModel,
     Gemma4TextConfig,
     PretrainedConfig,
     PreTrainedModel,
 )
 
 from sglang.srt.distributed import get_tensor_model_parallel_world_size
-from sglang.srt.layers.activation import GeluAndMul
-from sglang.srt.layers.layernorm import Gemma3RMSNorm, Gemma4RMSNorm
 from sglang.srt.layers.linear import (
-    MergedColumnParallelLinear,
     ColumnParallelLinear,
     QKVParallelLinear,
     ReplicatedLinear,
@@ -39,7 +36,6 @@ from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
-from sglang.srt.layers.rotary_embedding import apply_rotary_pos_emb
 from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import (
@@ -47,7 +43,6 @@ from sglang.srt.model_loader.weight_utils import (
     maybe_remap_kv_scale_name,
 )
 from sglang.srt.utils import add_prefix, make_layers
-from sglang.srt.models.gemma3_causal import Gemma3MLP
 from sglang.srt.layers.moe.ep_moe.layer import get_moe_impl_class
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.layers.rotary_embedding import get_rope
@@ -55,9 +50,11 @@ from sglang.srt.layers.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
 )
-from sglang.srt.layers.layernorm import RMSNorm, GemmaRMSNorm, RMSNormWithoutScale
-from sglang.srt.models.gemma3_causal import Gemma3TextScaledWordEmbedding
+from sglang.srt.layers.layernorm import RMSNorm, GemmaRMSNorm, Gemma4RMSNorm
+from sglang.srt.models.gemma3_causal import Gemma3TextScaledWordEmbedding, Gemma3MLP
 
+
+logger = logging.getLogger(__name__)
 
 # Aligned with HF's implementation, using sliding window inclusive with the last token
 # SGLang assumes exclusive
@@ -66,7 +63,7 @@ def get_attention_sliding_window_size(config):
 
 
 Gemma4MLP = Gemma3MLP
-
+Gemma4TextScaledWordEmbedding = Gemma3TextScaledWordEmbedding
 
 class Gemma4PerLayerEmbedding(nn.Module):
     """Per-Layer Embedding (PLE) system for Gemma 4.
@@ -526,9 +523,6 @@ class Gemma4DecoderLayer(nn.Module):
         return hidden_states, None
 
 
-Gemma4TextScaledWordEmbedding = Gemma3TextScaledWordEmbedding
-
-
 class Gemma4TextModel(PreTrainedModel):
     def __init__(
         self,
@@ -571,7 +565,8 @@ class Gemma4TextModel(PreTrainedModel):
             #     self.hidden_size_per_layer_input**0.5,
             # )
             
-            self.per_layer_model_projection = ColumnParallelLinear(
+            # FIXME: Use replicated for now. Use ColumnParallel?.
+            self.per_layer_model_projection = ReplicatedLinear(
                 self.hidden_size,
                 config.num_hidden_layers * self.hidden_size_per_layer_input,
                 bias=False,
@@ -849,18 +844,16 @@ class Gemma4ForCausalLM(PreTrainedModel):
         params_dict.update(dict(self.named_buffers()))
         loaded_params: Set[str] = set()
         for name, loaded_weight in weights:
-            if "audio" in name or "vision" in name:
-                continue
-
-            if ".language_model" in name:
-                name = name.replace(".language_model", "")
-
+            name = name.replace("model.language_model.", "model.")
             for param_name, shard_name, shard_id in stacked_params_mapping:
                 if shard_name not in name:
                     continue
                 name = name.replace(shard_name, param_name)
                 # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:
+                    continue
+                if name not in params_dict:
+                    # Skip loading weights that are not in the model
                     continue
                 param = params_dict[name]
                 weight_loader = param.weight_loader
@@ -888,13 +881,11 @@ class Gemma4ForCausalLM(PreTrainedModel):
             loaded_params.add(name)
         unloaded_params = params_dict.keys() - loaded_params
         if unloaded_params:
-            print(
+            logger.warning(
                 "Some weights are not initialized from checkpoints: %s", unloaded_params
             ) 
         return loaded_params
 
 
 EntryClass = Gemma4ForCausalLM
-
-
-
+AutoModel.register(Gemma4TextConfig, Gemma4ForCausalLM, exist_ok=True)
