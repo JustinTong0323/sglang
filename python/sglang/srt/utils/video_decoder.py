@@ -10,7 +10,7 @@ try:
     from torchcodec.decoders import VideoDecoder
 
     _BACKEND = "torchcodec"
-except ImportError:
+except (ImportError, RuntimeError):
     _BACKEND = "decord"
 
 
