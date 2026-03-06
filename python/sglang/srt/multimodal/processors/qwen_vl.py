@@ -9,12 +9,6 @@ import torch
 import torchvision
 from PIL import Image
 
-try:
-    from torchcodec.decoders import VideoDecoder
-
-    _HAS_TORCHCODEC = True
-except ImportError:
-    _HAS_TORCHCODEC = False
 from torchvision.transforms import InterpolationMode
 
 from sglang.srt.environ import envs
@@ -35,6 +29,7 @@ from sglang.srt.multimodal.processors.base_processor import (
 from sglang.srt.multimodal.processors.base_processor import (
     MultimodalSpecialTokens,
 )
+from sglang.srt.utils.video_decoder import VideoDecoderWrapper
 from sglang.utils import logger
 
 IMAGE_FACTOR = 28
@@ -162,17 +157,12 @@ async def preprocess_video(
     video_config: dict = {},
 ) -> torch.Tensor:
     # preprocessed video
-    is_video_obj = (_HAS_TORCHCODEC and isinstance(vr, VideoDecoder)) or (
-        not _HAS_TORCHCODEC and hasattr(vr, "get_avg_fps")
-    )
+    is_video_obj = isinstance(vr, VideoDecoderWrapper)
     if not is_video_obj:
         return vr
     entry_time = time.perf_counter()
 
-    if _HAS_TORCHCODEC:
-        total_frames, video_fps = len(vr), vr.metadata.average_fps
-    else:
-        total_frames, video_fps = len(vr), vr.get_avg_fps()
+    total_frames, video_fps = len(vr), vr.avg_fps
 
     nframes = smart_nframes(
         video_config, total_frames=total_frames, video_fps=video_fps
@@ -180,12 +170,7 @@ async def preprocess_video(
     idx = np.linspace(0, total_frames - 1, num=nframes, dtype=np.int64)
     idx = np.unique(idx)
 
-    if _HAS_TORCHCODEC:
-        frames_batch = vr.get_frames_at(idx.tolist())
-        video = frames_batch.data.pin_memory()
-    else:
-        video_np = vr.get_batch(idx).asnumpy()
-        video = torch.from_numpy(video_np).pin_memory()
+    video = vr.get_frames_as_tensor(idx.tolist())
 
     video = video.permute(0, 3, 1, 2)  # NHWC -> TCHW
 

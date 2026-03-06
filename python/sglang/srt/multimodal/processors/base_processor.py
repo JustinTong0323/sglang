@@ -385,7 +385,7 @@ class BaseMultimodalProcessor(ABC):
         """
         estimate the total frame count from all visual input
         """
-        from sglang.srt.utils.common import _HAS_TORCHCODEC
+        from sglang.srt.utils.video_decoder import VideoDecoderWrapper
 
         # Before processing inputs
         if not image_data or len(image_data) == 0:
@@ -394,16 +394,8 @@ class BaseMultimodalProcessor(ABC):
         for image in image_data:
             if isinstance(image, str) and image.startswith("video:"):
                 path = image[len("video:") :]
-                if _HAS_TORCHCODEC:
-                    from torchcodec.decoders import VideoDecoder
-
-                    decoder = VideoDecoder(path, dimension_order="NHWC")
-                    num_frames = len(decoder)
-                else:
-                    from decord import VideoReader, cpu
-
-                    vr = VideoReader(path, ctx=cpu(0))
-                    num_frames = len(vr)
+                decoder = VideoDecoderWrapper(path)
+                num_frames = len(decoder)
             else:
                 # For images, each contributes one frame
                 num_frames = 1

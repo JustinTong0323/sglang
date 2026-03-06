@@ -95,12 +95,7 @@ from typing_extensions import Literal
 from sglang.srt.environ import envs
 from sglang.srt.observability.func_timer import enable_func_timer
 
-try:
-    from torchcodec.decoders import VideoDecoder
-
-    _HAS_TORCHCODEC = True
-except ImportError:
-    _HAS_TORCHCODEC = False
+from sglang.srt.utils.video_decoder import VideoDecoderWrapper
 
 if TYPE_CHECKING:
     from sglang.srt.server_args import ServerArgs
@@ -999,25 +994,7 @@ def load_video(video_file: Union[str, bytes], use_gpu: bool = True):
         raise ValueError(f"Unsupported video input type: {type(video_file)}")
 
     try:
-        if _HAS_TORCHCODEC:
-            return VideoDecoder(source, dimension_order="NHWC")
-        else:
-            from decord import VideoReader, cpu, gpu
-
-            try:
-                from decord.bridge import decord_bridge
-
-                ctx = gpu(0)
-                _ = decord_bridge.get_ctx_device(ctx)
-            except Exception:
-                ctx = cpu(0)
-
-            if isinstance(source, bytes):
-                tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-                tmp_file.write(source)
-                tmp_file.close()
-                source = tmp_file.name
-            return VideoReader(source, ctx=ctx)
+        return VideoDecoderWrapper(source)
     finally:
         if tmp_file and os.path.exists(tmp_file.name):
             os.unlink(tmp_file.name)
@@ -1029,10 +1006,7 @@ def sample_video_frames(
     total_frames = len(video)
     assert total_frames > 0, "Video must have at least one frame"
 
-    if _HAS_TORCHCODEC and hasattr(video, "metadata"):
-        avg_fps = video.metadata.average_fps
-    else:
-        avg_fps = video.get_avg_fps()
+    avg_fps = video.avg_fps
     duration = total_frames / avg_fps if avg_fps > 0 else 0
     fps = min(desired_fps, avg_fps)
 
@@ -1058,16 +1032,9 @@ def encode_video(video_path, frame_count_limit=None):
         idxs = [int(i * gap + gap / 2) for i in range(n)]
         return [l[i] for i in idxs]
 
-    if _HAS_TORCHCODEC:
-        decoder = VideoDecoder(video_path, dimension_order="NHWC")
-        avg_fps = decoder.metadata.average_fps
-        total_frames = len(decoder)
-    else:
-        from decord import VideoReader, cpu
-
-        decoder = VideoReader(video_path, ctx=cpu(0))
-        avg_fps = decoder.get_avg_fps()
-        total_frames = len(decoder)
+    decoder = VideoDecoderWrapper(video_path)
+    avg_fps = decoder.avg_fps
+    total_frames = len(decoder)
 
     sample_fps = round(avg_fps / 1)
     if sample_fps == 0:
@@ -1079,12 +1046,8 @@ def encode_video(video_path, frame_count_limit=None):
     if not frame_indices:
         return []
 
-    if _HAS_TORCHCODEC:
-        frames_batch = decoder.get_frames_at(frame_indices)
-        frames = [Image.fromarray(f.numpy().astype("uint8")) for f in frames_batch.data]
-    else:
-        frames_data = decoder.get_batch(frame_indices).asnumpy()
-        frames = [Image.fromarray(v.astype("uint8")) for v in frames_data]
+    frames_data = decoder.get_frames_at(frame_indices)
+    frames = [Image.fromarray(v.astype("uint8")) for v in frames_data]
 
     return frames
 

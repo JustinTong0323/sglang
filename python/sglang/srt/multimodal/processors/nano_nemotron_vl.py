@@ -12,7 +12,6 @@
 # limitations under the License.
 
 from math import sqrt
-from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -27,14 +26,7 @@ from sglang.srt.multimodal.processors.base_processor import (
     MultimodalSpecialTokens,
 )
 from sglang.srt.utils.common import sample_video_frames
-
-from sglang.srt.utils.common import _HAS_TORCHCODEC
-
-if TYPE_CHECKING:
-    if _HAS_TORCHCODEC:
-        from torchcodec.decoders import VideoDecoder
-    else:
-        from decord import VideoReader as VideoDecoder
+from sglang.srt.utils.video_decoder import VideoDecoderWrapper
 
 DEFAULT_NUM_TILES = 12
 NUM_VIDEO_TILES = 1
@@ -108,13 +100,8 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
         frames = sample_video_frames(
             video, desired_fps=DESIRED_FPS, max_frames=MAX_FRAMES
         )
-        if _HAS_TORCHCODEC and hasattr(video, "metadata"):
-            frames_batch = video.get_frames_at(frames)
-            video_array = frames_batch.data.numpy()  # NHWC uint8
-            avg_fps = video.metadata.average_fps
-        else:
-            video_array = video.get_batch(frames).asnumpy()
-            avg_fps = video.get_avg_fps()
+        video_array = video.get_frames_at(frames)
+        avg_fps = video.avg_fps
         if avg_fps > 0:
             frame_duration_ms = int(1000 / avg_fps)
         else:
