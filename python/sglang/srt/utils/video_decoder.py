@@ -1,6 +1,10 @@
 """Unified video decoder: torchcodec preferred, decord as fallback."""
 
+import logging
+
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 try:
     from torchcodec.decoders import VideoDecoder
@@ -10,16 +14,32 @@ except ImportError:
     _BACKEND = "decord"
 
 
+def _try_cuda_backend() -> bool:
+    """Try to enable torchcodec CUDA backend. Returns True on success."""
+    try:
+        from torchcodec.decoders import set_cuda_backend
+
+        set_cuda_backend("beta")
+        return True
+    except Exception:
+        return False
+
+
 class VideoDecoderWrapper:
     """Unified video decoder that uses torchcodec when available, decord as fallback.
 
     All frames are returned in NHWC uint8 numpy format for consistency.
     """
 
-    def __init__(self, source):
-        """source: file path (str) or video bytes."""
+    def __init__(self, source, device: str = "cpu"):
+        """source: file path (str) or video bytes.
+        device: "cpu" or "cuda". GPU decoding only supported with torchcodec.
+        """
         if _BACKEND == "torchcodec":
-            self._decoder = VideoDecoder(source, dimension_order="NHWC")
+            kwargs = {"dimension_order": "NHWC"}
+            if device == "cuda" and _try_cuda_backend():
+                kwargs["device"] = "cuda"
+            self._decoder = VideoDecoder(source, **kwargs)
         else:
             from decord import VideoReader, cpu
 

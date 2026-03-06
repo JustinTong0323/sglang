@@ -953,51 +953,44 @@ def get_image_bytes(image_file: Union[str, bytes]):
 
 def _normalize_video_input(
     video_file: Union[str, bytes],
-) -> tuple[Union[str, bytes, None], "tempfile.NamedTemporaryFile | None"]:
+) -> Union[str, bytes, None]:
     """Normalize video input (URL, base64, file://, etc.) to a file path or bytes.
 
-    Returns (source, tmp_file) where source is a file path or bytes suitable for
-    a decoder, and tmp_file is a temp file that the caller must clean up.
+    Returns a file path or bytes suitable for a decoder, or None on failure.
+    URLs and base64 are returned as bytes (no temp files needed since both
+    torchcodec and VideoDecoderWrapper accept bytes natively).
     """
-    tmp_file = None
     if isinstance(video_file, bytes):
-        return video_file, None
+        return video_file
     elif isinstance(video_file, str):
         if video_file.startswith(("http://", "https://")):
             timeout = int(os.getenv("REQUEST_TIMEOUT", "10"))
             response = requests.get(video_file, stream=True, timeout=timeout)
             response.raise_for_status()
-            tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-            for chunk in response.iter_content(chunk_size=8192):
-                tmp_file.write(chunk)
-            tmp_file.close()
-            return tmp_file.name, tmp_file
+            return response.content
         elif video_file.startswith("data:"):
             _, encoded = video_file.split(",", 1)
-            return pybase64.b64decode(encoded, validate=True), None
+            return pybase64.b64decode(encoded, validate=True)
         elif video_file.startswith("file://"):
-            return unquote(urlparse(video_file).path), None
+            return unquote(urlparse(video_file).path)
         elif os.path.isfile(unquote(urlparse(video_file).path)):
-            return video_file, None
+            return video_file
         else:
-            return pybase64.b64decode(video_file, validate=True), None
+            return pybase64.b64decode(video_file, validate=True)
     else:
-        return None, None
+        return None
 
 
 def load_video(video_file: Union[str, bytes], use_gpu: bool = True):
     if isinstance(video_file, (list, tuple, torch.Tensor, np.ndarray)):
         return video_file
 
-    source, tmp_file = _normalize_video_input(video_file)
+    source = _normalize_video_input(video_file)
     if source is None:
         raise ValueError(f"Unsupported video input type: {type(video_file)}")
 
-    try:
-        return VideoDecoderWrapper(source)
-    finally:
-        if tmp_file and os.path.exists(tmp_file.name):
-            os.unlink(tmp_file.name)
+    device = "cuda" if use_gpu else "cpu"
+    return VideoDecoderWrapper(source, device=device)
 
 
 def sample_video_frames(
