@@ -26,7 +26,6 @@ from sglang.srt.multimodal.processors.base_processor import (
     MultimodalSpecialTokens,
 )
 from sglang.srt.utils.common import sample_video_frames
-from sglang.srt.utils.video_decoder import VideoDecoderWrapper
 
 DEFAULT_NUM_TILES = 12
 NUM_VIDEO_TILES = 1

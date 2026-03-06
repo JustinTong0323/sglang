@@ -44,7 +44,6 @@ class VideoDecoderWrapper:
             from decord import VideoReader, cpu
 
             if isinstance(source, bytes):
-                import os
                 import tempfile
 
                 self._tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")

@@ -94,7 +94,6 @@ from typing_extensions import Literal
 
 from sglang.srt.environ import envs
 from sglang.srt.observability.func_timer import enable_func_timer
-
 from sglang.srt.utils.video_decoder import VideoDecoderWrapper
 
 if TYPE_CHECKING:
@@ -993,9 +992,7 @@ def load_video(video_file: Union[str, bytes], use_gpu: bool = True):
     return VideoDecoderWrapper(source, device=device)
 
 
-def sample_video_frames(
-    video, *, desired_fps: int, max_frames: int
-) -> list[int]:
+def sample_video_frames(video, *, desired_fps: int, max_frames: int) -> list[int]:
     total_frames = len(video)
     assert total_frames > 0, "Video must have at least one frame"
 
