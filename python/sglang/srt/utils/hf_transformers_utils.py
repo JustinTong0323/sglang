@@ -509,21 +509,33 @@ def get_config(
             config = _load_deepseek_v32_model(
                 model, trust_remote_code=trust_remote_code, revision=revision, **kwargs
             )
-        except KeyError:
+        except KeyError as e:
             # Transformers v5 may register a built-in config class that
             # conflicts with sglang's custom one (e.g. NemotronHConfig
             # doesn't handle '-' in hybrid_override_pattern). Fall back
             # to loading the raw config dict and using sglang's class.
-            config_dict, _ = PretrainedConfig.get_config_dict(
-                model, trust_remote_code=trust_remote_code, revision=revision, **kwargs
-            )
-            model_type = config_dict.get("model_type")
-            if model_type in _CONFIG_REGISTRY:
-                config = _CONFIG_REGISTRY[model_type].from_pretrained(
-                    model, revision=revision, **kwargs
+            # Also handle deepseek_v32 which v5 doesn't recognize.
+            if "deepseek_v32" in str(e):
+                config = _load_deepseek_v32_model(
+                    model,
+                    trust_remote_code=trust_remote_code,
+                    revision=revision,
+                    **kwargs,
                 )
             else:
-                raise
+                config_dict, _ = PretrainedConfig.get_config_dict(
+                    model,
+                    trust_remote_code=trust_remote_code,
+                    revision=revision,
+                    **kwargs,
+                )
+                model_type = config_dict.get("model_type")
+                if model_type in _CONFIG_REGISTRY:
+                    config = _CONFIG_REGISTRY[model_type].from_pretrained(
+                        model, revision=revision, **kwargs
+                    )
+                else:
+                    raise
 
     if (
         config.architectures is not None

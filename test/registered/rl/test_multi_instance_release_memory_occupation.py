@@ -1,3 +1,4 @@
+import gc
 import multiprocessing
 import os
 import time
@@ -218,8 +219,10 @@ def _run_sglang_subprocess(
         print(f"GPU{rank} Memory usage after resuming Sgl weights: {_mem_usage}")
         del hf_model
         hf_model = None
+        gc.collect()
         torch.cuda.empty_cache()
         time.sleep(3)
+        gc.collect()
         torch.cuda.empty_cache()
         _curr_usage = get_gpu_memory_gb(rank)
         assert (

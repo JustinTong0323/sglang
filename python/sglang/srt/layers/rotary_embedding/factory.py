@@ -111,10 +111,12 @@ def get_rope(
             )
 
         if scaling_type == "llama3":
-            scaling_factor = rope_scaling["factor"]
-            low_freq_factor = rope_scaling["low_freq_factor"]
-            high_freq_factor = rope_scaling["high_freq_factor"]
-            original_max_position = rope_scaling["original_max_position_embeddings"]
+            scaling_factor = rope_scaling.get("factor", 1.0)
+            low_freq_factor = rope_scaling.get("low_freq_factor", 1.0)
+            high_freq_factor = rope_scaling.get("high_freq_factor", 4.0)
+            original_max_position = rope_scaling.get(
+                "original_max_position_embeddings", max_position
+            )
             rotary_emb = Llama3RotaryEmbedding(
                 head_size,
                 rotary_dim,
@@ -162,7 +164,7 @@ def get_rope(
                     dtype,
                 )
         elif scaling_type == "linear":
-            scaling_factor = rope_scaling["factor"]
+            scaling_factor = rope_scaling.get("factor", 1.0)
             rotary_emb = LinearScalingRotaryEmbedding(
                 head_size,
                 rotary_dim,
@@ -173,7 +175,7 @@ def get_rope(
                 dtype,
             )
         elif scaling_type == "dynamic":
-            scaling_factor = rope_scaling["factor"]
+            scaling_factor = rope_scaling.get("factor", 1.0)
             if "alpha" in rope_scaling:
                 rotary_emb = DynamicNTKAlphaRotaryEmbedding(
                     head_size,
@@ -195,8 +197,10 @@ def get_rope(
                     dtype,
                 )
         elif scaling_type == "yarn":
-            scaling_factor = rope_scaling["factor"]
-            original_max_position = rope_scaling["original_max_position_embeddings"]
+            scaling_factor = rope_scaling.get("factor", 1.0)
+            original_max_position = rope_scaling.get(
+                "original_max_position_embeddings", max_position
+            )
             extra_kwargs = {
                 k: v
                 for k, v in rope_scaling.items()
@@ -229,8 +233,10 @@ def get_rope(
                     **extra_kwargs,
                 )
         elif scaling_type == "deepseek_yarn":
-            scaling_factor = rope_scaling["factor"]
-            original_max_position = rope_scaling["original_max_position_embeddings"]
+            scaling_factor = rope_scaling.get("factor", 1.0)
+            original_max_position = rope_scaling.get(
+                "original_max_position_embeddings", max_position
+            )
             extra_kwargs = {
                 k: v
                 for k, v in rope_scaling.items()
@@ -257,7 +263,9 @@ def get_rope(
         elif scaling_type == "longrope":
             short_factor = rope_scaling["short_factor"]
             long_factor = rope_scaling["long_factor"]
-            original_max_position = rope_scaling["original_max_position_embeddings"]
+            original_max_position = rope_scaling.get(
+                "original_max_position_embeddings", max_position
+            )
             extra_kwargs = {
                 k: v
                 for k, v in rope_scaling.items()
@@ -321,8 +329,10 @@ def get_rope_cpu(
         scaling_type == "deepseek_yarn"
     ), "Only deepseek_yarn is supported for CPU for now"
 
-    scaling_factor = rope_scaling["factor"]
-    original_max_position = rope_scaling["original_max_position_embeddings"]
+    scaling_factor = rope_scaling.get("factor", 1.0)
+    original_max_position = rope_scaling.get(
+        "original_max_position_embeddings", max_position
+    )
     extra_kwargs = {
         k: v
         for k, v in rope_scaling.items()
