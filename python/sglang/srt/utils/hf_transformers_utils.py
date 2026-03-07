@@ -767,6 +767,8 @@ def get_tokenizer(
             **kwargs,
         )
 
+    _fix_v5_tokenizer_components(tokenizer, tokenizer_name, tokenizer_revision)
+
     if not isinstance(tokenizer, PreTrainedTokenizerFast):
         warnings.warn(
             "Using a slow tokenizer. This might cause a significant "
@@ -777,6 +779,53 @@ def get_tokenizer(
     attach_additional_stop_token_ids(tokenizer)
     tokenizer = patch_tokenizer(tokenizer)
     return tokenizer
+
+
+def _fix_v5_tokenizer_components(tokenizer, model_name_or_path, revision=None):
+    """Fix pre_tokenizer/decoder when a v5 tokenizer class overwrites them.
+
+    In transformers v5, some tokenizer classes (e.g. LlamaTokenizer) have a
+    custom __init__ that rebuilds the pre_tokenizer and decoder from scratch
+    with class-specific components, discarding the originals from tokenizer.json.
+    This breaks models that specify LlamaTokenizerFast but actually use a
+    different tokenizer architecture (e.g. DeepSeek-V3.2 uses ByteLevel).
+
+    Detects the mismatch by comparing against the raw tokenizer.json and
+    restores the original components when they differ.
+    """
+    backend = getattr(tokenizer, "_tokenizer", None)
+    if backend is None:
+        return
+
+    try:
+        from huggingface_hub import hf_hub_download
+        from tokenizers import Tokenizer as RawTokenizer
+
+        tok_file = hf_hub_download(
+            model_name_or_path,
+            "tokenizer.json",
+            revision=revision,
+            local_files_only=True,
+        )
+        raw = RawTokenizer.from_file(tok_file)
+    except Exception:
+        return
+
+    raw_pre = type(raw.pre_tokenizer).__name__ if raw.pre_tokenizer else None
+    loaded_pre = type(backend.pre_tokenizer).__name__ if backend.pre_tokenizer else None
+
+    if raw_pre and loaded_pre and raw_pre != loaded_pre:
+        logger.info(
+            "Fixing v5 tokenizer component mismatch for %s: "
+            "pre_tokenizer %s -> %s, decoder %s -> %s",
+            model_name_or_path,
+            loaded_pre,
+            raw_pre,
+            type(backend.decoder).__name__ if backend.decoder else None,
+            type(raw.decoder).__name__ if raw.decoder else None,
+        )
+        backend.pre_tokenizer = raw.pre_tokenizer
+        backend.decoder = raw.decoder
 
 
 def _fix_special_tokens_pattern(tokenizer):
