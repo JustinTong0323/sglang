@@ -57,6 +57,7 @@ dependencies = [
   "scipy",
   "sentencepiece",
   "setproctitle",
+  "sgl-fa4==4.0.3",
   "sgl-kernel==0.3.21",
   "soundfile==0.13.1",
   "tiktoken",
@@ -71,6 +72,7 @@ dependencies = [
   "transformers==5.3.0",
   "uvicorn",
   "uvloop",
+  "watchfiles",
   "xgrammar==0.1.27",
 
   "smg-grpc-proto>=0.4.1",
@@ -115,6 +117,10 @@ diffusion = [
   "scikit-image==0.25.2",
   "trimesh>=4.0.0",
   "xatlas",
+]
+
+ray = [
+  "ray[default]>=2.54.0",
 ]
 
 tracing = [
