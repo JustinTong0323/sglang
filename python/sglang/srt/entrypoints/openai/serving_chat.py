@@ -119,6 +119,11 @@ class OpenAIServingChat(OpenAIServingBase):
             and hasattr(self.tokenizer_manager.model_config.hf_config, "model_type")
             and self.tokenizer_manager.model_config.hf_config.model_type == "gpt_oss"
         )
+        self.is_gemma4 = (
+            hasattr(self.tokenizer_manager.model_config, "hf_config")
+            and hasattr(self.tokenizer_manager.model_config.hf_config, "model_type")
+            and self.tokenizer_manager.model_config.hf_config.model_type == "gemma4"
+        )
 
         self.use_dpsk_v32_encoding = self._use_dpsk_v32_encoding()
 
@@ -320,7 +325,7 @@ class OpenAIServingChat(OpenAIServingBase):
     ) -> MessageProcessingResult:
         """Process chat messages and apply chat template"""
         # GptOss model needs to keep special tokens for harmony parsing
-        if self.is_gpt_oss:
+        if self.is_gpt_oss or self.is_gemma4:
             request.skip_special_tokens = False
 
         tool_call_constraint = None
@@ -946,6 +951,7 @@ class OpenAIServingChat(OpenAIServingBase):
                     self.template_manager.force_reasoning
                     or self._get_reasoning_from_request(request)
                 )
+                print(f"is_force_reasoning: {self.template_manager.force_reasoning}, self._get_reasoning_from_request(request): {self._get_reasoning_from_request(request)}")
                 try:
                     parser = ReasoningParser(
                         model_type=reasoning_parser,
@@ -1228,7 +1234,8 @@ class OpenAIServingChat(OpenAIServingBase):
         """Judge whether the request needs reasoning"""
         if not self.reasoning_parser:
             return False
-        if self.reasoning_parser in ["deepseek-v3"]:
+        # Do we want to think by default?
+        if self.reasoning_parser in ["deepseek-v3", "gemma4"]:
             # Models that require explicit enable thinking (thinking=True)
             return (
                 request.chat_template_kwargs is not None
