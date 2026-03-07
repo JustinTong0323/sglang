@@ -331,6 +331,13 @@ def _override_deepseek_ocr_v_head_dim(config: DeepseekVLV2Config) -> None:
     if config.text_config.v_head_dim == 0:
         V_HEAD_DIM_PATCH = 128
         config.text_config.v_head_dim = V_HEAD_DIM_PATCH
+        # Also fix language_config so get_hf_text_config (which may prefer it
+        # over text_config) stays consistent.
+        lc = getattr(config, "language_config", None)
+        if isinstance(lc, dict):
+            lc["v_head_dim"] = V_HEAD_DIM_PATCH
+        elif hasattr(lc, "v_head_dim"):
+            lc.v_head_dim = V_HEAD_DIM_PATCH
         logger.warning(
             f"Overriding deepseek-ocr's v_head_dim from 0 to {V_HEAD_DIM_PATCH} to avoid potential issues."
         )
@@ -741,6 +748,24 @@ def get_tokenizer(
             raise RuntimeError(err_msg) from e
         else:
             raise e
+
+    # Transformers v5 may silently fall back to a generic TokenizersBackend
+    # when trust_remote_code=False and the model requires a custom tokenizer.
+    # Detect this and auto-retry with trust_remote_code=True.
+    if not trust_remote_code and type(tokenizer).__name__ == "TokenizersBackend":
+        logger.info(
+            "Detected generic TokenizersBackend for %s, "
+            "retrying with trust_remote_code=True",
+            tokenizer_name,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_name,
+            *args,
+            trust_remote_code=True,
+            tokenizer_revision=tokenizer_revision,
+            clean_up_tokenization_spaces=False,
+            **kwargs,
+        )
 
     if not isinstance(tokenizer, PreTrainedTokenizerFast):
         warnings.warn(
