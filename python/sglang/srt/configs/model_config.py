@@ -467,7 +467,7 @@ class ModelConfig:
                 )
                 if rope_type != "default":
                     mscale_all_dim = rope_scaling.get("mscale_all_dim", False)
-                    scaling_factor = rope_scaling["factor"]
+                    scaling_factor = rope_scaling.get("factor", 1.0)
                     mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
                     self.scaling = self.scaling * mscale * mscale
         elif "MiniCPM3ForCausalLM" in self.hf_config.architectures:
@@ -513,7 +513,7 @@ class ModelConfig:
                 mscale_all_dim = self.hf_config.rope_scaling.get(
                     "mscale_all_dim", False
                 )
-                scaling_factor = self.hf_config.rope_scaling["factor"]
+                scaling_factor = self.hf_config.rope_scaling.get("factor", 1.0)
                 mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
                 self.scaling = self.scaling * mscale * mscale
         elif "SarvamMLAForCausalLM" in self.hf_config.architectures:
@@ -530,7 +530,7 @@ class ModelConfig:
                 mscale_all_dim = self.hf_config.rope_scaling.get(
                     "mscale_all_dim", False
                 )
-                scaling_factor = self.hf_config.rope_scaling["factor"]
+                scaling_factor = self.hf_config.rope_scaling.get("factor", 1.0)
                 mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
                 self.scaling = self.scaling * mscale * mscale
         else:
