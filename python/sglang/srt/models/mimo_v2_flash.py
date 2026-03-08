@@ -573,8 +573,16 @@ class MiMoV2DecoderLayer(nn.Module):
         self.hidden_size = config.hidden_size
         self.layer_id = layer_id
 
-        rope_theta = config.rope_parameters["rope_theta"]
-        rope_scaling = config.rope_parameters
+        rope_theta = getattr(config, "rope_theta", 10000)
+        rope_scaling = getattr(config, "rope_scaling", None)
+        # In v5, rope_scaling is a property alias for rope_parameters and returns
+        # a standardized dict even when there's no actual scaling.  Treat the
+        # "default" (no-op) type as None so factory.py uses plain RotaryEmbedding.
+        if (
+            isinstance(rope_scaling, dict)
+            and rope_scaling.get("rope_type") == "default"
+        ):
+            rope_scaling = None
         max_position_embeddings = getattr(config, "max_position_embeddings", 32768)
 
         if self.is_swa_layer():
@@ -591,7 +599,7 @@ class MiMoV2DecoderLayer(nn.Module):
                     config, "add_swa_attention_sink_bias", False
                 ),
                 layer_id=layer_id,
-                rope_theta=config.rope_parameters.get("swa_rope_theta", rope_theta),
+                rope_theta=getattr(config, "swa_rope_theta", rope_theta),
                 rope_scaling=rope_scaling,
                 max_position_embeddings=max_position_embeddings,
                 quant_config=quant_config,
