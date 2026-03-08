@@ -6,6 +6,7 @@ from sglang.srt.function_call.base_format_detector import BaseFormatDetector
 from sglang.srt.function_call.core_types import StreamingParseResult
 from sglang.srt.function_call.deepseekv3_detector import DeepSeekV3Detector
 from sglang.srt.function_call.deepseekv32_detector import DeepSeekV32Detector
+from sglang.srt.function_call.gemma4_detector import Gemma4Detector
 from sglang.srt.function_call.gigachat3_detector import GigaChat3Detector
 from sglang.srt.function_call.glm4_moe_detector import Glm4MoeDetector
 from sglang.srt.function_call.glm47_moe_detector import Glm47MoeDetector
@@ -3722,6 +3723,98 @@ function call<|role_sep|>
 
         params = json.loads(tool_calls_by_index[0]["parameters"])
         self.assertEqual(params["city"], "Rome")
+
+
+class TestGemma4Detector(unittest.TestCase):
+    def setUp(self):
+        self.tools = [
+            Tool(
+                type="function",
+                function=Function(
+                    name="get_weather",
+                    description="Get weather information",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"},
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                            },
+                        },
+                        "required": ["location"],
+                    },
+                ),
+            )
+        ]
+        self.detector = Gemma4Detector()
+
+    def test_detect_and_parse(self):
+        text = 'Some text before <|tool_call>call:get_weather{location:<|"|>Tokyo<|"|>}<tool_call|>'
+        result = self.detector.detect_and_parse(text, self.tools)
+        
+        self.assertEqual(result.normal_text, "Some text before ")
+        self.assertEqual(len(result.calls), 1)
+        self.assertEqual(result.calls[0].name, "get_weather")
+        
+        params = json.loads(result.calls[0].parameters)
+        self.assertEqual(params["location"], "Tokyo")
+
+    def test_parse_streaming_increment(self):
+        chunks = [
+            "Some text ",
+            "before <|tool",
+            "_call>call:get_we",
+            "ather{location:<|",
+            '"|>Tokyo<|"|>}<tool_',
+            "call|> after"
+        ]
+        
+        all_results = []
+        for chunk in chunks:
+            res = self.detector.parse_streaming_increment(chunk, self.tools)
+            all_results.append(res)
+            
+        combined_normal_text = "".join(r.normal_text for r in all_results)
+        self.assertEqual(combined_normal_text, "Some text before  after")
+        
+        found_name = False
+        found_params = False
+        for res in all_results:
+            for call in res.calls:
+                if call.name == "get_weather":
+                    found_name = True
+                if call.parameters:
+                    params = json.loads(call.parameters)
+                    if params == {"location": "Tokyo"}:
+                        found_params = True
+        
+        self.assertTrue(found_name)
+        self.assertTrue(found_params)
+
+    def test_nested_array_streaming(self):
+        # Additional coverage for complex structure
+        chunks = [
+            "<|tool_call>call:get_weather{location:<|\"",
+            "|>New York<|\"|>,nested:[1, 2, {inner:<|\"|>",
+            "val<|\"|>}]}<tool_call|>"
+        ]
+        
+        all_results = []
+        for chunk in chunks:
+            res = self.detector.parse_streaming_increment(chunk, self.tools)
+            all_results.append(res)
+
+        found_params = False
+        for res in all_results:
+            for call in res.calls:
+                if call.parameters:
+                    params = json.loads(call.parameters)
+                    if "location" in params and params["location"] == "New York":
+                        if "nested" in params and params["nested"] == [1, 2, {"inner": "val"}]:
+                            found_params = True
+                            
+        self.assertTrue(found_params)
 
 
 if __name__ == "__main__":
