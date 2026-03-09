@@ -65,6 +65,7 @@ class SeparatorStyle(IntEnum):
     QWEN2_VL_EMBED = auto()
     QWEN2_AUDIO = auto()
     GEMMA3 = auto()
+    GEMMA4 = auto()
     MPT = auto()
     PADDLE_OCR = auto()
 
