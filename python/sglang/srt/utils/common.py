@@ -90,7 +90,6 @@ from torch import nn
 from torch.library import Library
 from torch.profiler import ProfilerActivity, profile, record_function
 from torch.utils._contextlib import _DecoratorContextManager
-from torchcodec.decoders import AudioDecoder
 from typing_extensions import Literal
 
 from sglang.srt.environ import envs
@@ -846,6 +845,8 @@ def decode_video_base64(video_base64):
 def load_audio(
     audio_file: str, sr: Optional[int] = None, mono: bool = True
 ) -> np.ndarray:
+    from torchcodec.decoders import AudioDecoder
+
     if sr is None:
         sr = 16000
 
