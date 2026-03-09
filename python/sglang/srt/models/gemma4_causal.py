@@ -315,9 +315,7 @@ class Gemma4Attention(nn.Module):
             layer_id=(
                 self.kv_shared_layer_index if self.is_kv_shared_layer else self.layer_id
             ),
-            logit_cap=getattr(
-                config, "attn_logit_softcapping", 0.0
-            ),
+            logit_cap=0.0,
             sliding_window_size=self.sliding_window,
             quant_config=quant_config,
             prefix=add_prefix("attn", prefix),
@@ -711,8 +709,8 @@ class Gemma4TextModel(PreTrainedModel):
 
         if input_ids is not None:
             input_embeds = self.embed_tokens(input_ids)
-            per_layer_embeds = self.get_per_layer_inputs(input_ids)
-            per_layer_inputs = self.project_per_layer_inputs(input_embeds, per_layer_embeds)
+            per_layer_inputs = self.get_per_layer_inputs(input_ids)
+        per_layer_inputs = self.project_per_layer_inputs(input_embeds, per_layer_inputs)
 
         hidden_states = input_embeds
 

@@ -360,6 +360,7 @@ class ModelConfig:
             "MiMoV2FlashForCausalLM",
             "MiMoV2MTP",
             "Gemma4ForCausalLM",
+            "Gemma4ForConditionalGeneration",
         ]
 
     def _derive_context_length(self, context_length: int):
@@ -1409,6 +1410,7 @@ def is_hybrid_swa_model(model_architectures: List[str]):
         "Step3p5ForCausalLM",
         "Step3p5MTP",
         "Gemma4ForCausalLM",
+        "Gemma4ForConditionalGeneration",
     }
     return any(arch in hybrid_swa_archs for arch in model_architectures)
 
@@ -1460,6 +1462,14 @@ def get_hybrid_layer_ids(
         swa_attention_layer_ids = [0]
         full_attention_layer_ids = []
     elif "Gemma4ForCausalLM" in model_architectures:
+        layer_types = getattr(hf_text_config, "layer_types", None)
+        swa_attention_layer_ids = [
+            i for i, x in enumerate(layer_types) if x == "sliding_attention"
+        ]
+        full_attention_layer_ids = [
+            i for i, x in enumerate(layer_types) if x == "full_attention"
+        ]
+    elif "Gemma4ForConditionalGeneration" in model_architectures:
         layer_types = getattr(hf_text_config, "layer_types", None)
         swa_attention_layer_ids = [
             i for i, x in enumerate(layer_types) if x == "sliding_attention"
