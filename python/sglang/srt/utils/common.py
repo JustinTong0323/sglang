@@ -92,6 +92,13 @@ from torch.profiler import ProfilerActivity, profile, record_function
 from torch.utils._contextlib import _DecoratorContextManager
 from typing_extensions import Literal
 
+try:
+    from torchcodec.decoders import AudioDecoder
+
+    _HAS_TORCHCODEC_AUDIO = True
+except (ImportError, RuntimeError):
+    _HAS_TORCHCODEC_AUDIO = False
+
 from sglang.srt.environ import envs
 from sglang.srt.observability.func_timer import enable_func_timer
 from sglang.srt.utils.video_decoder import VideoDecoderWrapper
@@ -845,13 +852,6 @@ def decode_video_base64(video_base64):
 def load_audio(
     audio_file: str, sr: Optional[int] = None, mono: bool = True
 ) -> np.ndarray:
-    try:
-        from torchcodec.decoders import AudioDecoder
-
-        _HAS_TORCHCODEC = True
-    except (ImportError, RuntimeError):
-        _HAS_TORCHCODEC = False
-
     if sr is None:
         sr = 16000
 
@@ -874,7 +874,7 @@ def load_audio(
     else:
         raise ValueError(f"Invalid audio format: {audio_file}")
 
-    if _HAS_TORCHCODEC:
+    if _HAS_TORCHCODEC_AUDIO:
         decoder = AudioDecoder(
             source,
             sample_rate=sr,
