@@ -29,6 +29,8 @@ from transformers import (
 )
 from transformers.models.auto.modeling_auto import AutoModel
 
+from sglang.srt.models.gemma4_vision import Gemma4VisionEncoder
+
 from sglang.srt.layers.layernorm import Gemma4RMSNorm
 from sglang.srt.layers.linear import RowParallelLinear
 from sglang.srt.layers.logits_processor import LogitsProcessor
@@ -127,7 +129,6 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         ".k_proj.",
         ".v_proj.",
         ".o_proj.",
-        ".out_proj.",
     ]
     bitsandbytes_stacked_params_mapping = {
         "q_proj": ("qkv_proj", 0),
@@ -135,7 +136,6 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         "v_proj": ("qkv_proj", 2),
         "gate_proj": ("gate_up_proj", 0),
         "up_proj": ("gate_up_proj", 1),
-        "out_proj": ("proj", 0),
     }
 
     packed_modules_mapping = {
@@ -174,8 +174,11 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
 
         prefix = add_prefix("model", prefix)
 
-        # Vision components
-        self.vision_tower = AutoModel.from_config(config=config.vision_config)
+        self.vision_tower = Gemma4VisionEncoder(
+            config=config.vision_config,
+            quant_config=quant_config,
+            prefix=add_prefix("vision_tower", prefix),
+        )
 
         self.embed_vision = Gemma4MultimodalEmbedder(
             config.vision_config,
@@ -247,42 +250,9 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
 
             pv = pv.to(device=vt.device, dtype=self.language_model.dtype())
 
-            # Step 1: Patchify, pad to max_patches (2520), build positions
-            patch_positions, padding_positions = vt._patch_positions(pv)
-            inputs_embeds = vt.patch_embedder(
-                pv,
-                patch_positions[:, : vt._num_real_patches(pv)],
-                padding_positions[:, : vt._num_real_patches(pv)],
-            )
-            num_real = inputs_embeds.shape[1]
-            num_padding = vt.max_patches - num_real
-            if num_padding > 0:
-                pad_embeds = torch.zeros(
-                    inputs_embeds.shape[0],
-                    num_padding,
-                    inputs_embeds.shape[2],
-                    device=inputs_embeds.device,
-                    dtype=inputs_embeds.dtype,
-                )
-                inputs_embeds = torch.cat([inputs_embeds, pad_embeds], dim=1)
+            pooled, pooler_mask = vt(pv)
 
-            # Step 2: Encode
-            model_output = vt.encoder(
-                inputs_embeds=inputs_embeds,
-                attention_mask=~padding_positions,
-                patch_positions=patch_positions,
-            )
-
-            # Step 3: Pool to default_output_length (280) tokens
-            pooler_output = vt.pooler(
-                hidden_states=model_output.last_hidden_state,
-                patch_positions=patch_positions,
-                padding_positions=padding_positions,
-            )
-            hidden_states, pooler_mask = pooler_output[0]
-
-            # Step 4: Strip padding per-image and embed
-            for hs, mask in zip(hidden_states, pooler_mask):
+            for hs, mask in zip(pooled, pooler_mask):
                 real_tokens = hs[mask]
                 all_embeds.append(
                     self.embed_vision(inputs_embeds=real_tokens.unsqueeze(0)).squeeze(0)
@@ -378,8 +348,12 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             )
 
         positions += 1
+        per_layer_inputs = None
         if input_ids is not None:
-            per_layer_inputs = self.get_per_layer_inputs(input_ids)
+            ple_ids = input_ids.clone()
+            ple_ids[input_ids == self.config.image_token_id] = 0
+            ple_ids[input_ids == self.config.audio_token_id] = 0
+            per_layer_inputs = self.get_per_layer_inputs(ple_ids)
 
         # Use general_mm_embed_routine for handling multimodal data
         hidden_states = general_mm_embed_routine(
@@ -427,23 +401,22 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 continue
 
             name = re.sub(r"^model\.", "", name)
+            orig_name = name
             for param_name, weight_name, shard_id in stacked_params_mapping:
                 if weight_name not in name:
                     continue
                 name = name.replace(weight_name, param_name)
-                # Skip loading extra bias for GPTQ models
                 if name.endswith(".bias") and name not in params_dict:
+                    name = orig_name
                     continue
                 if name not in params_dict:
+                    name = orig_name
                     continue
                 param = params_dict[name]
                 weight_loader = param.weight_loader
                 weight_loader(param, loaded_weight, shard_id)
                 break
             else:
-                if "vision_model" in name:
-                    # adapt to VisionAttention
-                    name = name.replace(".self_attn.out_proj", ".self_attn.proj")
                 # Skip loading extra bias for GPTQ models
                 if name.endswith(".bias") and name not in params_dict:
                     continue

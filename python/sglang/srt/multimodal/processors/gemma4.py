@@ -35,9 +35,7 @@ class Gemma4SGLangProcessor(SGLangBaseProcessor):
         self.AUDIO_START_TOKEN_ID = hf_config.boa_token_id
         self.AUDIO_END_TOKEN_ID = hf_config.eoa_token_id
         self.mm_tokens = MultimodalSpecialTokens(
-            image_token="<image_soft_token>",
             image_token_id=hf_config.image_token_id,
-            audio_token="<audio_soft_token>",
             audio_token_id=hf_config.audio_token_id,
         ).build(_processor)
 
