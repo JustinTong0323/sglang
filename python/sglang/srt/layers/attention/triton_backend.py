@@ -820,12 +820,9 @@ class TritonAttnBackend(AttentionBackend):
             o = torch.empty_like(q)
 
         if k is None and v is None:
-            k, v = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
-            # FIXME: hacky way to make kv cache aligned
-            # why???
-            k = k[1 : q.shape[0] + 1]
-            v = v[1 : q.shape[0] + 1]
-            # print(layer.layer_id, k.cpu(), v.cpu())
+            k_buffer, v_buffer = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
+            k = k_buffer[forward_batch.out_cache_loc]
+            v = v_buffer[forward_batch.out_cache_loc]
         elif k is None or v is None:
             raise ValueError("Both k and v should be None or not None")
         else:
