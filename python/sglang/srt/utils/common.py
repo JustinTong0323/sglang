@@ -92,16 +92,9 @@ from torch.profiler import ProfilerActivity, profile, record_function
 from torch.utils._contextlib import _DecoratorContextManager
 from typing_extensions import Literal
 
-try:
-    from torchcodec.decoders import AudioDecoder
-
-    _HAS_TORCHCODEC_AUDIO = True
-except (ImportError, RuntimeError):
-    _HAS_TORCHCODEC_AUDIO = False
-
 from sglang.srt.environ import envs
 from sglang.srt.observability.func_timer import enable_func_timer
-from sglang.srt.utils.video_decoder import VideoDecoderWrapper
+from sglang.srt.utils.video_decoder import _BACKEND, VideoDecoderWrapper
 
 if TYPE_CHECKING:
     from sglang.srt.server_args import ServerArgs
@@ -874,7 +867,9 @@ def load_audio(
     else:
         raise ValueError(f"Invalid audio format: {audio_file}")
 
-    if _HAS_TORCHCODEC_AUDIO:
+    if _BACKEND == "torchcodec":
+        from torchcodec.decoders import AudioDecoder
+
         decoder = AudioDecoder(
             source,
             sample_rate=sr,
