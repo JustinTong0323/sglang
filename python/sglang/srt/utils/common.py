@@ -845,13 +845,17 @@ def decode_video_base64(video_base64):
 def load_audio(
     audio_file: str, sr: Optional[int] = None, mono: bool = True
 ) -> np.ndarray:
-    from torchcodec.decoders import AudioDecoder
+    try:
+        from torchcodec.decoders import AudioDecoder
+
+        _HAS_TORCHCODEC = True
+    except (ImportError, RuntimeError):
+        _HAS_TORCHCODEC = False
 
     if sr is None:
         sr = 16000
 
-    # Normalize input to a source that AudioDecoder accepts
-    # (str path/URL, bytes, or file-like object)
+    # Normalize input: resolve URL / base64 / file:// to bytes or path
     if isinstance(audio_file, bytes):
         source = audio_file
     elif isinstance(audio_file, str) and audio_file.startswith("data:"):
@@ -870,18 +874,45 @@ def load_audio(
     else:
         raise ValueError(f"Invalid audio format: {audio_file}")
 
-    # AudioDecoder handles decoding, resampling, and channel conversion in one step
-    decoder = AudioDecoder(
-        source,
-        sample_rate=sr,
-        num_channels=1 if mono else None,
-    )
-    samples = decoder.get_all_samples()
-    # AudioDecoder returns (channels, time); squeeze mono to 1-D,
-    # transpose multi-channel to (time, channels) for backward compat
-    if mono:
-        return samples.data.squeeze(0).numpy()
-    return samples.data.T.numpy()
+    if _HAS_TORCHCODEC:
+        decoder = AudioDecoder(
+            source,
+            sample_rate=sr,
+            num_channels=1 if mono else None,
+        )
+        samples = decoder.get_all_samples()
+        if mono:
+            return samples.data.squeeze(0).numpy()
+        return samples.data.T.numpy()
+
+    # Fallback: soundfile + torchaudio (ARM / no FFmpeg)
+    import soundfile as sf
+    import torch
+    import torchaudio
+
+    if isinstance(source, bytes):
+        audio, original_sr = sf.read(BytesIO(source))
+    else:
+        audio, original_sr = sf.read(source)
+
+    if mono and len(audio.shape) > 1:
+        audio = np.mean(audio, axis=1)
+
+    if original_sr != sr:
+        audio_tensor = torch.from_numpy(audio).float()
+        if audio_tensor.dim() == 1:
+            audio_tensor = audio_tensor.unsqueeze(0)
+        else:
+            audio_tensor = audio_tensor.T
+        audio_tensor = torchaudio.functional.resample(
+            audio_tensor, orig_freq=original_sr, new_freq=sr
+        )
+        if audio_tensor.shape[0] == 1:
+            audio = audio_tensor.squeeze(0).numpy()
+        else:
+            audio = audio_tensor.T.numpy()
+
+    return audio
 
 
 @dataclass
