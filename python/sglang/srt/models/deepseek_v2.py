@@ -1197,6 +1197,11 @@ class DeepseekV2AttentionMLA(
 
             if rope_scaling:
                 mscale_all_dim = rope_scaling.get("mscale_all_dim", False)
+                if "factor" not in rope_scaling:
+                    logger.warning(
+                        "DeepSeek rope_scaling missing 'factor', defaulting to 1.0. "
+                        "Check model accuracy.",
+                    )
                 scaling_factor = rope_scaling.get("factor", 1.0)
                 mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
                 self.scaling = self.scaling * mscale * mscale

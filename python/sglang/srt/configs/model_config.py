@@ -468,6 +468,12 @@ class ModelConfig:
                 )
                 if rope_type != "default":
                     mscale_all_dim = rope_scaling.get("mscale_all_dim", False)
+                    if "factor" not in rope_scaling:
+                        logger.warning(
+                            "rope_scaling (type=%s) missing 'factor', defaulting to 1.0. "
+                            "Check model accuracy.",
+                            rope_type,
+                        )
                     scaling_factor = rope_scaling.get("factor", 1.0)
                     mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
                     self.scaling = self.scaling * mscale * mscale
@@ -514,6 +520,11 @@ class ModelConfig:
                 mscale_all_dim = self.hf_config.rope_scaling.get(
                     "mscale_all_dim", False
                 )
+                if "factor" not in self.hf_config.rope_scaling:
+                    logger.warning(
+                        "BailingMoe rope_scaling missing 'factor', defaulting to 1.0. "
+                        "Check model accuracy.",
+                    )
                 scaling_factor = self.hf_config.rope_scaling.get("factor", 1.0)
                 mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
                 self.scaling = self.scaling * mscale * mscale
@@ -531,6 +542,11 @@ class ModelConfig:
                 mscale_all_dim = self.hf_config.rope_scaling.get(
                     "mscale_all_dim", False
                 )
+                if "factor" not in self.hf_config.rope_scaling:
+                    logger.warning(
+                        "SarvamMLA rope_scaling missing 'factor', defaulting to 1.0. "
+                        "Check model accuracy.",
+                    )
                 scaling_factor = self.hf_config.rope_scaling.get("factor", 1.0)
                 mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
                 self.scaling = self.scaling * mscale * mscale
