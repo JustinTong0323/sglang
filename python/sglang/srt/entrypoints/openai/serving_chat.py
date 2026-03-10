@@ -951,7 +951,6 @@ class OpenAIServingChat(OpenAIServingBase):
                     self.template_manager.force_reasoning
                     or self._get_reasoning_from_request(request)
                 )
-                print(f"is_force_reasoning: {self.template_manager.force_reasoning}, self._get_reasoning_from_request(request): {self._get_reasoning_from_request(request)}")
                 try:
                     parser = ReasoningParser(
                         model_type=reasoning_parser,

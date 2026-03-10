@@ -22,6 +22,7 @@ from sglang.srt.layers.rotary_embedding.rope_variant import (
     FourierRotaryEmbedding,
     Llama3RotaryEmbedding,
     Phi3LongRoPEScaledRotaryEmbedding,
+    Gemma4RotaryEmbedding,
 )
 from sglang.srt.layers.rotary_embedding.yarn import YaRNScalingRotaryEmbedding
 from sglang.srt.utils import get_bool_env_var, is_hip
@@ -274,6 +275,15 @@ def get_rope(
                 short_factor,
                 long_factor,
                 **extra_kwargs,
+            )
+        elif scaling_type == "proportional":
+            rotary_emb = Gemma4RotaryEmbedding(
+                head_size,
+                rotary_dim,
+                max_position,
+                base,
+                is_neox_style,
+                dtype,
             )
         else:
             raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
