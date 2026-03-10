@@ -143,7 +143,6 @@ class ModelConfig:
         if enable_multimodal is None:
             mm_disabled_models = [
                 "Gemma3ForConditionalGeneration",
-                # "Gemma4ForConditionalGeneration",
                 "Llama4ForConditionalGeneration",
                 "Step3VLForConditionalGeneration",
             ]
