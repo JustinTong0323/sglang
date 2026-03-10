@@ -238,7 +238,7 @@ class Gemma4VisionAttention(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Vision MLP (GeGLU, TP-sharded)
+# Vision MLP (GatedGELU, TP-sharded)
 # ---------------------------------------------------------------------------
 
 
@@ -250,6 +250,11 @@ class Gemma4VisionMLP(nn.Module):
         prefix: str = "",
     ):
         super().__init__()
+        if config.hidden_activation != "gelu_pytorch_tanh":
+            raise ValueError(
+                f"Gemma4VisionMLP expects hidden_activation='gelu_pytorch_tanh', "
+                f"got {config.hidden_activation!r}"
+            )
         self.gate_up = ClippableGateUpParallelLinear(
             input_size=config.hidden_size,
             intermediate_size=config.intermediate_size,
@@ -267,7 +272,7 @@ class Gemma4VisionMLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate, up = self.gate_up(x)
-        x = F.silu(gate) * up
+        x = F.gelu(gate, approximate="tanh") * up
         x = self.down_proj(x)
         return x
 

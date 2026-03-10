@@ -1,4 +1,8 @@
-""" """
+"""Multimodal encoder accuracy tests: compare HF vs SGLang encoder outputs.
+
+# TODO(kpham-sgl): Rename this file to test_mm_accuracy.py — it now covers both
+# vision and audio encoder comparisons, not just VLM embeddings.
+"""
 
 import unittest
 from typing import List, Optional
@@ -6,7 +10,7 @@ from typing import List, Optional
 import numpy as np
 import torch
 import torch.nn.functional as F
-from transformers import AutoModel, AutoProcessor, AutoTokenizer
+from transformers import AutoConfig, AutoModel, AutoProcessor, AutoTokenizer
 
 from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.entrypoints.openai.protocol import ChatCompletionRequest
@@ -318,3 +322,158 @@ class TestMiniCPMV4Logits(VisionLLMLogitsBase):
             )
 
         self.compare_outputs(sglang_output, hf_output)
+
+
+# ---------------------------------------------------------------------------
+# Gemma 4 encoder accuracy: vision tower + audio tower vs HF reference
+# ---------------------------------------------------------------------------
+
+
+class TestGemma4EncoderAccuracy(unittest.TestCase):
+    """Compare Gemma 4 vision and audio encoder outputs between HF and SGLang.
+
+    For each encoder we compare:
+      1. Raw tower output (before the multimodal embedder projection).
+      2. Projected output (tower + ``embed_vision`` / ``embed_audio``).
+
+    Inputs are random tensors so that the test is self-contained and does not
+    depend on image / audio files.
+    """
+
+    MODEL_PATH = "gg-hf-gg/gemma-4-e4b-it"
+    COSINE_THRESHOLD = 0.99
+
+    @classmethod
+    def setUpClass(cls):
+        cls.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # -- HF model: extract encoder components, discard the rest -----------
+        from transformers import (
+            Gemma4ForConditionalGeneration as HFGemma4ForConditionalGeneration,
+        )
+
+        hf_full = HFGemma4ForConditionalGeneration.from_pretrained(
+            cls.MODEL_PATH, torch_dtype=torch.bfloat16
+        )
+
+        cls.hf_vision_tower = hf_full.model.vision_tower.eval().to(cls.device)
+        cls.hf_embed_vision = hf_full.model.embed_vision.eval().to(cls.device)
+
+        cls.hf_audio_tower = None
+        cls.hf_embed_audio = None
+        cls.mel_bins = None
+        if hf_full.model.audio_tower is not None:
+            cls.hf_audio_tower = hf_full.model.audio_tower.eval().to(cls.device)
+            cls.hf_embed_audio = hf_full.model.embed_audio.eval().to(cls.device)
+            config = AutoConfig.from_pretrained(cls.MODEL_PATH)
+            cls.mel_bins = config.audio_config.input_feat_size
+
+        del hf_full
+        torch.cuda.empty_cache()
+
+        # -- SGLang model via ModelRunner -------------------------------------
+        cls.model_runner = ModelRunner(
+            model_config=ModelConfig(cls.MODEL_PATH, model_override_args="{}"),
+            mem_fraction_static=0.8,
+            gpu_id=0,
+            tp_rank=0,
+            tp_size=1,
+            moe_ep_rank=0,
+            moe_ep_size=1,
+            pp_rank=0,
+            pp_size=1,
+            nccl_port=12435,
+            server_args=ServerArgs(
+                model_path=cls.MODEL_PATH,
+                disable_cuda_graph=True,
+                mm_attention_backend="sdpa",
+            ),
+        )
+        cls.sg_model = cls.model_runner.model
+
+    # -- helpers --------------------------------------------------------------
+
+    @staticmethod
+    def _cosine_stats(a: torch.Tensor, b: torch.Tensor):
+        cos = F.cosine_similarity(a.float(), b.float())
+        return cos.mean().item(), cos.min().item()
+
+    def _assert_cosine_close(self, hf: torch.Tensor, sg: torch.Tensor, label: str):
+        mean_cos, min_cos = self._cosine_stats(hf, sg)
+        print(f"  {label}: mean_cos={mean_cos:.6f}  min_cos={min_cos:.6f}")
+        self.assertGreater(
+            min_cos,
+            self.COSINE_THRESHOLD,
+            f"{label} min cosine {min_cos:.6f} < {self.COSINE_THRESHOLD}",
+        )
+
+    # -- vision ---------------------------------------------------------------
+
+    def test_vision_encoder(self):
+        """Vision tower + embed_vision should match HF on random pixels."""
+        pixel_values = torch.randn(
+            1, 3, 768, 768, device=self.device, dtype=torch.bfloat16
+        )
+
+        with torch.no_grad():
+            # HF: last_hidden_state is [1, num_real_tokens, hidden] (padding stripped)
+            hf_out = self.hf_vision_tower(pixel_values)
+            hf_tokens = hf_out.last_hidden_state.squeeze(0)
+            hf_projected = self.hf_embed_vision(
+                hf_tokens.unsqueeze(0)
+            ).squeeze(0)
+
+            # SGLang: returns (pooled, pooler_mask) with mask True = valid
+            sg_pooled, sg_mask = self.sg_model.vision_tower(pixel_values)
+            sg_tokens = torch.cat(
+                [hs[m] for hs, m in zip(sg_pooled, sg_mask)]
+            )
+            sg_projected = self.sg_model.embed_vision(
+                sg_tokens.unsqueeze(0)
+            ).squeeze(0)
+
+        self.assertEqual(hf_tokens.shape, sg_tokens.shape)
+        print()
+        self._assert_cosine_close(hf_tokens, sg_tokens, "vision tower")
+        self._assert_cosine_close(hf_projected, sg_projected, "vision projected")
+
+    # -- audio ----------------------------------------------------------------
+
+    def test_audio_encoder(self):
+        """Audio tower + embed_audio should match HF on random mel input."""
+        if self.hf_audio_tower is None:
+            self.skipTest("Model does not have an audio tower")
+
+        num_frames = 200
+        audio_mel = torch.randn(
+            1, num_frames, self.mel_bins, device=self.device, dtype=torch.bfloat16
+        )
+        audio_mel_mask = torch.zeros(
+            1, num_frames, device=self.device, dtype=torch.bool
+        )
+
+        with torch.no_grad():
+            # HF: returns (encodings, mask) — does NOT zero-fill padding
+            hf_enc, hf_mask = self.hf_audio_tower(audio_mel, audio_mel_mask)
+            hf_valid_mask = ~hf_mask
+            hf_valid = hf_enc[hf_valid_mask.unsqueeze(-1).expand_as(hf_enc)].reshape(
+                -1, hf_enc.shape[-1]
+            )
+            hf_projected = self.hf_embed_audio(
+                hf_valid.unsqueeze(0)
+            ).squeeze(0)
+
+            # SGLang: returns (encodings, mask) — zero-fills padding positions
+            sg_enc, sg_mask = self.sg_model.audio_tower(audio_mel, audio_mel_mask)
+            sg_valid_mask = ~sg_mask
+            sg_valid = sg_enc[sg_valid_mask.unsqueeze(-1).expand_as(sg_enc)].reshape(
+                -1, sg_enc.shape[-1]
+            )
+            sg_projected = self.sg_model.embed_audio(
+                sg_valid.unsqueeze(0)
+            ).squeeze(0)
+
+        self.assertEqual(hf_valid.shape, sg_valid.shape)
+        print()
+        self._assert_cosine_close(hf_valid, sg_valid, "audio tower")
+        self._assert_cosine_close(hf_projected, sg_projected, "audio projected")

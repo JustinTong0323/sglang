@@ -36,13 +36,17 @@ from sglang.srt.layers.clippable_linear import (
     ClippableQKVParallelLinear,
     ClippableRowParallelLinear,
 )
+from sglang.srt.layers.dp_attention import (
+    get_attention_tp_rank,
+    get_attention_tp_size,
+)
 from sglang.srt.layers.layernorm import Gemma4RMSNorm
 from sglang.srt.layers.linear import (
     ColumnParallelLinear,
     RowParallelLinear,
 )
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
-from sglang.srt.utils import add_prefix, make_layers
+from sglang.srt.utils import add_prefix, make_layers, set_weight_attrs
 
 
 # ---------------------------------------------------------------------------
@@ -60,15 +64,17 @@ class Gemma4AudioRelativePositionEmbedding(nn.Module):
         super().__init__()
         self.config = config
 
-        self.num_heads = config.conf_num_attention_heads
+        tp_size = get_attention_tp_size()
+        total_num_heads = config.conf_num_attention_heads
         self.channels = config.hidden_size
-        self.head_dim = self.channels // self.num_heads
+        self.head_dim = self.channels // total_num_heads
+        self.num_heads = total_num_heads // tp_size
         self.max_backward = max(0, config.conf_attention_context_left - 1)
         self.max_forward = config.conf_attention_context_right
 
         self.pos_proj = ColumnParallelLinear(
             self.channels,
-            self.num_heads * self.head_dim,
+            config.hidden_size,
             bias=False,
             quant_config=quant_config,
             prefix=add_prefix("pos_proj", prefix),
@@ -208,9 +214,11 @@ class Gemma4AudioAttention(nn.Module):
         super().__init__()
         self.config = config
 
-        self.num_heads = config.conf_num_attention_heads
+        tp_size = get_attention_tp_size()
+        total_num_heads = config.conf_num_attention_heads
         self.hidden_size = config.hidden_size
-        self.head_dim = self.hidden_size // self.num_heads
+        self.head_dim = self.hidden_size // total_num_heads
+        self.num_heads = total_num_heads // tp_size
 
         self.chunk_size = config.conf_attention_chunk_size
         self.max_future_horizon = config.conf_attention_context_right
@@ -494,6 +502,7 @@ class Gemma4AudioSubSampleConvProjection(nn.Module):
             self.input_proj_in_features,
             config.hidden_size,
             bias=False,
+            input_is_parallel=False,
             quant_config=quant_config,
             prefix=add_prefix("input_proj_linear", prefix),
         )
@@ -641,6 +650,8 @@ class Gemma4AudioConformerLightConv1d(nn.Module):
         super().__init__()
         self.config = config
         self.causal_padding = config.conf_conv_kernel_size - 1
+        tp_size = get_attention_tp_size()
+        hidden_per_tp = config.hidden_size // tp_size
 
         self.register_buffer(
             "gradient_clipping",
@@ -659,17 +670,28 @@ class Gemma4AudioConformerLightConv1d(nn.Module):
             prefix=add_prefix("linear_start", prefix),
         )
         self.depthwise_conv1d = nn.Conv1d(
-            in_channels=config.hidden_size,
-            out_channels=config.hidden_size,
+            in_channels=hidden_per_tp,
+            out_channels=hidden_per_tp,
             kernel_size=config.conf_conv_kernel_size,
             stride=1,
             padding=0,
-            groups=config.hidden_size,
+            groups=hidden_per_tp,
             bias=False,
         )
         self.conv_norm = Gemma4RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps, scale_shift=0.0
+            hidden_per_tp, eps=config.rms_norm_eps, scale_shift=0.0
         )
+
+        tp_rank = get_attention_tp_rank()
+
+        def _shard_dim0(param, loaded_weight, _rank=tp_rank, _tp=tp_size):
+            shard = param.shape[0]
+            loaded_weight = loaded_weight.narrow(0, _rank * shard, shard)
+            param.data.copy_(loaded_weight)
+
+        set_weight_attrs(self.depthwise_conv1d.weight, {"weight_loader": _shard_dim0})
+        set_weight_attrs(self.conv_norm.weight, {"weight_loader": _shard_dim0})
+
         self.linear_end = ClippableRowParallelLinear(
             config.hidden_size,
             config.hidden_size,
@@ -788,6 +810,7 @@ class Gemma4AudioEncoder(nn.Module):
                 config.hidden_size,
                 config.output_proj_dims,
                 bias=True,
+                input_is_parallel=False,
                 quant_config=quant_config,
                 prefix=add_prefix("output_proj", prefix),
             )

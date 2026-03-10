@@ -25,10 +25,15 @@ from transformers import (
     AutoConfig,
     AutoModel,
     AutoModelForCausalLM,
-    AutoModelForVision2Seq,
     AutoProcessor,
     GenerationConfig,
 )
+
+try:
+    # TODO(kpham-sgl): For whatever reason the provided transformers package does not have this module
+    from transformers import AutoModelForVision2Seq
+except ImportError:
+    AutoModelForVision2Seq = None
 
 from sglang.srt.entrypoints.engine import Engine
 from sglang.srt.model_loader.ci_weight_validation import ci_validate_and_clean_hf_cache
