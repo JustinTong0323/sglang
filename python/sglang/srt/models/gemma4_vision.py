@@ -83,6 +83,11 @@ class ClippableQKVParallelLinear(nn.Module):
     Owns a single ``QKVParallelLinear`` for the fused matmul.  Clip bounds
     are stored as flat buffers: shared ``input_min/max`` (applied before the
     matmul) and per-projection ``q/k/v_output_min/max`` (applied after split).
+
+    The checkpoint stores separate ``input_min/max`` for each of q, k, v but
+    they are identical (all three projections receive the same hidden_states),
+    so we collapse them into a single shared buffer (last write wins during
+    weight loading).
     """
 
     def __init__(
@@ -130,6 +135,10 @@ class ClippableGateUpParallelLinear(nn.Module):
     Same pattern as ``ClippableQKVParallelLinear``: owns a single
     ``MergedColumnParallelLinear`` for the fused matmul, with shared input
     bounds and per-projection output bounds as flat buffers.
+
+    The checkpoint stores separate ``input_min/max`` for gate and up but they
+    are identical (both projections receive the same MLP input), so we collapse
+    them into a single shared buffer (last write wins during weight loading).
     """
 
     def __init__(

@@ -414,11 +414,19 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                     name = alt
 
             # Vision encoder fused projections (ClippableQKV / ClippableGateUp):
+            #
+            # QKV (self_attn.{q,k,v}_proj → self_attn.qkv):
             #   weight/bias:  *.q_proj.weight → *.qkv.q_proj.weight  (stacked params then fuses)
             #   output bound: *.q_proj.output_min → *.qkv.q_output_min
             #   input bound:  *.{q,k,v}_proj.input_min → *.qkv.input_min
             #                (all are identical in the checkpoint -- same hidden_states input --
             #                 so they collapse to a single shared buffer; last write wins)
+            #
+            # GateUp (mlp.{gate,up}_proj → mlp.gate_up):
+            #   weight/bias:  *.gate_proj.weight → *.gate_up.gate_proj.weight
+            #   output bound: *.gate_proj.output_min → *.gate_up.gate_output_min
+            #   input bound:  *.{gate,up}_proj.input_min → *.gate_up.input_min
+            #                (same collapse as QKV -- both see the same MLP input)
             if "vision_tower." in name:
                 m = re.match(
                     r"(.+\.self_attn)\.(q_proj|k_proj|v_proj)\.(.*)", name
