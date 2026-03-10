@@ -32,7 +32,7 @@ from transformers.models.auto.modeling_auto import AutoModel
 from sglang.srt.models.gemma4_vision import Gemma4VisionEncoder
 
 from sglang.srt.layers.layernorm import Gemma4RMSNorm
-from sglang.srt.layers.linear import RowParallelLinear
+from sglang.srt.layers.linear import ReplicatedLinear
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.managers.mm_utils import (
@@ -93,7 +93,7 @@ class Gemma4MultimodalEmbedder(nn.Module):
             or multimodal_config.hidden_size
         )
 
-        self.embedding_projection = RowParallelLinear(
+        self.embedding_projection = ReplicatedLinear(
             embedding_dim,
             self.text_hidden_size,
             bias=False,
