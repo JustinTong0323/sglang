@@ -22,156 +22,15 @@ from einops import rearrange
 from transformers import Gemma4VisionConfig
 
 from sglang.srt.layers.attention.vision import QKV_BACKEND_IMPL, VisionAttention
+from sglang.srt.layers.clippable_linear import (
+    ClippableGateUpParallelLinear,
+    ClippableQKVParallelLinear,
+    ClippableRowParallelLinear,
+)
 from sglang.srt.layers.dp_attention import get_attention_tp_rank, get_attention_tp_size
 from sglang.srt.layers.layernorm import Gemma4RMSNorm
-from sglang.srt.layers.linear import (
-    MergedColumnParallelLinear,
-    QKVParallelLinear,
-    RowParallelLinear,
-)
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.utils import add_prefix, get_device_capability, is_cuda
-
-
-# ---------------------------------------------------------------------------
-# Activation clamping (matches HF Gemma4ClippableLinear)
-# ---------------------------------------------------------------------------
-
-_INF = float("inf")
-
-
-class ClippableLinear(nn.Module):
-    """``RowParallelLinear`` with input/output activation clamping.
-
-    Mirrors HF's ``Gemma4ClippableLinear``: owns the linear layer and applies
-    ``torch.clamp`` before and after the linear forward pass.  Clip bounds
-    default to ±inf (no-op) and are populated from the checkpoint.
-    """
-
-    def __init__(
-        self,
-        input_size: int,
-        output_size: int,
-        *,
-        bias: bool = True,
-        quant_config: Optional[QuantizationConfig] = None,
-        prefix: str = "",
-    ):
-        super().__init__()
-        self.linear = RowParallelLinear(
-            input_size=input_size,
-            output_size=output_size,
-            bias=bias,
-            quant_config=quant_config,
-            prefix=add_prefix("linear", prefix),
-        )
-        self.input_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
-        self.input_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
-        self.output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
-        self.output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
-
-    def forward(self, x: torch.Tensor):
-        x = torch.clamp(x, self.input_min, self.input_max)
-        x, _ = self.linear(x)
-        x = torch.clamp(x, self.output_min, self.output_max)
-        return x
-
-
-class ClippableQKVParallelLinear(nn.Module):
-    """Fused QKV projection with per-projection activation clamping.
-
-    Owns a single ``QKVParallelLinear`` for the fused matmul.  Clip bounds
-    are stored as flat buffers: shared ``input_min/max`` (applied before the
-    matmul) and per-projection ``q/k/v_output_min/max`` (applied after split).
-
-    The checkpoint stores separate ``input_min/max`` for each of q, k, v but
-    they are identical (all three projections receive the same hidden_states),
-    so we collapse them into a single shared buffer (last write wins during
-    weight loading).
-    """
-
-    def __init__(
-        self,
-        config: Gemma4VisionConfig,
-        quant_config: Optional[QuantizationConfig] = None,
-        prefix: str = "",
-    ):
-        super().__init__()
-        tp_size = get_attention_tp_size()
-        self.q_size = (config.num_attention_heads // tp_size) * config.head_dim
-        self.kv_size = (config.num_key_value_heads // tp_size) * config.head_dim
-
-        self.qkv_proj = QKVParallelLinear(
-            hidden_size=config.hidden_size,
-            head_size=config.head_dim,
-            total_num_heads=config.num_attention_heads,
-            total_num_kv_heads=config.num_key_value_heads,
-            bias=config.attention_bias,
-            quant_config=quant_config,
-            prefix=add_prefix("qkv_proj", prefix),
-        )
-        self.input_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
-        self.input_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
-        self.q_output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
-        self.q_output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
-        self.k_output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
-        self.k_output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
-        self.v_output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
-        self.v_output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
-
-    def forward(self, hidden_states: torch.Tensor):
-        x = torch.clamp(hidden_states, self.input_min, self.input_max)
-        qkv, _ = self.qkv_proj(x)
-        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-        q = torch.clamp(q, self.q_output_min, self.q_output_max)
-        k = torch.clamp(k, self.k_output_min, self.k_output_max)
-        v = torch.clamp(v, self.v_output_min, self.v_output_max)
-        return q, k, v
-
-
-class ClippableGateUpParallelLinear(nn.Module):
-    """Fused gate/up projection with per-projection activation clamping.
-
-    Same pattern as ``ClippableQKVParallelLinear``: owns a single
-    ``MergedColumnParallelLinear`` for the fused matmul, with shared input
-    bounds and per-projection output bounds as flat buffers.
-
-    The checkpoint stores separate ``input_min/max`` for gate and up but they
-    are identical (both projections receive the same MLP input), so we collapse
-    them into a single shared buffer (last write wins during weight loading).
-    """
-
-    def __init__(
-        self,
-        config: Gemma4VisionConfig,
-        quant_config: Optional[QuantizationConfig] = None,
-        prefix: str = "",
-    ):
-        super().__init__()
-        tp_size = get_attention_tp_size()
-        self.proj_size = config.intermediate_size // tp_size
-
-        self.gate_up_proj = MergedColumnParallelLinear(
-            input_size=config.hidden_size,
-            output_sizes=[config.intermediate_size, config.intermediate_size],
-            bias=False,
-            quant_config=quant_config,
-            prefix=add_prefix("gate_up_proj", prefix),
-        )
-        self.input_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
-        self.input_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
-        self.gate_output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
-        self.gate_output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
-        self.up_output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
-        self.up_output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
-
-    def forward(self, x: torch.Tensor):
-        x = torch.clamp(x, self.input_min, self.input_max)
-        gate_up, _ = self.gate_up_proj(x)
-        gate, up = gate_up.split([self.proj_size, self.proj_size], dim=-1)
-        gate = torch.clamp(gate, self.gate_output_min, self.gate_output_max)
-        up = torch.clamp(up, self.up_output_min, self.up_output_max)
-        return gate, up
 
 
 # ---------------------------------------------------------------------------
@@ -282,9 +141,15 @@ class Gemma4VisionAttention(nn.Module):
         self.num_kv_heads_per_partition = config.num_key_value_heads // tp_size
 
         self.qkv = ClippableQKVParallelLinear(
-            config, quant_config=quant_config, prefix=prefix,
+            hidden_size=config.hidden_size,
+            head_size=config.head_dim,
+            total_num_heads=config.num_attention_heads,
+            total_num_kv_heads=config.num_key_value_heads,
+            bias=config.attention_bias,
+            quant_config=quant_config,
+            prefix=prefix,
         )
-        self.o_proj = ClippableLinear(
+        self.o_proj = ClippableRowParallelLinear(
             input_size=config.num_attention_heads * config.head_dim,
             output_size=config.hidden_size,
             bias=config.attention_bias,
@@ -386,9 +251,13 @@ class Gemma4VisionMLP(nn.Module):
     ):
         super().__init__()
         self.gate_up = ClippableGateUpParallelLinear(
-            config, quant_config=quant_config, prefix=prefix,
+            input_size=config.hidden_size,
+            intermediate_size=config.intermediate_size,
+            bias=False,
+            quant_config=quant_config,
+            prefix=prefix,
         )
-        self.down_proj = ClippableLinear(
+        self.down_proj = ClippableRowParallelLinear(
             input_size=config.intermediate_size,
             output_size=config.hidden_size,
             bias=False,
