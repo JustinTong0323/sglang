@@ -165,6 +165,7 @@ class VisionSdpaAttention(nn.Module):
         dropout: float = 0.0,
         flatten_batch: bool = False,
         softmax_in_single_precision: bool = False,
+        softmax_scale: float | None = None,
         **kwargs,
     ):
         super().__init__()
@@ -174,7 +175,7 @@ class VisionSdpaAttention(nn.Module):
         self.flatten_batch = flatten_batch
         self.softmax_in_single_precision = softmax_in_single_precision
         self.dropout = dropout
-        self.scale = 1.0 / math.sqrt(self.head_size)
+        self.scale = softmax_scale if softmax_scale is not None else 1.0 / math.sqrt(self.head_size)
 
     @staticmethod
     @lru_cache(maxsize=128)
@@ -296,6 +297,7 @@ class VisionSdpaAttention(nn.Module):
                 attn_mask=attention_mask,
                 dropout_p=self.dropout,
                 is_causal=False,
+                scale=self.scale,
             )
 
         # [b, h, s, head_size] --> [b * s, h, head_size]
@@ -332,9 +334,12 @@ class VisionTritonAttention(nn.Module):
         r"""
         Args:
             cu_seqlens: [b]
+            softmax_scale: override softmax scale (default 1/sqrt(head_dim))
         Returns:
              [b * s, h, head_size]
         """
+        softmax_scale = kwargs.get("softmax_scale", None)
+
         if envs.SGLANG_VIT_ENABLE_CUDA_GRAPH.get():
             if "output_ws" not in kwargs:
                 raise RuntimeError("output_ws should be prepared for cuda-graph mode")
@@ -352,6 +357,7 @@ class VisionTritonAttention(nn.Module):
                 cu_seqlens[1],
                 cu_seqlens[2],
                 is_causal=False,
+                sm_scale=softmax_scale,
             )
         else:
             cu_seqlens = resolve_seqlens(cu_seqlens, bsz, seq_len, device=q.device)
@@ -370,6 +376,7 @@ class VisionTritonAttention(nn.Module):
                 seq_lens.cuda(),
                 max_seqlen,
                 is_causal=False,
+                sm_scale=softmax_scale,
             )
 
         return output
@@ -404,6 +411,8 @@ class VisionFlash3Attention(nn.Module):
         Returns:
              [b * s, h, head_size]
         """
+        softmax_scale = kwargs.get("softmax_scale", None)
+
         if envs.SGLANG_VIT_ENABLE_CUDA_GRAPH.get():
             max_seqlen = cu_seqlens[1]
             output = flash_attn_func(
@@ -414,6 +423,7 @@ class VisionFlash3Attention(nn.Module):
                 cu_seqlens_k=cu_seqlens[0],
                 max_seqlen_q=max_seqlen,
                 max_seqlen_k=max_seqlen,
+                softmax_scale=softmax_scale,
             )
         else:
             cu_seqlens = resolve_seqlens(cu_seqlens, bsz, seq_len, device=q.device)
@@ -429,6 +439,7 @@ class VisionFlash3Attention(nn.Module):
                 cu_seqlens_k=cu_seqlens,
                 max_seqlen_q=max_seqlen,
                 max_seqlen_k=max_seqlen,
+                softmax_scale=softmax_scale,
             )
 
         return output
@@ -468,6 +479,8 @@ class VisionFlash4Attention(nn.Module):
                 )
             cu_seqlens = cu_seqlens.get_data()
 
+        softmax_scale = kwargs.get("softmax_scale", None)
+
         cu_seqlens = cu_seqlens.to(dtype=torch.int32).to(q.device)
         seq_lens = cu_seqlens[1:] - cu_seqlens[:-1]
         max_seqlen = seq_lens.max().item()
@@ -480,6 +493,7 @@ class VisionFlash4Attention(nn.Module):
             cu_seqlens_k=cu_seqlens,
             max_seqlen_q=max_seqlen,
             max_seqlen_k=max_seqlen,
+            softmax_scale=softmax_scale,
             ver=4,
         )
 
@@ -635,6 +649,8 @@ class VisionAiterAttention(nn.Module):
         seq_len: int,
         **kwargs,
     ) -> torch.Tensor:
+        softmax_scale = kwargs.get("softmax_scale", None)
+
         cu_seqlens = resolve_seqlens(cu_seqlens, bsz, seq_len, device=q.device)
 
         cu_seqlens = cu_seqlens.to(dtype=torch.int32).to(q.device)
@@ -649,6 +665,7 @@ class VisionAiterAttention(nn.Module):
             cu_seqlens_k=cu_seqlens,
             max_seqlen_q=max_seqlen,
             max_seqlen_k=max_seqlen,
+            softmax_scale=softmax_scale,
         )
 
 
@@ -692,15 +709,18 @@ class VisionAscendAttention(nn.Module):
             output = torch.empty_like(q)
             seq_len_arg = seq_lens.to(torch.int32)
 
+
         _, num_heads, head_size = q.shape
         num_kv_heads = k.shape[1]
+
+        scale_value = kwargs.get("softmax_scale") or head_size**-0.5
 
         torch_npu._npu_flash_attention_unpad(
             query=q,
             key=k,
             value=v,
             seq_len=seq_len_arg,
-            scale_value=head_size**-0.5,
+            scale_value=scale_value,
             num_heads=num_heads,
             num_kv_heads=num_kv_heads,
             out=output,
@@ -742,6 +762,7 @@ class VisionAttention(nn.Module):
         quant_config: Optional[QuantizationConfig] = None,
         dropout: float = 0.0,
         softmax_in_single_precision: bool = False,
+        softmax_scale: Optional[float] = None,
         flatten_batch: bool = False,
         prefix: str = "",
         proj_bias: bool = True,
@@ -806,6 +827,7 @@ class VisionAttention(nn.Module):
         self.customized_position_embedding_applier = (
             customized_position_embedding_applier
         )
+        self.softmax_scale = softmax_scale
         self.qkv_backend = QKV_BACKEND_IMPL[qkv_backend](
             head_dim=self.head_size,
             num_heads=self.num_attention_heads_per_partition,
@@ -813,6 +835,7 @@ class VisionAttention(nn.Module):
             dropout=dropout,
             flatten_batch=flatten_batch,
             softmax_in_single_precision=softmax_in_single_precision,
+            softmax_scale=softmax_scale,
             use_data_parallel=use_data_parallel,
             workspace_buffer=workspace_buffer,
         )
@@ -1108,6 +1131,7 @@ class VisionAttention(nn.Module):
             sequence_lengths=sequence_lengths,
             max_seqlen=max_seqlen,
             output_ws=attn_output_ws,
+            softmax_scale=self.softmax_scale,
         )
 
         assert output.dim() == 3, output.shape

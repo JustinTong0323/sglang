@@ -32,6 +32,139 @@ from sglang.srt.layers.linear import (
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.utils import add_prefix, get_device_capability, is_cuda
 
+
+# ---------------------------------------------------------------------------
+# Activation clamping (matches HF Gemma4ClippableLinear)
+# ---------------------------------------------------------------------------
+
+_INF = float("inf")
+
+
+class ClippableLinear(nn.Module):
+    """``RowParallelLinear`` with input/output activation clamping.
+
+    Mirrors HF's ``Gemma4ClippableLinear``: owns the linear layer and applies
+    ``torch.clamp`` before and after the linear forward pass.  Clip bounds
+    default to ±inf (no-op) and are populated from the checkpoint.
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        output_size: int,
+        *,
+        bias: bool = True,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ):
+        super().__init__()
+        self.linear = RowParallelLinear(
+            input_size=input_size,
+            output_size=output_size,
+            bias=bias,
+            quant_config=quant_config,
+            prefix=add_prefix("linear", prefix),
+        )
+        self.input_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
+        self.input_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
+        self.output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
+        self.output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
+
+    def forward(self, x: torch.Tensor):
+        x = torch.clamp(x, self.input_min, self.input_max)
+        x, _ = self.linear(x)
+        x = torch.clamp(x, self.output_min, self.output_max)
+        return x
+
+
+class ClippableQKVParallelLinear(nn.Module):
+    """Fused QKV projection with per-projection activation clamping.
+
+    Owns a single ``QKVParallelLinear`` for the fused matmul.  Clip bounds
+    are stored as flat buffers: shared ``input_min/max`` (applied before the
+    matmul) and per-projection ``q/k/v_output_min/max`` (applied after split).
+    """
+
+    def __init__(
+        self,
+        config: Gemma4VisionConfig,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ):
+        super().__init__()
+        tp_size = get_attention_tp_size()
+        self.q_size = (config.num_attention_heads // tp_size) * config.head_dim
+        self.kv_size = (config.num_key_value_heads // tp_size) * config.head_dim
+
+        self.qkv_proj = QKVParallelLinear(
+            hidden_size=config.hidden_size,
+            head_size=config.head_dim,
+            total_num_heads=config.num_attention_heads,
+            total_num_kv_heads=config.num_key_value_heads,
+            bias=config.attention_bias,
+            quant_config=quant_config,
+            prefix=add_prefix("qkv_proj", prefix),
+        )
+        self.input_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
+        self.input_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
+        self.q_output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
+        self.q_output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
+        self.k_output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
+        self.k_output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
+        self.v_output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
+        self.v_output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
+
+    def forward(self, hidden_states: torch.Tensor):
+        x = torch.clamp(hidden_states, self.input_min, self.input_max)
+        qkv, _ = self.qkv_proj(x)
+        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+        q = torch.clamp(q, self.q_output_min, self.q_output_max)
+        k = torch.clamp(k, self.k_output_min, self.k_output_max)
+        v = torch.clamp(v, self.v_output_min, self.v_output_max)
+        return q, k, v
+
+
+class ClippableGateUpParallelLinear(nn.Module):
+    """Fused gate/up projection with per-projection activation clamping.
+
+    Same pattern as ``ClippableQKVParallelLinear``: owns a single
+    ``MergedColumnParallelLinear`` for the fused matmul, with shared input
+    bounds and per-projection output bounds as flat buffers.
+    """
+
+    def __init__(
+        self,
+        config: Gemma4VisionConfig,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ):
+        super().__init__()
+        tp_size = get_attention_tp_size()
+        self.proj_size = config.intermediate_size // tp_size
+
+        self.gate_up_proj = MergedColumnParallelLinear(
+            input_size=config.hidden_size,
+            output_sizes=[config.intermediate_size, config.intermediate_size],
+            bias=False,
+            quant_config=quant_config,
+            prefix=add_prefix("gate_up_proj", prefix),
+        )
+        self.input_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
+        self.input_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
+        self.gate_output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
+        self.gate_output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
+        self.up_output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
+        self.up_output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
+
+    def forward(self, x: torch.Tensor):
+        x = torch.clamp(x, self.input_min, self.input_max)
+        gate_up, _ = self.gate_up_proj(x)
+        gate, up = gate_up.split([self.proj_size, self.proj_size], dim=-1)
+        gate = torch.clamp(gate, self.gate_output_min, self.gate_output_max)
+        up = torch.clamp(up, self.up_output_min, self.up_output_max)
+        return gate, up
+
+
 # ---------------------------------------------------------------------------
 # 2-D Multidimensional RoPE (matches HF Gemma4RotaryEmbedding for vision)
 # ---------------------------------------------------------------------------
@@ -115,16 +248,15 @@ def _apply_multidimensional_rope(
 
 
 # ---------------------------------------------------------------------------
-# Vision Attention (TP-sharded via QKVParallelLinear + RowParallelLinear)
+# Vision Attention (TP-sharded, fused QKV)
 # ---------------------------------------------------------------------------
 
 
 class Gemma4VisionAttention(nn.Module):
     """Multi-head attention for the Gemma 4 vision encoder.
 
-    Uses SGLang's QKVParallelLinear and RowParallelLinear for tensor-parallel
-    sharding, Gemma4RMSNorm for per-head QK/V normalization, and the same
-    multimodal attention backends as VisionAttention.
+    QKV uses a fused ``ClippableQKVParallelLinear`` for efficient matmul with
+    per-projection clip bounds.  Output projection uses ``ClippableLinear``.
     """
 
     def __init__(
@@ -134,30 +266,18 @@ class Gemma4VisionAttention(nn.Module):
         prefix: str = "",
     ):
         super().__init__()
-        self.hidden_size = config.hidden_size
-        self.num_heads = config.num_attention_heads
-        self.num_kv_heads = config.num_key_value_heads
         self.head_dim = config.head_dim
 
         tp_size = get_attention_tp_size()
-        self.num_heads_per_partition = self.num_heads // tp_size
-        self.num_kv_heads_per_partition = self.num_kv_heads // tp_size
+        self.num_heads_per_partition = config.num_attention_heads // tp_size
+        self.num_kv_heads_per_partition = config.num_key_value_heads // tp_size
 
-        self.q_size = self.num_heads_per_partition * self.head_dim
-        self.kv_size = self.num_kv_heads_per_partition * self.head_dim
-
-        self.qkv_proj = QKVParallelLinear(
-            hidden_size=self.hidden_size,
-            head_size=self.head_dim,
-            total_num_heads=self.num_heads,
-            total_num_kv_heads=self.num_kv_heads,
-            bias=config.attention_bias,
-            quant_config=quant_config,
-            prefix=add_prefix("qkv_proj", prefix),
+        self.qkv = ClippableQKVParallelLinear(
+            config, quant_config=quant_config, prefix=prefix,
         )
-        self.o_proj = RowParallelLinear(
-            input_size=self.num_heads * self.head_dim,
-            output_size=self.hidden_size,
+        self.o_proj = ClippableLinear(
+            input_size=config.num_attention_heads * config.head_dim,
+            output_size=config.hidden_size,
             bias=config.attention_bias,
             quant_config=quant_config,
             prefix=add_prefix("o_proj", prefix),
@@ -171,12 +291,13 @@ class Gemma4VisionAttention(nn.Module):
 
         backend = self._select_backend()
         self.qkv_backend = QKV_BACKEND_IMPL[backend](
-            head_dim=self.head_dim,
+            head_dim=config.head_dim,
             num_heads=self.num_heads_per_partition,
             num_kv_heads=self.num_kv_heads_per_partition,
             dropout=0.0,
             flatten_batch=True,
             softmax_in_single_precision=False,
+            softmax_scale=1.0,
         )
 
     @staticmethod
@@ -205,33 +326,23 @@ class Gemma4VisionAttention(nn.Module):
         sin: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """
-        Args:
-            hidden_states: [batch, seq, hidden_size]
-            cos, sin: [batch, seq, head_dim] from Gemma4VisionRotaryEmbedding
-            attention_mask: [batch, seq] — True = valid, False = padding
-        """
         bsz, seq_len, _ = hidden_states.shape
 
-        qkv, _ = self.qkv_proj(hidden_states)
-        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+        q, k, v = self.qkv(hidden_states)
 
         q = q.reshape(bsz * seq_len, self.num_heads_per_partition, self.head_dim)
         k = k.reshape(bsz * seq_len, self.num_kv_heads_per_partition, self.head_dim)
         v = v.reshape(bsz * seq_len, self.num_kv_heads_per_partition, self.head_dim)
 
-        # Per-head QK norm
         q = self.q_norm(q.reshape(-1, self.head_dim)).reshape(q.shape)
         k = self.k_norm(k.reshape(-1, self.head_dim)).reshape(k.shape)
         v = self.v_norm(v.reshape(-1, self.head_dim)).reshape(v.shape)
 
-        # 2-D RoPE: cos/sin are [batch, seq, head_dim]; broadcast to [batch*seq, 1, head_dim]
         cos_flat = cos.reshape(bsz * seq_len, 1, self.head_dim)
         sin_flat = sin.reshape(bsz * seq_len, 1, self.head_dim)
         q = _apply_multidimensional_rope(q, cos_flat, sin_flat)
         k = _apply_multidimensional_rope(k, cos_flat, sin_flat)
 
-        # Build 4-D attention mask for backends that expect it
         if attention_mask is not None:
             attn_mask_4d = (
                 attention_mask.unsqueeze(-1) * attention_mask.unsqueeze(1)
@@ -244,10 +355,11 @@ class Gemma4VisionAttention(nn.Module):
             cu_seqlens=None,
             bsz=bsz, seq_len=seq_len,
             attention_mask=attn_mask_4d,
+            softmax_scale=1.0,
         )
 
         output = rearrange(output, "(b s) h d -> b s (h d)", b=bsz)
-        output, _ = self.o_proj(output)
+        output = self.o_proj(output)
         return output
 
 
@@ -264,30 +376,21 @@ class Gemma4VisionMLP(nn.Module):
         prefix: str = "",
     ):
         super().__init__()
-        self.hidden_size = config.hidden_size
-        self.intermediate_size = config.intermediate_size
-        self.gate_up_proj = MergedColumnParallelLinear(
-            input_size=self.hidden_size,
-            output_sizes=[self.intermediate_size, self.intermediate_size],
-            bias=False,
-            quant_config=quant_config,
-            prefix=add_prefix("gate_up_proj", prefix),
+        self.gate_up = ClippableGateUpParallelLinear(
+            config, quant_config=quant_config, prefix=prefix,
         )
-        self.down_proj = RowParallelLinear(
-            input_size=self.intermediate_size,
-            output_size=self.hidden_size,
+        self.down_proj = ClippableLinear(
+            input_size=config.intermediate_size,
+            output_size=config.hidden_size,
             bias=False,
             quant_config=quant_config,
             prefix=add_prefix("down_proj", prefix),
         )
-        from sglang.srt.layers.activation import SiluAndMul
-
-        self.act_fn = SiluAndMul()  # GeGLU: GELU variant handled by weight init
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        gate_up, _ = self.gate_up_proj(x)
-        x = self.act_fn(gate_up)
-        x, _ = self.down_proj(x)
+        gate, up = self.gate_up(x)
+        x = F.silu(gate) * up
+        x = self.down_proj(x)
         return x
 
 

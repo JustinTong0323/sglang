@@ -347,6 +347,9 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 "You must specify exactly one of input_ids or inputs_embeds"
             )
 
+        # DEBUG: check mm_inputs in forward
+        has_mm = forward_batch.contains_mm_inputs() if hasattr(forward_batch, 'contains_mm_inputs') else False
+        is_decode = forward_batch.forward_mode.is_decode()
         positions += 1
         per_layer_inputs = None
         if input_ids is not None:
@@ -401,6 +404,47 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 continue
 
             name = re.sub(r"^model\.", "", name)
+
+            # Vision encoder non-fused linears are wrapped in ClippableLinear:
+            # checkpoint "proj.weight" → our "proj.linear.weight"
+            if "vision_tower." in name and (name.endswith(".weight") or name.endswith(".bias")):
+                base, attr = name.rsplit(".", 1)
+                alt = f"{base}.linear.{attr}"
+                if alt in params_dict:
+                    name = alt
+
+            # Vision encoder fused projections (ClippableQKV / ClippableGateUp):
+            #   weight/bias:  *.q_proj.weight → *.qkv.q_proj.weight  (stacked params then fuses)
+            #   output bound: *.q_proj.output_min → *.qkv.q_output_min
+            #   input bound:  *.{q,k,v}_proj.input_min → *.qkv.input_min
+            #                (all are identical in the checkpoint -- same hidden_states input --
+            #                 so they collapse to a single shared buffer; last write wins)
+            if "vision_tower." in name:
+                m = re.match(
+                    r"(.+\.self_attn)\.(q_proj|k_proj|v_proj)\.(.*)", name
+                )
+                if m:
+                    pfx, proj, attr = m.groups()
+                    if attr in ("weight", "bias"):
+                        name = f"{pfx}.qkv.{proj}.{attr}"
+                    elif attr.startswith("output_"):
+                        name = f"{pfx}.qkv.{proj[0]}_{attr}"
+                    elif attr.startswith("input_"):
+                        name = f"{pfx}.qkv.{attr}"
+
+                m = re.match(
+                    r"(.+\.mlp)\.(gate_proj|up_proj)\.(.*)", name
+                )
+                if m:
+                    pfx, proj, attr = m.groups()
+                    short = proj.split("_")[0]  # "gate" or "up"
+                    if attr in ("weight", "bias"):
+                        name = f"{pfx}.gate_up.{proj}.{attr}"
+                    elif attr.startswith("output_"):
+                        name = f"{pfx}.gate_up.{short}_{attr}"
+                    elif attr.startswith("input_"):
+                        name = f"{pfx}.gate_up.{attr}"
+
             orig_name = name
             for param_name, weight_name, shard_id in stacked_params_mapping:
                 if weight_name not in name:
