@@ -633,6 +633,7 @@ class DefaultModelLoader(BaseModelLoader):
 
         model = AutoModelForCausalLM.from_pretrained(
             model_config.model_path,
+            config=hf_config,
             device_map=device_map,
             **model_kwargs,
             trust_remote_code=True,
