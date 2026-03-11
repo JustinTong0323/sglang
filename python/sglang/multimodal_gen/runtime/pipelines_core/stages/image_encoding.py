@@ -6,6 +6,7 @@ Image encoding stages for I2V diffusion pipelines.
 
 This module contains implementations of image encoding stages for diffusion pipelines.
 """
+
 import inspect
 
 import PIL
@@ -113,7 +114,9 @@ class ImageEncodingStage(PipelineStage):
         )
 
         params = inspect.signature(self.image_processor.__call__).parameters
-        image_processor_kwargs = {k: v for k, v in image_processor_kwargs.items() if k in params}
+        image_processor_kwargs = {
+            k: v for k, v in image_processor_kwargs.items() if k in params
+        }
 
         image_inputs = self.image_processor(
             images=image, return_tensors="pt", **image_processor_kwargs
@@ -265,8 +268,8 @@ class ImageVAEEncodingStage(PipelineStage):
             # Setup VAE precision
             vae_dtype = PRECISION_TO_TYPE[server_args.pipeline_config.vae_precision]
             vae_autocast_enabled = (
-                                       vae_dtype != torch.float32
-                                   ) and not server_args.disable_autocast
+                vae_dtype != torch.float32
+            ) and not server_args.disable_autocast
 
             # Encode Image
             with torch.autocast(
