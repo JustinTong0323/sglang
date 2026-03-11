@@ -244,6 +244,13 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
 
         all_embeds = []
         for pv in all_pixel_values:
+            if (
+                pv.dim() in (2, 3)
+                and pv.shape[-1] == self.config.text_config.hidden_size
+            ):
+                all_embeds.append(pv.to(self.language_model.device))
+                continue
+
             if pv.dim() == 5:
                 pv = pv.squeeze(0)
             if pv.dim() == 3:

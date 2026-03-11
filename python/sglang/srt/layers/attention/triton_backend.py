@@ -820,9 +820,12 @@ class TritonAttnBackend(AttentionBackend):
             o = torch.empty_like(q)
 
         if k is None and v is None:
+            cache_loc = forward_batch.token_to_kv_pool.translate_loc(
+                layer.layer_id, forward_batch.out_cache_loc
+            )
             k_buffer, v_buffer = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
-            k = k_buffer[forward_batch.out_cache_loc]
-            v = v_buffer[forward_batch.out_cache_loc]
+            k = k_buffer[cache_loc]
+            v = v_buffer[cache_loc]
         elif k is None or v is None:
             raise ValueError("Both k and v should be None or not None")
         else:
