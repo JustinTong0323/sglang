@@ -14,12 +14,13 @@
 
 from typing import Dict, List, Optional, Union
 
+import numpy as np
+
 from sglang.srt.managers.multimodal_processor import (
     BaseMultimodalProcessor as SGLangBaseProcessor,
 )
 from sglang.srt.models.gemma4_mm import Gemma4ForConditionalGeneration
 from sglang.srt.multimodal.processors.base_processor import MultimodalSpecialTokens
-
 
 class Gemma4SGLangProcessor(SGLangBaseProcessor):
     """Multimodal processor for Gemma4 supporting image and audio inputs."""
@@ -38,6 +39,36 @@ class Gemma4SGLangProcessor(SGLangBaseProcessor):
             image_token_id=hf_config.image_token_id,
             audio_token_id=hf_config.audio_token_id,
         ).build(_processor)
+
+    def _get_audio_pad_multiple(self) -> int:
+        """Derive the waveform padding alignment from processor config.
+
+        The HF processor's ceil(duration_ms / audio_ms_per_token) formula can
+        overshoot by 1 token relative to what the SSCP convolutions produce.
+        Padding waveforms to a multiple of (hop_length * first_conv_stride)
+        aligns the two calculations.
+        See: gemma-4-eap-extras/examples/gemma-4-audio-examples.ipynb
+        """
+        fe = getattr(self._processor, "feature_extractor", None)
+        hop = getattr(fe, "hop_length", 160)
+        ac = getattr(self.hf_config, "audio_config", None)
+        first_stride = ac.sscp_conv_stride_size[0][0] if ac is not None else 2
+        return hop * first_stride
+
+    def process_mm_data(self, input_text, images=None, videos=None, audios=None, **kwargs):
+        if audios:
+            pad_multiple = self._get_audio_pad_multiple()
+            padded = []
+            for a in audios:
+                a = np.asarray(a)
+                remainder = len(a) % pad_multiple
+                if remainder != 0:
+                    a = np.pad(a, (0, pad_multiple - remainder), mode="constant")
+                padded.append(a)
+            audios = padded
+        return super().process_mm_data(
+            input_text, images=images, videos=videos, audios=audios, **kwargs
+        )
 
     async def process_mm_data_async(
         self,

@@ -33,6 +33,7 @@ from transformers import Gemma4AudioConfig
 
 from sglang.srt.layers.clippable_linear import (
     ClippableColumnParallelLinear,
+    ClippableGLUParallelLinear,
     ClippableQKVParallelLinear,
     ClippableRowParallelLinear,
 )
@@ -239,8 +240,8 @@ class Gemma4AudioAttention(nn.Module):
         self.qkv = ClippableQKVParallelLinear(
             hidden_size=self.hidden_size,
             head_size=self.head_dim,
-            total_num_heads=self.num_heads,
-            total_num_kv_heads=self.num_heads,
+            total_num_heads=total_num_heads,
+            total_num_kv_heads=total_num_heads,
             bias=False,
             quant_config=quant_config,
             prefix=prefix,
@@ -662,9 +663,9 @@ class Gemma4AudioConformerLightConv1d(nn.Module):
         self.pre_layer_norm = Gemma4RMSNorm(
             config.hidden_size, eps=config.rms_norm_eps, scale_shift=0.0
         )
-        self.linear_start = ClippableColumnParallelLinear(
+        self.linear_start = ClippableGLUParallelLinear(
             config.hidden_size,
-            config.hidden_size * 2,
+            config.hidden_size,
             bias=False,
             quant_config=quant_config,
             prefix=add_prefix("linear_start", prefix),
@@ -705,7 +706,6 @@ class Gemma4AudioConformerLightConv1d(nn.Module):
 
         audio_encodings = self.pre_layer_norm(audio_encodings)
         audio_encodings = self.linear_start(audio_encodings)
-        audio_encodings = F.glu(audio_encodings, dim=-1)
 
         audio_encodings_permuted = audio_encodings.permute(0, 2, 1)
         audio_encodings_permuted_padded = F.pad(

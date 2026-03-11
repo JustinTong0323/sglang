@@ -163,12 +163,87 @@ class ClippableQKVParallelLinear(nn.Module):
         return q, k, v
 
 
+class ClippableGLUParallelLinear(nn.Module):
+    """Fused linear + GLU gating with correct TP sharding.
+
+    Used by the audio encoder's ``LightConv1d``, where a single linear
+    projects to ``[hidden * 2]`` and GLU splits into value/gate halves.
+    A plain ``ColumnParallelLinear`` is *incorrect* here under TP because it
+    shards the output contiguously, mixing value and gate across ranks.
+    This wrapper uses ``MergedColumnParallelLinear`` to shard each half
+    independently, then applies GLU (``value * sigmoid(gate)``) on each
+    rank's correctly-paired shard.
+
+    Output clamping is applied once *after* the GLU gate, using a single
+    ``output_min/max`` pair (matching the checkpoint layout).
+
+    The checkpoint stores a single fused ``[hidden * 2, input]`` weight.
+    A custom ``weight_loader`` on the inner param automatically splits it
+    into value (first half) and gate (second half) shards, so no special
+    handling is needed in the model's ``load_weights``.
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        *,
+        bias: bool = False,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ):
+        super().__init__()
+        tp_size = get_attention_tp_size()
+        self.proj_size = hidden_size // tp_size
+
+        self.linear = MergedColumnParallelLinear(
+            input_size=input_size,
+            output_sizes=[hidden_size, hidden_size],
+            bias=bias,
+            quant_config=quant_config,
+            prefix=add_prefix("linear", prefix),
+        )
+
+        # The checkpoint has a single fused weight; MergedColumnParallelLinear
+        # expects per-shard loading.  Wrap the original weight_loader so that
+        # a call *without* shard_id (the generic load_weights path) splits
+        # automatically.
+        orig_loader = self.linear.weight.weight_loader
+
+        def _fused_weight_loader(param, loaded_weight, loaded_shard_id=None):
+            if loaded_shard_id is not None:
+                return orig_loader(param, loaded_weight, loaded_shard_id)
+            half = loaded_weight.shape[0] // 2
+            orig_loader(param, loaded_weight[:half], 0)
+            orig_loader(param, loaded_weight[half:], 1)
+
+        self.linear.weight.weight_loader = _fused_weight_loader
+
+        self.input_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
+        self.input_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
+        self.output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
+        self.output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = torch.clamp(x, self.input_min, self.input_max)
+        merged, _ = self.linear(x)
+        value, gate = merged.split([self.proj_size, self.proj_size], dim=-1)
+        x = value * torch.sigmoid(gate)
+        x = torch.clamp(x, self.output_min, self.output_max)
+        return x
+
+
 class ClippableGateUpParallelLinear(nn.Module):
     """Fused gate/up projection with per-projection activation clamping.
 
-    Same pattern as ``ClippableQKVParallelLinear``: owns a single
-    ``MergedColumnParallelLinear`` for the fused matmul, with shared input
-    bounds and per-projection output bounds as flat buffers.
+    Used by the MLP layers in the vision/audio encoders.  Owns a single
+    ``MergedColumnParallelLinear`` for the fused matmul and returns the
+    two projections separately so the caller can apply its own activation
+    (e.g. ``SiLU(gate) * up``).
+
+    Output clamping is applied *per-projection before* the caller's
+    activation, using separate ``gate_output_min/max`` and
+    ``up_output_min/max`` bounds.
     """
 
     def __init__(
