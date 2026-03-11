@@ -241,6 +241,7 @@ class VisionSdpaAttention(nn.Module):
         bsz: int,
         cu_seqlens: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        softmax_scale: Optional[float] = None,
         **kwargs,
     ) -> torch.Tensor:
         r"""
@@ -329,6 +330,7 @@ class VisionTritonAttention(nn.Module):
         cu_seqlens: torch.Tensor | SingletonCache | None,
         bsz: int,
         seq_len: int,
+        softmax_scale: Optional[float] = None,
         **kwargs,
     ) -> torch.Tensor:
         r"""
@@ -338,8 +340,6 @@ class VisionTritonAttention(nn.Module):
         Returns:
              [b * s, h, head_size]
         """
-        softmax_scale = kwargs.get("softmax_scale", None)
-
         if envs.SGLANG_VIT_ENABLE_CUDA_GRAPH.get():
             if "output_ws" not in kwargs:
                 raise RuntimeError("output_ws should be prepared for cuda-graph mode")
@@ -403,6 +403,7 @@ class VisionFlash3Attention(nn.Module):
         cu_seqlens: torch.Tensor | SingletonCache | None,
         bsz: int,
         seq_len: int,
+        softmax_scale: Optional[float] = None,
         **kwargs,
     ) -> torch.Tensor:
         r"""
@@ -411,8 +412,6 @@ class VisionFlash3Attention(nn.Module):
         Returns:
              [b * s, h, head_size]
         """
-        softmax_scale = kwargs.get("softmax_scale", None)
-
         if envs.SGLANG_VIT_ENABLE_CUDA_GRAPH.get():
             max_seqlen = cu_seqlens[1]
             output = flash_attn_func(
@@ -462,6 +461,7 @@ class VisionFlash4Attention(nn.Module):
         cu_seqlens: torch.Tensor | SingletonCache | None,
         bsz: int,
         seq_len: int,
+        softmax_scale: Optional[float] = None,
         **kwargs,
     ) -> torch.Tensor:
         r"""
@@ -478,8 +478,6 @@ class VisionFlash4Attention(nn.Module):
                     _get_cu_seqlens_for_shape(bsz, seq_len, device=q.device)
                 )
             cu_seqlens = cu_seqlens.get_data()
-
-        softmax_scale = kwargs.get("softmax_scale", None)
 
         cu_seqlens = cu_seqlens.to(dtype=torch.int32).to(q.device)
         seq_lens = cu_seqlens[1:] - cu_seqlens[:-1]
@@ -520,6 +518,7 @@ class VisionFlashInferAttention(nn.Module):
         cu_seqlens: torch.Tensor | SingletonCache | None,
         bsz: int,
         seq_len: int,
+        softmax_scale: Optional[float] = None,
         **kwargs,
     ) -> torch.Tensor:
         r"""
@@ -595,7 +594,7 @@ class VisionFlashInferAttention(nn.Module):
             raise RuntimeError("offset + len out of bounds; packed indptr is wrong")
 
         _, _, head_size = q.shape
-        scale = head_size**-0.5
+        scale = softmax_scale if softmax_scale is not None else head_size**-0.5
 
         output, _ = cudnn_batch_prefill_with_kv_cache(
             q,
@@ -647,10 +646,9 @@ class VisionAiterAttention(nn.Module):
         cu_seqlens: torch.Tensor | SingletonCache | None,
         bsz: int,
         seq_len: int,
+        softmax_scale: Optional[float] = None,
         **kwargs,
     ) -> torch.Tensor:
-        softmax_scale = kwargs.get("softmax_scale", None)
-
         cu_seqlens = resolve_seqlens(cu_seqlens, bsz, seq_len, device=q.device)
 
         cu_seqlens = cu_seqlens.to(dtype=torch.int32).to(q.device)
@@ -687,6 +685,7 @@ class VisionAscendAttention(nn.Module):
         cu_seqlens: torch.Tensor | SingletonCache | None,
         bsz: int,
         seq_len: int,
+        softmax_scale: Optional[float] = None,
         **kwargs,
     ) -> torch.Tensor:
         r"""
@@ -699,7 +698,6 @@ class VisionAscendAttention(nn.Module):
             if "output_ws" not in kwargs:
                 raise RuntimeError("output_ws should be prepared for npu-graph mode")
             output = kwargs["output_ws"]
-            # graph mode: runner already passes seq_lens (int32 on CPU)
             seq_len_arg = cu_seqlens
         else:
             cu_seqlens = resolve_seqlens(cu_seqlens, bsz, seq_len, device="cpu")
@@ -709,11 +707,10 @@ class VisionAscendAttention(nn.Module):
             output = torch.empty_like(q)
             seq_len_arg = seq_lens.to(torch.int32)
 
-
         _, num_heads, head_size = q.shape
         num_kv_heads = k.shape[1]
 
-        scale_value = kwargs.get("softmax_scale") or head_size**-0.5
+        scale_value = softmax_scale if softmax_scale is not None else head_size**-0.5
 
         torch_npu._npu_flash_attention_unpad(
             query=q,
