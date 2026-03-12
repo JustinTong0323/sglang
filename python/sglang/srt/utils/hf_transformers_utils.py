@@ -683,10 +683,11 @@ def get_processor(
         image_size = vision_config.image_size
         spatial_merge_size = getattr(vision_config, "spatial_merge_size", 1)
 
+        effective_patch = patch_size * spatial_merge_size
         image_processor = PixtralImageProcessor(
             do_resize=True,
             size={"longest_edge": image_size},
-            patch_size={"height": patch_size, "width": patch_size},
+            patch_size={"height": effective_patch, "width": effective_patch},
         )
         processor = HFPixtralProcessor(
             image_processor=image_processor,
