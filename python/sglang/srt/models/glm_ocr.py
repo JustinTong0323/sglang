@@ -431,5 +431,7 @@ class GlmOcrForConditionalGeneration(Glm4vForConditionalGeneration):
                     )
                 weight_loader(param, loaded_weight)
 
+        self.visual.patch_embed.copy_conv3d_weight_to_linear()
+
 
 EntryClass = [GlmOcrForConditionalGeneration]
