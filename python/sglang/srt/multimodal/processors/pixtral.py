@@ -81,7 +81,7 @@ class PixtralProcessor(BaseMultimodalProcessor):
                 if ratio > 1:
                     w = int(math.floor(w / ratio))
                     h = int(math.floor(h / ratio))
-                nrows, ncols = _get_pixtral_hf_num_image_tokens(
+                nrows, _ = _get_pixtral_hf_num_image_tokens(
                     (h, w), (effective_patch, effective_patch)
                 )
                 image_nrows.append(nrows)
