@@ -405,6 +405,7 @@ def get_config(
 
         if global_head_dim is not None:
             config.text_config.swa_head_dim = config.text_config.head_dim
+            config.text_config.swa_v_head_dim = config.text_config.head_dim
             config.text_config.head_dim = global_head_dim
 
         config.text_config.swa_num_key_value_heads = config.num_key_value_heads

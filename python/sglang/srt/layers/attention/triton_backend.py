@@ -51,6 +51,8 @@ class ForwardMetadata:
     window_kv_indices: torch.Tensor
     window_num_kv_splits: torch.Tensor
     window_kv_offsets: torch.Tensor
+    # Separate attn_logits for SWA layers when v_head_dim differs
+    swa_attn_logits: Optional[torch.Tensor] = None
 
 
 class TritonAttnBackend(AttentionBackend):
@@ -94,16 +96,27 @@ class TritonAttnBackend(AttentionBackend):
         self.num_kv_head = model_runner.model_config.get_num_kv_heads(
             get_attention_tp_size()
         )
-        if (
+        # The decode kernel's intermediate attn_logits buffer must match the
+        # exact v_head_dim of the layer being processed (the triton kernel uses
+        # a // Lv stride trick to derive attn_lse indices from attn_logits strides).
+        # When SWA and full attention layers have different v_head_dim (e.g. Gemma 4
+        # with swa=256, full=512), we need two separate attn_logits buffers.
+        full_v_head_dim = model_runner.model_config.v_head_dim
+        swa_v_head_dim = model_runner.model_config.swa_v_head_dim
+        if swa_v_head_dim != full_v_head_dim:
+            self.v_head_dim = full_v_head_dim
+            self.swa_v_head_dim = swa_v_head_dim
+        elif (
             model_runner.hybrid_gdn_config is not None
             or model_runner.kimi_linear_config is not None
         ):
-            # For hybrid linear models, layer_id = 0 may not be full attention
             self.v_head_dim = model_runner.token_to_kv_pool.get_v_head_dim()
+            self.swa_v_head_dim = None
         else:
-            self.v_head_dim = model_runner.token_to_kv_pool.get_value_buffer(0).shape[
-                -1
-            ]
+            self.v_head_dim = model_runner.token_to_kv_pool.get_value_buffer(
+                0
+            ).shape[-1]
+            self.swa_v_head_dim = None
         self.max_context_len = model_runner.model_config.context_len
         self.device = model_runner.device
         self.device_core_count = get_device_core_count(model_runner.gpu_id)
@@ -242,6 +255,7 @@ class TritonAttnBackend(AttentionBackend):
         window_kv_indices = None
         window_num_kv_splits = None
         window_kv_offsets = None
+        swa_attn_logits = None
         spec_info = forward_batch.spec_info
 
         if forward_batch.forward_mode.is_decode_or_idle():
@@ -290,6 +304,14 @@ class TritonAttnBackend(AttentionBackend):
                 dtype=torch.float32,
                 device=self.device,
             )
+            if self.swa_v_head_dim is not None:
+                swa_attn_logits = torch.empty(
+                    (bs, self.num_head, self.max_kv_splits, self.swa_v_head_dim),
+                    dtype=torch.float32,
+                    device=self.device,
+                )
+            else:
+                swa_attn_logits = None
             attn_lse = torch.empty(
                 (bs, self.num_head, self.max_kv_splits),
                 dtype=torch.float32,
@@ -436,6 +458,7 @@ class TritonAttnBackend(AttentionBackend):
             window_kv_indices,
             window_num_kv_splits,
             window_kv_offsets,
+            swa_attn_logits=swa_attn_logits,
         )
 
     def init_cuda_graph_state(
@@ -450,6 +473,14 @@ class TritonAttnBackend(AttentionBackend):
             dtype=torch.float32,
             device=self.device,
         )
+        if self.swa_v_head_dim is not None:
+            self.cuda_graph_swa_attn_logits = torch.zeros(
+                (max_num_tokens, self.num_head, self.max_kv_splits, self.swa_v_head_dim),
+                dtype=torch.float32,
+                device=self.device,
+            )
+        else:
+            self.cuda_graph_swa_attn_logits = None
         self.cuda_graph_attn_lse = torch.zeros(
             (max_num_tokens, self.num_head, self.max_kv_splits),
             dtype=torch.float32,
@@ -520,6 +551,7 @@ class TritonAttnBackend(AttentionBackend):
         window_kv_indices = None
         window_num_kv_splits = None
         window_kv_offsets = None
+        swa_attn_logits = None
 
         if forward_mode.is_decode_or_idle():
             if spec_info is None:
@@ -558,6 +590,7 @@ class TritonAttnBackend(AttentionBackend):
                 kv_indptr, kv_indices = spec_info.kv_indptr, spec_info.kv_indices
 
             attn_logits = self.cuda_graph_attn_logits
+            swa_attn_logits = self.cuda_graph_swa_attn_logits
             attn_lse = self.cuda_graph_attn_lse
             max_extend_len = None
             num_kv_splits = self.cuda_graph_num_kv_splits
@@ -659,6 +692,7 @@ class TritonAttnBackend(AttentionBackend):
             window_kv_indices,
             window_num_kv_splits,
             window_kv_offsets,
+            swa_attn_logits=swa_attn_logits,
         )
 
     def init_forward_metadata_replay_cuda_graph(
@@ -1099,6 +1133,16 @@ class TritonAttnBackend(AttentionBackend):
             k_descale = 1.0
             v_descale = 1.0
 
+        # Select the correctly-sized attn_logits buffer for this layer.
+        # The triton kernel's // Lv stride trick requires attn_logits.shape[-1]
+        # to exactly match the layer's v_head_dim.
+        attn_logits = self.forward_metadata.attn_logits
+        if (
+            self.forward_metadata.swa_attn_logits is not None
+            and layer.v_head_dim == self.swa_v_head_dim
+        ):
+            attn_logits = self.forward_metadata.swa_attn_logits
+
         self.decode_attention_fwd(
             q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
             forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
@@ -1106,7 +1150,7 @@ class TritonAttnBackend(AttentionBackend):
             o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
             kv_indptr,
             kv_indices,
-            self.forward_metadata.attn_logits,
+            attn_logits,
             self.forward_metadata.attn_lse,
             self.forward_metadata.num_kv_splits,
             self.max_kv_splits,
