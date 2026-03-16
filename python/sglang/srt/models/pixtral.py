@@ -35,6 +35,7 @@ from transformers.models.pixtral.modeling_pixtral import (
 
 from sglang.srt.layers.activation import SiluAndMul
 from sglang.srt.layers.attention.vision import VisionAttention
+from sglang.srt.layers.conv import Conv2dLayer
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.linear import MergedColumnParallelLinear, RowParallelLinear
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
@@ -331,7 +332,7 @@ class VisionTransformer(nn.Module):
     def __init__(self, args: VisionEncoderArgs):
         super().__init__()
         self.args = args
-        self.patch_conv = nn.Conv2d(
+        self.patch_conv = Conv2dLayer(
             in_channels=args.num_channels,
             out_channels=args.hidden_size,
             kernel_size=args.patch_size,
@@ -853,7 +854,7 @@ class PixtralHFVisionModel(nn.Module):
         self.image_size = config.image_size
         self.patch_size = config.patch_size
 
-        self.patch_conv = nn.Conv2d(
+        self.patch_conv = Conv2dLayer(
             in_channels=config.num_channels,
             out_channels=config.hidden_size,
             kernel_size=config.patch_size,
