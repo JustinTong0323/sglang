@@ -454,7 +454,20 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
 
         return name
 
+    def _get_k_eq_v_layers(self) -> set:
+        """Return set of layer indices where attention_k_eq_v applies (full-attention layers)."""
+        text_config = self.config.text_config
+        if not getattr(text_config, "attention_k_eq_v", False):
+            return set()
+        return {
+            i
+            for i, lt in enumerate(text_config.layer_types)
+            if lt != "sliding_attention"
+        }
+
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        k_eq_v_layers = self._get_k_eq_v_layers()
+
         params_dict = dict(self.named_parameters())
         params_dict.update(dict(self.named_buffers()))
         loaded_params: Set[str] = set()
@@ -473,6 +486,18 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             if "vision_tower." in name or "audio_tower." in name:
                 name = self._remap_tower_name(name, params_dict)
 
+            # attention_k_eq_v: full-attention layers have no v_proj in the
+            # checkpoint (K and V share weights).  When we see a k_proj weight
+            # for one of these layers, load it into both the "k" and "v" shards
+            # of the fused QKV so the forward produces v_raw == k_raw.
+            should_dup_k_to_v = (
+                ".k_proj." in name
+                and k_eq_v_layers
+                and "language_model." in name
+                and (m := re.search(r"layers\.(\d+)\.", name)) is not None
+                and int(m.group(1)) in k_eq_v_layers
+            )
+
             # Try stacked (fused) params first
             orig_name = name
             for param_name, weight_name, shard_id in self.stacked_params_mapping:
@@ -485,6 +510,8 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 param = params_dict[name]
                 weight_loader = param.weight_loader
                 weight_loader(param, loaded_weight, shard_id)
+                if should_dup_k_to_v:
+                    weight_loader(param, loaded_weight, "v")
                 break
             else:
                 if name.endswith(".bias") and name not in params_dict:
