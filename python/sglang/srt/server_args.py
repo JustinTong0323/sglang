@@ -82,6 +82,7 @@ LOAD_FORMAT_CHOICES = [
     "sharded_state",
     "gguf",
     "bitsandbytes",
+    "mistral",
     "layered",
     "flash_rl",
     "remote",
