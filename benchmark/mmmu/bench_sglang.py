@@ -191,8 +191,13 @@ async def eval_mmmu(args) -> None:
         semaphore = asyncio.Semaphore(args.concurrency)
         tasks = [
             process_sample_with_semaphore(
-                semaphore, client, sample, sampling_params, model,
-                reasoning_effort, lora_path,
+                semaphore,
+                client,
+                sample,
+                sampling_params,
+                model,
+                reasoning_effort,
+                lora_path,
             )
             for sample in samples
         ]
@@ -231,7 +236,9 @@ async def eval_mmmu(args) -> None:
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--model", type=str, default="default",
+        "--model",
+        type=str,
+        default="default",
         help="Model name to use in API requests.",
     )
     EvalArgs.add_cli_args(parser)

@@ -117,9 +117,9 @@ class PixtralProcessor(BaseMultimodalProcessor):
                     new_item.feature = old_feature[i : i + 1]
                     new_item.offsets = item_offsets
                     if old_image_sizes is not None:
-                        new_item.model_specific_data["image_sizes"] = (
-                            old_image_sizes[i : i + 1]
-                        )
+                        new_item.model_specific_data["image_sizes"] = old_image_sizes[
+                            i : i + 1
+                        ]
                     mm_items.append(new_item)
         else:
             mm_items, input_ids, _ = self.process_and_combine_mm_data(
