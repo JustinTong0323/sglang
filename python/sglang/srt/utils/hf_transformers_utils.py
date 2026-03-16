@@ -309,6 +309,7 @@ def get_config(
     if (
         "mistral-large-3" in str(model).lower()
         or "mistral-small-4" in str(model).lower()
+        or "leanstral" in str(model).lower()
     ):
         config = _load_mistral_large_3_for_causal_LM(
             model, trust_remote_code=trust_remote_code, revision=revision
@@ -590,6 +591,7 @@ def get_processor(
     if (
         "mistral-large-3" in str(tokenizer_name).lower()
         or "mistral-small-4" in str(tokenizer_name).lower()
+        or "leanstral" in str(tokenizer_name).lower()
     ):
         config = _load_mistral_large_3_for_causal_LM(
             tokenizer_name,
@@ -697,6 +699,15 @@ def get_processor(
         )
 
     tokenizer = get_tokenizer_from_processor(processor)
+
+    if tokenizer.chat_template is None:
+        local_path = download_from_hf(
+            tokenizer_name, allow_patterns=["*.json", "*.jinja", "*.model"]
+        )
+        jinja_path = Path(local_path) / "chat_template.jinja"
+        if jinja_path.is_file():
+            tokenizer.chat_template = jinja_path.read_text()
+            logger.info("Loaded chat_template from %s", jinja_path)
 
     attach_additional_stop_token_ids(tokenizer)
     return processor
