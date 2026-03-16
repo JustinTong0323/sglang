@@ -806,6 +806,13 @@ def get_tokenizer(
         )
 
     _fix_v5_tokenizer_components(tokenizer, tokenizer_name, tokenizer_revision)
+    logger.info(
+        "Tokenizer for %s: type=%s, add_bos_token=%s, bos_token_id=%s",
+        tokenizer_name,
+        type(tokenizer).__name__,
+        getattr(tokenizer, "add_bos_token", "N/A"),
+        getattr(tokenizer, "bos_token_id", "N/A"),
+    )
     _fix_v5_add_bos_eos_token(tokenizer, tokenizer_name, tokenizer_revision)
 
     if not isinstance(tokenizer, PreTrainedTokenizerFast):
@@ -895,7 +902,13 @@ def _fix_v5_add_bos_eos_token(tokenizer, model_name_or_path, revision=None):
 
         with open(config_file) as f:
             config = json.load(f)
-    except Exception:
+    except Exception as e:
+        logger.debug(
+            "_fix_v5_add_bos_eos_token: could not read tokenizer_config.json "
+            "for %s: %s",
+            model_name_or_path,
+            e,
+        )
         return
 
     changed = False
