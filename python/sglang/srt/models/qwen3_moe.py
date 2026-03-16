@@ -115,12 +115,19 @@ def compute_yarn_parameters(
         attention_factor: float, the post-processing scaling factor applied to the computed cos/sin
     """
 
-    # The config does not contain rope_scaling, which means the model is not using yarn
-    rope_scaling = config.rope_parameters
+    # The config does not contain rope_scaling, which means the model is not using yarn.
+    # In transformers v5, rope_parameters is never None (even for default rope), so also
+    # check rope_type to distinguish actual yarn configs from plain rotary embeddings.
+    rope_scaling = getattr(config, "rope_parameters", None)
+    if rope_scaling is None:
+        rope_scaling = getattr(config, "rope_scaling", None)
     if rope_scaling is None:
         return 1.0, 0, 0, 1.0
+    rope_type = rope_scaling.get("rope_type") or rope_scaling.get("type") or "default"
+    if rope_type == "default":
+        return 1.0, 0, 0, 1.0
 
-    base = config.rope_parameters["rope_theta"]
+    base = rope_scaling.get("rope_theta") or getattr(config, "rope_theta", 10000)
     partial_rotary_factor = (
         config.partial_rotary_factor
         if hasattr(config, "partial_rotary_factor")
@@ -130,7 +137,7 @@ def compute_yarn_parameters(
         config, "head_dim", config.hidden_size // config.num_attention_heads
     )
     dim = int(head_dim * partial_rotary_factor)
-    factor = getattr(rope_scaling, "factor", 1.0)
+    factor = rope_scaling.get("factor", 1.0)
     attention_factor = rope_scaling.get("attention_factor")
     mscale = rope_scaling.get("mscale")
     mscale_all_dim = rope_scaling.get("mscale_all_dim")
