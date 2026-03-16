@@ -444,7 +444,7 @@ class Nemotron3Detector(BaseReasoningFormatDetector):
 
 class MistralDetector(BaseReasoningFormatDetector):
     """
-    Detector for Mistral models with reasoning (e.g., Mistral-Small-4-119B-2602).
+    Detector for Mistral models with reasoning (e.g., Mistral-Small-4-119B-2603).
     Assumes reasoning format:
       [THINK]reasoning content[/THINK]answer
 
