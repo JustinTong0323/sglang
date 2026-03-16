@@ -117,7 +117,11 @@ async def process_sample(
     if reasoning_effort:
         payload["reasoning_effort"] = reasoning_effort
     response = await client.chat.completions.create(**payload)
-    return sample, response.choices[0].message.content
+    msg = response.choices[0].message
+    content = msg.content
+    if content is None:
+        content = getattr(msg, "reasoning_content", None)
+    return sample, content
 
 
 async def process_sample_with_semaphore(
