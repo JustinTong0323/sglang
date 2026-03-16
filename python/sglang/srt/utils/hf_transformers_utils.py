@@ -880,15 +880,18 @@ def _fix_v5_add_bos_eos_token(tokenizer, model_name_or_path, revision=None):
     This function reads the tokenizer_config.json and restores the values.
     """
     try:
-        from huggingface_hub import hf_hub_download
+        local_path = Path(model_name_or_path) / "tokenizer_config.json"
+        if local_path.is_file():
+            config_file = str(local_path)
+        else:
+            from huggingface_hub import hf_hub_download
 
-        config_file = hf_hub_download(
-            model_name_or_path,
-            "tokenizer_config.json",
-            revision=revision,
-            local_files_only=True,
-        )
-        import json
+            config_file = hf_hub_download(
+                model_name_or_path,
+                "tokenizer_config.json",
+                revision=revision,
+                local_files_only=True,
+            )
 
         with open(config_file) as f:
             config = json.load(f)
