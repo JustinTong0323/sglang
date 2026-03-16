@@ -141,6 +141,8 @@ test = [
   "parameterized",
   "peft>=0.18.0",
   "pytest",
+  "pytest-cov",
+  "diff-cover",
   "sentence_transformers",
   "tabulate",
 ]
