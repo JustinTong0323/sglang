@@ -1504,22 +1504,9 @@ class DeepseekV2DecoderLayer(nn.Module):
             assert rope_theta is not None, f"rope_theta not found in config: {config}"
             rope_type = config.rope_parameters.get("rope_type")
             rope_scaling = config.rope_parameters if rope_type != "default" else None
-            if layer_id == 0:
-                logger.warning(
-                    "DSV3 rope debug (v5 path): rope_theta=%s, rope_type=%s, "
-                    "rope_scaling=%s, max_position_embeddings=%s",
-                    rope_theta, rope_type, rope_scaling,
-                    config.max_position_embeddings,
-                )
         else:
             rope_theta = config.rope_theta
             rope_scaling = config.rope_scaling
-            if layer_id == 0:
-                logger.warning(
-                    "DSV3 rope debug (v4 path): rope_theta=%s, "
-                    "rope_scaling=%s, max_position_embeddings=%s",
-                    rope_theta, rope_scaling, config.max_position_embeddings,
-                )
         max_position_embeddings = config.max_position_embeddings
         self.speculative_algorithm = SpeculativeAlgorithm.from_string(
             get_global_server_args().speculative_algorithm

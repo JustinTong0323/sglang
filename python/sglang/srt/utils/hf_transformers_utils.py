@@ -806,6 +806,7 @@ def get_tokenizer(
         )
 
     _fix_v5_tokenizer_components(tokenizer, tokenizer_name, tokenizer_revision)
+    _fix_v5_add_bos_eos_token(tokenizer, tokenizer_name, tokenizer_revision)
 
     if not isinstance(tokenizer, PreTrainedTokenizerFast):
         warnings.warn(
@@ -864,6 +865,56 @@ def _fix_v5_tokenizer_components(tokenizer, model_name_or_path, revision=None):
         )
         backend.pre_tokenizer = raw.pre_tokenizer
         backend.decoder = raw.decoder
+
+
+def _fix_v5_add_bos_eos_token(tokenizer, model_name_or_path, revision=None):
+    """Restore add_bos_token/add_eos_token stripped by transformers v5.
+
+    In transformers v5, _from_pretrained() strips add_bos_token and
+    add_eos_token from init kwargs when a tokenizer.json file is present,
+    assuming the tokenizer.json post-processor handles BOS/EOS addition.
+    However, many models (e.g. DeepSeek-V3) have a tokenizer.json whose
+    post-processor does NOT add BOS/EOS, and rely on the add_bos_token flag
+    from tokenizer_config.json instead. This causes silent accuracy regressions.
+
+    This function reads the tokenizer_config.json and restores the values.
+    """
+    try:
+        from huggingface_hub import hf_hub_download
+
+        config_file = hf_hub_download(
+            model_name_or_path,
+            "tokenizer_config.json",
+            revision=revision,
+            local_files_only=True,
+        )
+        import json
+
+        with open(config_file) as f:
+            config = json.load(f)
+    except Exception:
+        return
+
+    changed = False
+    for attr in ("add_bos_token", "add_eos_token"):
+        if attr not in config:
+            continue
+        config_val = config[attr]
+        current_val = getattr(tokenizer, attr, None)
+        if current_val != config_val:
+            logger.info(
+                "Restoring %s=%s for %s (was %s after v5 loading)",
+                attr,
+                config_val,
+                model_name_or_path,
+                current_val,
+            )
+            setattr(tokenizer, f"_{attr}", config_val)
+            changed = True
+
+    # Rebuild the post-processor so it respects the restored flags
+    if changed and hasattr(tokenizer, "update_post_processor"):
+        tokenizer.update_post_processor()
 
 
 def _fix_special_tokens_pattern(tokenizer):

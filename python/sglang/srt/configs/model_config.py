@@ -476,12 +476,6 @@ class ModelConfig:
                         )
                     scaling_factor = rope_scaling.get("factor", 1.0)
                     mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
-                    logger.warning(
-                        "MLA rope debug: rope_type=%s, scaling_factor=%s, "
-                        "mscale_all_dim=%s, mscale=%s, rope_scaling_keys=%s",
-                        rope_type, scaling_factor, mscale_all_dim, mscale,
-                        list(rope_scaling.keys()),
-                    )
                     self.scaling = self.scaling * mscale * mscale
         elif "MiniCPM3ForCausalLM" in self.hf_config.architectures:
             self.head_dim = 128

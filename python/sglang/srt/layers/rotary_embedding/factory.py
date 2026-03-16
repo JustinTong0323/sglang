@@ -242,12 +242,6 @@ def get_rope(
                 in ("extrapolation_factor", "attn_factor", "beta_fast", "beta_slow")
             }
             extra_kwargs["truncate"] = rope_scaling.get("truncate", True)
-            logger.warning(
-                "YaRN rope debug: scaling_factor=%s, original_max_position=%s, "
-                "base=%s, max_position=%s, extra_kwargs=%s, head_size=%s, rotary_dim=%s",
-                scaling_factor, original_max_position, base, max_position,
-                extra_kwargs, head_size, rotary_dim,
-            )
             if "mrope_section" in rope_scaling:
                 rotary_emb = YaRNScalingMRotaryEmbedding(
                     head_size,
