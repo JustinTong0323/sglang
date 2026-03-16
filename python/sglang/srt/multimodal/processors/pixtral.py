@@ -33,9 +33,17 @@ class PixtralProcessor(BaseMultimodalProcessor):
         self.image_size = self.vision_config.image_size
         self.patch_size = self.vision_config.patch_size
 
+        # spatial_merge_size may live on vision_config (Mistral native) or
+        # on the top-level config (HF native Mistral3Config).
+        self._spatial_merge_size = getattr(
+            self.vision_config,
+            "spatial_merge_size",
+            getattr(hf_config, "spatial_merge_size", 1),
+        )
+
         self._processor.patch_size = self.patch_size
-        if hasattr(self.vision_config, "spatial_merge_size"):
-            self._processor.spatial_merge_size = self.vision_config.spatial_merge_size
+        if self._spatial_merge_size > 1:
+            self._processor.spatial_merge_size = self._spatial_merge_size
 
         tokenizer = (
             _processor
@@ -69,11 +77,7 @@ class PixtralProcessor(BaseMultimodalProcessor):
             return_text=True,
         )
         if mm_data.images:
-            # Track per-image row counts for multi-image offset splitting
-            spatial_merge_size = getattr(
-                self.vision_config, "spatial_merge_size", 1
-            )
-            effective_patch = self.patch_size * spatial_merge_size
+            effective_patch = self.patch_size * self._spatial_merge_size
             image_nrows = []
             for img in mm_data.images:
                 w, h = img.size
@@ -99,6 +103,7 @@ class PixtralProcessor(BaseMultimodalProcessor):
                 )
                 all_offsets = old_item.offsets
                 old_feature = old_item.feature
+                old_image_sizes = getattr(old_item, "image_sizes", None)
 
                 mm_items = [
                     item for item in mm_items if item.modality != Modality.IMAGE
@@ -111,6 +116,10 @@ class PixtralProcessor(BaseMultimodalProcessor):
                     new_item = MultimodalDataItem(modality=Modality.IMAGE)
                     new_item.feature = old_feature[i : i + 1]
                     new_item.offsets = item_offsets
+                    if old_image_sizes is not None:
+                        new_item.model_specific_data["image_sizes"] = (
+                            old_image_sizes[i : i + 1]
+                        )
                     mm_items.append(new_item)
         else:
             mm_items, input_ids, _ = self.process_and_combine_mm_data(
