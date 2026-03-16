@@ -2957,10 +2957,7 @@ class ServerArgs:
         try:
             from huggingface_hub import HfApi
 
-            files = {
-                s.rfilename
-                for s in HfApi().model_info(self.model_path).siblings
-            }
+            files = {s.rfilename for s in HfApi().model_info(self.model_path).siblings}
             return "params.json" in files
         except Exception:
             return False
