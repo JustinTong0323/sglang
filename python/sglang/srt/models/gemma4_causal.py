@@ -298,7 +298,6 @@ class Gemma4Attention(nn.Module):
         layer_id: int,
         config: Gemma4TextConfig,
         head_dim: int,
-        total_num_kv_heads: int,
         max_position_embeddings: int,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
@@ -493,21 +492,11 @@ class Gemma4DecoderLayer(nn.Module):
         else:
             head_dim = getattr(config, "swa_head_dim", config.head_dim)
 
-        if self.is_full_attention and getattr(config, "attention_k_eq_v", False):
-            total_num_kv_heads = getattr(
-                config, "num_global_key_value_heads",
-                config.num_key_value_heads
-            )
-        else:
-            total_num_kv_heads = getattr(
-                config, "swa_num_key_value_heads", config.num_key_value_heads
-            )
         self.self_attn = Gemma4Attention(
             layer_id=layer_id,
             config=config,
             max_position_embeddings=config.max_position_embeddings,
             head_dim=head_dim,
-            total_num_kv_heads=total_num_kv_heads,
             quant_config=quant_config,
             prefix=add_prefix("self_attn", prefix),
         )
@@ -643,7 +632,6 @@ class Gemma4DecoderLayer(nn.Module):
             router_logits = self.router(hidden_states)
             hidden_states_2 = self.pre_feedforward_layernorm_2(hidden_states)
             hidden_states_2 = self.moe(hidden_states_2, router_logits)
-            hidden_states_2 = self.moe_out(hidden_states_2)
             hidden_states_2 = self.post_feedforward_layernorm_2(hidden_states_2)
 
             # Combine branches
@@ -713,13 +701,7 @@ class Gemma4TextModel(PreTrainedModel):
                 self.padding_idx,
                 embed_scale=self.hidden_size_per_layer_input**0.5,
             )
-
-            # Scaled embedding factor (from config, not hardcoded)
-            # self.embed_scale_per_layer = torch.tensor(
-            #     self.hidden_size_per_layer_input**0.5,
-            # )
-
-            # FIXME: Use replicated for now. Use ColumnParallel?.
+            
             self.per_layer_model_projection = ReplicatedLinear(
                 self.hidden_size,
                 config.num_hidden_layers * self.hidden_size_per_layer_input,
@@ -755,18 +737,6 @@ class Gemma4TextModel(PreTrainedModel):
         )
 
         self.norm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-
-        # self.per_layer_projection_scale = torch.tensor(
-        #     config.hidden_size**-0.5,
-        # )
-        # self.register_buffer(
-        #     "per_layer_input_scale", torch.rsqrt(torch.tensor(2.0)), persistent=False
-        # )
-        # self.register_buffer(
-        #     "normalizer",
-        #     torch.tensor(config.hidden_size**0.5),
-        #     persistent=False,
-        # )
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Embedding:
@@ -1004,12 +974,12 @@ class Gemma4ForCausalLM(PreTrainedModel):
             ("gate_up_proj", "up_proj", 1),
         ]
 
-        expert_params_mapping = FusedMoE.make_expert_params_mapping(
+        expert_params_mapping = FusedMoE.make_expert_params_mapping_gemma4(
             ckpt_gate_proj_name="gate_proj",
             ckpt_down_proj_name="down_proj",
             ckpt_up_proj_name="up_proj",
-            num_experts=getattr(self.config, "num_experts", 0),
         )
+        num_experts = self.config.num_experts
 
         k_eq_v_layers = self._get_k_eq_v_layers()
 
@@ -1018,6 +988,13 @@ class Gemma4ForCausalLM(PreTrainedModel):
         loaded_params: Set[str] = set()
         for name, loaded_weight in weights:
             name = name.replace("model.language_model.", "model.")
+
+            if (
+                ".moe." in name
+                and "experts" not in name
+                and "per_expert_scale" not in name
+            ):
+                name = name.replace(".moe.", ".moe.experts.")
 
             # attention_k_eq_v: full-attention layers have no v_proj in the
             # checkpoint (K and V share weights).  When we see a k_proj weight
@@ -1030,21 +1007,16 @@ class Gemma4ForCausalLM(PreTrainedModel):
                 and int(m.group(1)) in k_eq_v_layers
             )
 
-
-            if (
-                ".moe." in name
-                and "experts" not in name
-                and "per_expert_scale" not in name
-            ):
-                name = name.replace(".moe.", ".moe.experts.")
-
-            for param_name, shard_name, shard_id in stacked_params_mapping:
-                if shard_name not in name:
+            # Try stacked (fused) params first
+            orig_name = name
+            for param_name, weight_name, shard_id in self.stacked_params_mapping:
+                name = orig_name
+                m = re.search(r".layers\.(\d+)\.", name)
+                if weight_name not in name:
                     continue
-                name = name.replace(shard_name, param_name)
-                if name.endswith(".bias") and name not in params_dict:
-                    continue
+                name = name.replace(weight_name, param_name)
                 if name not in params_dict:
+                    name = orig_name
                     continue
                 param = params_dict[name]
                 weight_loader = param.weight_loader
@@ -1053,38 +1025,26 @@ class Gemma4ForCausalLM(PreTrainedModel):
                     weight_loader(param, loaded_weight, "v")
                 break
             else:
-                for mapping in expert_params_mapping:
-                    param_name, weight_name, expert_id, shard_id = mapping
+                for param_name, weight_name, shard_id in expert_params_mapping:
                     if weight_name not in name:
                         continue
                     name = name.replace(weight_name, param_name)
-                    if name in params_dict.keys():
-                        param = params_dict[name]
-                        weight_loader = param.weight_loader
-                        weight_loader(
-                            param,
-                            loaded_weight,
-                            name,
-                            shard_id=shard_id,
-                            expert_id=expert_id,
-                        )
-                    else:
-                        raise KeyError(
-                            f"Parameter '{name}' not found in model."
-                        )
+                    if name not in params_dict:
+                        continue
+                    param = params_dict[name]
+                    weight_loader = param.weight_loader
+                    for i in range(num_experts):
+                        weight_loader(param, loaded_weight[i].T, name, shard_id, i)
                     break
                 else:
-                    if "lm_head.weight" in name and self.config.tie_word_embeddings:
-                        continue
                     if name.endswith(".bias") and name not in params_dict:
                         continue
+                    
                     name = maybe_remap_kv_scale_name(name, params_dict)
                     if name is None:
                         continue
-
                     if name not in params_dict:
                         continue
-
                     param = params_dict[name]
                     weight_loader = getattr(param, "weight_loader", default_weight_loader)
                     weight_loader(param, loaded_weight)

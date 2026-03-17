@@ -628,13 +628,6 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             for param_name, weight_name, shard_id in self.stacked_params_mapping:
                 name = orig_name
                 m = re.search(r"language_model.layers\.(\d+)\.", name)
-                if "k_proj" in name and "k_proj" in weight_name and k_eq_v_layer_indices and m and int(m.group(1)) in k_eq_v_layer_indices:
-                    n = name.replace(weight_name, param_name)
-                    param = params_dict[n]
-                    weight_loader = getattr(param, "weight_loader", default_weight_loader)
-                    weight_loader(param, loaded_weight, "v")
-                    loaded_params.add(n)
-
                 if weight_name not in name:
                     continue
                 name = name.replace(weight_name, param_name)
