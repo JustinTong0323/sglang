@@ -877,8 +877,27 @@ def _fix_v5_add_bos_eos_token(tokenizer, model_name_or_path, revision=None):
     post-processor does NOT add BOS/EOS, and rely on the add_bos_token flag
     from tokenizer_config.json instead. This causes silent accuracy regressions.
 
-    This function reads the tokenizer_config.json and restores the values.
+    This function reads the tokenizer_config.json and restores the values,
+    but only for tokenizer classes that actually supported these flags in v4.
+    Classes like Qwen2Tokenizer did not support add_bos_token/add_eos_token
+    in v4, so restoring them would change behavior.
     """
+    # In transformers v4, only certain tokenizer classes supported
+    # add_bos_token / add_eos_token as init parameters.  Restoring these
+    # flags for classes that never supported them (e.g. Qwen2Tokenizer)
+    # would incorrectly change tokenization behavior.
+    _V4_CLASSES_WITH_BOS_EOS_FLAGS = frozenset(
+        {
+            "LlamaTokenizer",
+            "LlamaTokenizerFast",
+            "CodeLlamaTokenizer",
+            "CodeLlamaTokenizerFast",
+            "GemmaTokenizer",
+            "GemmaTokenizerFast",
+            "CohereTokenizerFast",
+        }
+    )
+
     try:
         local_path = Path(model_name_or_path) / "tokenizer_config.json"
         if local_path.is_file():
@@ -904,11 +923,27 @@ def _fix_v5_add_bos_eos_token(tokenizer, model_name_or_path, revision=None):
         )
         return
 
+    tokenizer_class = config.get("tokenizer_class", "")
+    if tokenizer_class not in _V4_CLASSES_WITH_BOS_EOS_FLAGS:
+        logger.debug(
+            "_fix_v5_add_bos_eos_token: skipping %s (tokenizer_class=%s "
+            "did not support add_bos/eos_token in v4)",
+            model_name_or_path,
+            tokenizer_class,
+        )
+        return
+
+    # In v4, Llama/Gemma tokenizers defaulted add_bos_token=True.
+    # When the config omits the key or has null, use the v4 default so that
+    # update_post_processor() doesn't drop BOS/EOS that was there before.
+    _V4_DEFAULTS = {"add_bos_token": True, "add_eos_token": False}
+
     changed = False
     for attr in ("add_bos_token", "add_eos_token"):
-        if attr not in config:
-            continue
-        config_val = config[attr]
+        config_val = config.get(attr)
+        if config_val is None:
+            # Key missing or null → use v4 default for this tokenizer class
+            config_val = _V4_DEFAULTS.get(attr, False)
         current_val = getattr(tokenizer, attr, None)
         if current_val != config_val:
             logger.info(

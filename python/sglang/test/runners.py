@@ -104,6 +104,8 @@ def _get_sentence_transformer_embedding_model(
     from sentence_transformers import SentenceTransformer
     from sentence_transformers.util import is_sentence_transformer_model
 
+    from sglang.srt.utils.hf_transformers_utils import _fix_v5_add_bos_eos_token
+
     if is_sentence_transformer_model(model_path):
         model = SentenceTransformer(
             model_path,
@@ -114,6 +116,9 @@ def _get_sentence_transformer_embedding_model(
             config_kwargs={"is_causal": True},
             truncate_dim=matryoshka_dim,
         )
+        # Apply the same tokenizer fix as SGLang's get_tokenizer() so that
+        # BOS/EOS behavior matches between the HF reference and SRT.
+        _fix_v5_add_bos_eos_token(model.tokenizer, model_path)
     else:  # if no pre-trained sentence-transformers model
         from sentence_transformers import models
 
