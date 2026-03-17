@@ -33,6 +33,7 @@ from sglang.srt.batch_overlap.two_batch_overlap import (
     model_forward_maybe_tbo,
 )
 from sglang.srt.configs.model_config import (
+    compute_mla_mscale_scaling,
     get_nsa_index_head_dim,
     get_nsa_index_n_heads,
     get_nsa_index_topk,
@@ -127,7 +128,6 @@ from sglang.srt.models.deepseek_common.attention_forward_methods import (
 from sglang.srt.models.deepseek_common.deepseek_weight_loader import (
     DeepseekV2WeightLoaderMixin,
 )
-from sglang.srt.configs.model_config import compute_mla_mscale_scaling
 from sglang.srt.models.deepseek_common.utils import (
     _device_sm,
     _get_llama_4_scaling,
@@ -1199,9 +1199,7 @@ class DeepseekV2AttentionMLA(
             )
 
             if rope_scaling:
-                self.scaling = compute_mla_mscale_scaling(
-                    rope_scaling, self.scaling
-                )
+                self.scaling = compute_mla_mscale_scaling(rope_scaling, self.scaling)
         else:
             self.rotary_emb = None
         self.use_deepseek_yarn_rope = rope_scaling is not None

@@ -1081,9 +1081,7 @@ def _build_processor_manually(
                 model_path, trust_remote_code=trust_remote_code, revision=revision
             )
         except Exception as e:
-            logger.warning(
-                "Failed to load image_processor for %s: %s", model_path, e
-            )
+            logger.warning("Failed to load image_processor for %s: %s", model_path, e)
 
     # Instantiate feature extractor from its declared class
     fe_class_name = getattr(proc_cls, "feature_extractor_class", None)
