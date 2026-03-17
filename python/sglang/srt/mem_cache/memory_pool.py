@@ -708,14 +708,6 @@ class KVCache(abc.ABC):
     ) -> None:
         raise NotImplementedError()
 
-    def translate_loc(self, layer_id: int, loc: torch.Tensor) -> torch.Tensor:
-        """Translate full-pool cache locations to the correct locations for a given layer.
-
-        For pools with separate sub-pools (e.g. SWAKVPool), the indices used to
-        write/read may differ per layer type. Override this to perform the mapping.
-        """
-        return loc
-
     def register_layer_transfer_counter(self, layer_transfer_counter: LayerDoneCounter):
         self.layer_transfer_counter = layer_transfer_counter
 

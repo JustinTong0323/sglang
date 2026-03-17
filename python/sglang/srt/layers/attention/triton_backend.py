@@ -13,6 +13,7 @@ from sglang.srt.layers.attention.utils import create_flashinfer_kv_indices_trito
 from sglang.srt.layers.dp_attention import get_attention_tp_size
 from sglang.srt.layers.radix_attention import AttentionType
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
+from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool
 from sglang.srt.speculative.spec_utils import generate_draft_decode_kv_indices
 from sglang.srt.utils import (
     get_bool_env_var,
@@ -110,6 +111,7 @@ class TritonAttnBackend(AttentionBackend):
             model_runner.hybrid_gdn_config is not None
             or model_runner.kimi_linear_config is not None
         ):
+            # For hybrid linear models, layer_id = 0 may not be full attention
             self.v_head_dim = model_runner.token_to_kv_pool.get_v_head_dim()
             self.swa_v_head_dim = None
         else:
@@ -854,10 +856,11 @@ class TritonAttnBackend(AttentionBackend):
             o = torch.empty_like(q)
 
         if k is None and v is None:
-            cache_loc = forward_batch.token_to_kv_pool.translate_loc(
-                layer.layer_id, forward_batch.out_cache_loc
-            )
-            k_buffer, v_buffer = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
+            pool = forward_batch.token_to_kv_pool
+            cache_loc = forward_batch.out_cache_loc
+            if isinstance(pool, SWAKVPool) and pool.layers_mapping[layer.layer_id][1]:
+                cache_loc = pool.translate_loc_from_full_to_swa(cache_loc)
+            k_buffer, v_buffer = pool.get_kv_buffer(layer.layer_id)
             k = k_buffer[cache_loc]
             v = v_buffer[cache_loc]
         elif k is None or v is None:
