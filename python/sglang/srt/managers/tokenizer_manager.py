@@ -1838,8 +1838,8 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
             ]
         else:
             assert self.tokenizer is not None
-            # Wrap each token ID in its own list for batch_decode to decode them separately
-            # batch_decode([1, 2, 3]) concatenates tokens, batch_decode([[1], [2], [3]]) decodes separately
+            # In transformers v5, batch_decode([1, 2, 3]) concatenates all tokens
+            # into one string. Wrap each ID in its own list so they decode separately.
             token_texts = self.tokenizer.batch_decode(
                 [[idx] for idx in token_logprobs_idx]
             )

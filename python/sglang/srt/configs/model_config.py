@@ -57,6 +57,11 @@ def is_deepseek_nsa(config) -> bool:
         if isinstance(config, dict)
         else getattr(config, "architectures", None)
     )
+    index_topk = (
+        config.get("index_topk")
+        if isinstance(config, dict)
+        else getattr(config, "index_topk", None)
+    )
     return (
         architectures is not None
         and architectures[0]
@@ -68,12 +73,7 @@ def is_deepseek_nsa(config) -> bool:
             "PixtralForConditionalGeneration",
             "GlmMoeDsaForCausalLM",
         ]
-        and (
-            config.get("index_topk")
-            if isinstance(config, dict)
-            else getattr(config, "index_topk", None)
-        )
-        is not None
+        and index_topk is not None
     )
 
 

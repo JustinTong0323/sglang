@@ -430,7 +430,7 @@ def _ensure_llama_flash_attention2_compat() -> None:
     """Ensure LlamaFlashAttention2 symbol exists for remote code compatibility."""
     try:
         from transformers.models.llama import modeling_llama
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return
     if not hasattr(modeling_llama, "LlamaFlashAttention2"):
         if hasattr(modeling_llama, "LlamaAttention"):
@@ -838,7 +838,12 @@ def _fix_v5_tokenizer_components(tokenizer, model_name_or_path, revision=None):
             model_name_or_path, "tokenizer.json", revision
         )
         raw = RawTokenizer.from_file(tok_file)
-    except Exception:
+    except Exception as e:
+        logger.debug(
+            "_fix_v5_tokenizer_components: could not load tokenizer.json for %s: %s",
+            model_name_or_path,
+            e,
+        )
         return
 
     raw_pre = type(raw.pre_tokenizer).__name__ if raw.pre_tokenizer else None
@@ -1050,8 +1055,13 @@ def _build_processor_manually(
             with open(pp_file) as f:
                 pp_auto_map = json.load(f).get("auto_map", {})
             proc_ref = pp_auto_map.get("AutoProcessor")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                "_build_processor_manually: could not read preprocessor_config.json "
+                "for %s: %s",
+                model_path,
+                e,
+            )
     if not proc_ref:
         raise ValueError(f"Cannot determine processor class for {model_path}")
 
