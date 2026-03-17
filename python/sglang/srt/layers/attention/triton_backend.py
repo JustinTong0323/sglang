@@ -12,8 +12,8 @@ from sglang.srt.layers.attention.base_attn_backend import AttentionBackend
 from sglang.srt.layers.attention.utils import create_flashinfer_kv_indices_triton
 from sglang.srt.layers.dp_attention import get_attention_tp_size
 from sglang.srt.layers.radix_attention import AttentionType
-from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool
+from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from sglang.srt.speculative.spec_utils import generate_draft_decode_kv_indices
 from sglang.srt.utils import (
     get_bool_env_var,
@@ -115,9 +115,9 @@ class TritonAttnBackend(AttentionBackend):
             self.v_head_dim = model_runner.token_to_kv_pool.get_v_head_dim()
             self.swa_v_head_dim = None
         else:
-            self.v_head_dim = model_runner.token_to_kv_pool.get_value_buffer(
-                0
-            ).shape[-1]
+            self.v_head_dim = model_runner.token_to_kv_pool.get_value_buffer(0).shape[
+                -1
+            ]
             self.swa_v_head_dim = None
         self.max_context_len = model_runner.model_config.context_len
         self.device = model_runner.device
@@ -477,7 +477,12 @@ class TritonAttnBackend(AttentionBackend):
         )
         if self.swa_v_head_dim is not None:
             self.cuda_graph_swa_attn_logits = torch.zeros(
-                (max_num_tokens, self.num_head, self.max_kv_splits, self.swa_v_head_dim),
+                (
+                    max_num_tokens,
+                    self.num_head,
+                    self.max_kv_splits,
+                    self.swa_v_head_dim,
+                ),
                 dtype=torch.float32,
                 device=self.device,
             )

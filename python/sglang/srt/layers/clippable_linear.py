@@ -37,7 +37,6 @@ from sglang.srt.layers.linear import (
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.utils import add_prefix
 
-
 _INF = float("inf")
 
 
@@ -268,7 +267,9 @@ class ClippableGateUpParallelLinear(nn.Module):
         )
         self.input_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
         self.input_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
-        self.gate_output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
+        self.gate_output_min = nn.parameter.Buffer(
+            torch.tensor(-_INF), persistent=False
+        )
         self.gate_output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)
         self.up_output_min = nn.parameter.Buffer(torch.tensor(-_INF), persistent=False)
         self.up_output_max = nn.parameter.Buffer(torch.tensor(_INF), persistent=False)

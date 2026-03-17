@@ -28,9 +28,6 @@ from transformers import (
     PreTrainedModel,
 )
 
-from sglang.srt.models.gemma4_audio import Gemma4AudioEncoder
-from sglang.srt.models.gemma4_vision import Gemma4VisionEncoder
-
 from sglang.srt.layers.layernorm import Gemma4RMSNorm
 from sglang.srt.layers.linear import ReplicatedLinear
 from sglang.srt.layers.logits_processor import LogitsProcessor
@@ -50,7 +47,9 @@ from sglang.srt.model_loader.weight_utils import (
     default_weight_loader,
     maybe_remap_kv_scale_name,
 )
+from sglang.srt.models.gemma4_audio import Gemma4AudioEncoder
 from sglang.srt.models.gemma4_causal import Gemma4TextModel
+from sglang.srt.models.gemma4_vision import Gemma4VisionEncoder
 from sglang.srt.utils import add_prefix
 from sglang.srt.utils.hf_transformers_utils import get_processor
 
@@ -280,10 +279,14 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
 
     def get_audio_feature(self, items: List[MultimodalDataItem]) -> torch.Tensor:
         if self.audio_tower is None:
-            raise ValueError("Audio inputs provided but the model does not have an audio tower.")
+            raise ValueError(
+                "Audio inputs provided but the model does not have an audio tower."
+            )
 
         all_input_features = flatten_nested_list([item.feature for item in items])
-        all_input_features_mask = flatten_nested_list([~item.input_features_mask for item in items])
+        all_input_features_mask = flatten_nested_list(
+            [~item.input_features_mask for item in items]
+        )
 
         all_embeds = []
         for input_features, input_features_mask in zip(
@@ -396,9 +399,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         r"(.+\.(?:self_attn|attn))\.(q_proj|k_proj|v_proj)\.(.*)"
     )
     # Regex for fused GateUp in the vision tower MLP.
-    _RE_TOWER_GATE_UP = re.compile(
-        r"(.+\.mlp)\.(gate_proj|up_proj)\.(.*)"
-    )
+    _RE_TOWER_GATE_UP = re.compile(r"(.+\.mlp)\.(gate_proj|up_proj)\.(.*)")
 
     @staticmethod
     def _remap_tower_name(name: str, params_dict: dict) -> str:

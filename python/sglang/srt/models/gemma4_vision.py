@@ -21,17 +21,16 @@ import torch.nn.functional as F
 from einops import rearrange
 from transformers import Gemma4VisionConfig
 
-from sglang.srt.layers.attention.vision import QKV_BACKEND_IMPL, VisionAttention
+from sglang.srt.layers.attention.vision import QKV_BACKEND_IMPL
 from sglang.srt.layers.clippable_linear import (
     ClippableGateUpParallelLinear,
     ClippableQKVParallelLinear,
     ClippableRowParallelLinear,
 )
-from sglang.srt.layers.dp_attention import get_attention_tp_rank, get_attention_tp_size
+from sglang.srt.layers.dp_attention import get_attention_tp_size
 from sglang.srt.layers.layernorm import Gemma4RMSNorm
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.utils import add_prefix, get_device_capability, is_cuda
-
 
 # ---------------------------------------------------------------------------
 # 2-D Multidimensional RoPE (matches HF Gemma4RotaryEmbedding for vision)
@@ -44,7 +43,9 @@ def _rotate_half(x: torch.Tensor) -> torch.Tensor:
     return torch.cat((-x2, x1), dim=-1)
 
 
-def _apply_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+def _apply_rotary(
+    x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
+) -> torch.Tensor:
     return (x * cos) + (_rotate_half(x) * sin)
 
 
@@ -76,7 +77,9 @@ class Gemma4VisionRotaryEmbedding(nn.Module):
             dim_inv_freq = 1.0 / (
                 self.rope_theta
                 ** (
-                    torch.arange(0, head_dim_per_dim, 2, device=x.device, dtype=torch.float)
+                    torch.arange(
+                        0, head_dim_per_dim, 2, device=x.device, dtype=torch.float
+                    )
                     / head_dim_per_dim
                 )
             )
@@ -111,7 +114,9 @@ def _apply_multidimensional_rope(
     x_parts = x.split(chunk_size, dim=-1)
     cos_parts = cos.split(chunk_size, dim=-1)
     sin_parts = sin.split(chunk_size, dim=-1)
-    y_parts = [_apply_rotary(x_parts[k], cos_parts[k], sin_parts[k]) for k in range(ndim)]
+    y_parts = [
+        _apply_rotary(x_parts[k], cos_parts[k], sin_parts[k]) for k in range(ndim)
+    ]
     return torch.cat(y_parts, dim=-1)
 
 
@@ -225,9 +230,12 @@ class Gemma4VisionAttention(nn.Module):
             attn_mask_4d = None
 
         output = self.qkv_backend.forward(
-            q=q, k=k, v=v,
+            q=q,
+            k=k,
+            v=v,
             cu_seqlens=None,
-            bsz=bsz, seq_len=seq_len,
+            bsz=bsz,
+            seq_len=seq_len,
             attention_mask=attn_mask_4d,
             softmax_scale=1.0,
         )
@@ -292,11 +300,13 @@ class Gemma4VisionEncoderLayer(nn.Module):
     ):
         super().__init__()
         self.self_attn = Gemma4VisionAttention(
-            config, quant_config=quant_config,
+            config,
+            quant_config=quant_config,
             prefix=add_prefix("self_attn", prefix),
         )
         self.mlp = Gemma4VisionMLP(
-            config, quant_config=quant_config,
+            config,
+            quant_config=quant_config,
             prefix=add_prefix("mlp", prefix),
         )
         eps = config.rms_norm_eps
@@ -346,13 +356,17 @@ class Gemma4VisionTransformer(nn.Module):
         super().__init__()
         self.config = config
         self.rotary_emb = Gemma4VisionRotaryEmbedding(config)
-        self.layers = nn.ModuleList([
-            Gemma4VisionEncoderLayer(
-                config, layer_idx=i, quant_config=quant_config,
-                prefix=add_prefix(f"layers.{i}", prefix),
-            )
-            for i in range(config.num_hidden_layers)
-        ])
+        self.layers = nn.ModuleList(
+            [
+                Gemma4VisionEncoderLayer(
+                    config,
+                    layer_idx=i,
+                    quant_config=quant_config,
+                    prefix=add_prefix(f"layers.{i}", prefix),
+                )
+                for i in range(config.num_hidden_layers)
+            ]
+        )
 
     def forward(
         self,
@@ -387,7 +401,9 @@ class Gemma4VisionPatchEmbedder(nn.Module):
         self.hidden_size = config.hidden_size
         self.position_embedding_size = config.position_embedding_size
 
-        self.input_proj = nn.Linear(3 * self.patch_size ** 2, self.hidden_size, bias=False)
+        self.input_proj = nn.Linear(
+            3 * self.patch_size**2, self.hidden_size, bias=False
+        )
         self.position_embedding_table = nn.Parameter(
             torch.ones(2, self.position_embedding_size, self.hidden_size)
         )
@@ -399,24 +415,46 @@ class Gemma4VisionPatchEmbedder(nn.Module):
         one_hot = one_hot.permute(0, 2, 1, 3).to(self.position_embedding_table)
         position_embeddings = one_hot @ self.position_embedding_table
         position_embeddings = position_embeddings.sum(dim=1)
-        position_embeddings = torch.where(padding_positions.unsqueeze(-1), 0.0, position_embeddings)
+        position_embeddings = torch.where(
+            padding_positions.unsqueeze(-1), 0.0, position_embeddings
+        )
         return position_embeddings
 
     def _patchify(self, pixel_values: torch.Tensor) -> torch.Tensor:
         batch_size, num_channels, height, width = pixel_values.shape
         patch_height = height // self.patch_size
         patch_width = width // self.patch_size
-        patchified_shape = (batch_size, num_channels, patch_height, self.patch_size, patch_width, self.patch_size)
-        consolidated_shape = (batch_size, patch_height * patch_width, num_channels * self.patch_size ** 2)
-        patches = pixel_values.reshape(patchified_shape).permute(0, 2, 4, 3, 5, 1).reshape(consolidated_shape)
+        patchified_shape = (
+            batch_size,
+            num_channels,
+            patch_height,
+            self.patch_size,
+            patch_width,
+            self.patch_size,
+        )
+        consolidated_shape = (
+            batch_size,
+            patch_height * patch_width,
+            num_channels * self.patch_size**2,
+        )
+        patches = (
+            pixel_values.reshape(patchified_shape)
+            .permute(0, 2, 4, 3, 5, 1)
+            .reshape(consolidated_shape)
+        )
         patches = 2 * (patches - 0.5)
         return self.input_proj(patches.to(self.input_proj.weight.dtype))
 
     def forward(
-        self, pixel_values: torch.Tensor, patch_positions: torch.Tensor, padding_positions: torch.Tensor
+        self,
+        pixel_values: torch.Tensor,
+        patch_positions: torch.Tensor,
+        padding_positions: torch.Tensor,
     ) -> torch.Tensor:
         hidden_states = self._patchify(pixel_values)
-        position_embeddings = self._position_embeddings(patch_positions, padding_positions)
+        position_embeddings = self._position_embeddings(
+            patch_positions, padding_positions
+        )
         return hidden_states + position_embeddings
 
 
@@ -430,14 +468,14 @@ class Gemma4VisionPooler(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.default_output_length = config.default_output_length
-        self.root_hidden_size = self.hidden_size ** 0.5
+        self.root_hidden_size = self.hidden_size**0.5
 
     def _avg_pool_by_positions(
         self, x: torch.Tensor, patch_positions: torch.Tensor, length: int
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         input_seq_len = x.shape[1]
         k = int((input_seq_len // length) ** 0.5)
-        k_squared = k ** 2
+        k_squared = k**2
         if k_squared * length != input_seq_len:
             raise ValueError(
                 f"Cannot pool {x.shape} to {length}: {k=}^2 times {length=} must be {input_seq_len}."
@@ -493,11 +531,12 @@ class Gemma4VisionEncoder(nn.Module):
         self.patch_size = config.patch_size
         self.pooling_kernel_size = config.pooling_kernel_size
         self.default_output_length = config.default_output_length
-        self.max_patches = self.default_output_length * self.pooling_kernel_size ** 2
+        self.max_patches = self.default_output_length * self.pooling_kernel_size**2
 
         self.patch_embedder = Gemma4VisionPatchEmbedder(config)
         self.encoder = Gemma4VisionTransformer(
-            config, quant_config=quant_config,
+            config,
+            quant_config=quant_config,
             prefix=add_prefix("encoder", prefix),
         )
         self.pooler = Gemma4VisionPooler(config)
@@ -526,7 +565,9 @@ class Gemma4VisionEncoder(nn.Module):
             indexing="xy",
         )
         stacked_grid = torch.stack(patch_grid, dim=-1)
-        real_positions = stacked_grid.reshape(num_patches, 2).unsqueeze(0).repeat(batch_size, 1, 1)
+        real_positions = (
+            stacked_grid.reshape(num_patches, 2).unsqueeze(0).repeat(batch_size, 1, 1)
+        )
 
         if num_padding > 0:
             pad_positions = torch.full(
@@ -536,7 +577,9 @@ class Gemma4VisionEncoder(nn.Module):
         else:
             patch_positions = real_positions
 
-        padding_positions = torch.zeros(batch_size, self.max_patches, device=device, dtype=torch.bool)
+        padding_positions = torch.zeros(
+            batch_size, self.max_patches, device=device, dtype=torch.bool
+        )
         if num_padding > 0:
             padding_positions[:, num_patches:] = True
 
@@ -564,8 +607,11 @@ class Gemma4VisionEncoder(nn.Module):
         num_padding = self.max_patches - num_real
         if num_padding > 0:
             pad_embeds = torch.zeros(
-                inputs_embeds.shape[0], num_padding, inputs_embeds.shape[2],
-                device=inputs_embeds.device, dtype=inputs_embeds.dtype,
+                inputs_embeds.shape[0],
+                num_padding,
+                inputs_embeds.shape[2],
+                device=inputs_embeds.device,
+                dtype=inputs_embeds.dtype,
             )
             inputs_embeds = torch.cat([inputs_embeds, pad_embeds], dim=1)
 
@@ -575,5 +621,7 @@ class Gemma4VisionEncoder(nn.Module):
             patch_positions=patch_positions,
         )
 
-        pooled, pooler_mask = self.pooler(last_hidden, patch_positions, padding_positions)
+        pooled, pooler_mask = self.pooler(
+            last_hidden, patch_positions, padding_positions
+        )
         return pooled, pooler_mask

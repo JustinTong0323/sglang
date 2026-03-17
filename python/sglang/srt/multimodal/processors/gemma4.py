@@ -22,6 +22,7 @@ from sglang.srt.managers.multimodal_processor import (
 from sglang.srt.models.gemma4_mm import Gemma4ForConditionalGeneration
 from sglang.srt.multimodal.processors.base_processor import MultimodalSpecialTokens
 
+
 class Gemma4SGLangProcessor(SGLangBaseProcessor):
     """Multimodal processor for Gemma4 supporting image and audio inputs."""
 
@@ -55,7 +56,9 @@ class Gemma4SGLangProcessor(SGLangBaseProcessor):
         first_stride = ac.sscp_conv_stride_size[0][0] if ac is not None else 2
         return hop * first_stride
 
-    def process_mm_data(self, input_text, images=None, videos=None, audios=None, **kwargs):
+    def process_mm_data(
+        self, input_text, images=None, videos=None, audios=None, **kwargs
+    ):
         if audios:
             pad_multiple = self._get_audio_pad_multiple()
             padded = []

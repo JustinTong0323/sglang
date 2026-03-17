@@ -175,7 +175,11 @@ class VisionSdpaAttention(nn.Module):
         self.flatten_batch = flatten_batch
         self.softmax_in_single_precision = softmax_in_single_precision
         self.dropout = dropout
-        self.scale = softmax_scale if softmax_scale is not None else 1.0 / math.sqrt(self.head_size)
+        self.scale = (
+            softmax_scale
+            if softmax_scale is not None
+            else 1.0 / math.sqrt(self.head_size)
+        )
 
     @staticmethod
     @lru_cache(maxsize=128)

@@ -423,18 +423,12 @@ class TestGemma4EncoderAccuracy(unittest.TestCase):
             # HF: last_hidden_state is [1, num_real_tokens, hidden] (padding stripped)
             hf_out = self.hf_vision_tower(pixel_values)
             hf_tokens = hf_out.last_hidden_state.squeeze(0)
-            hf_projected = self.hf_embed_vision(
-                hf_tokens.unsqueeze(0)
-            ).squeeze(0)
+            hf_projected = self.hf_embed_vision(hf_tokens.unsqueeze(0)).squeeze(0)
 
             # SGLang: returns (pooled, pooler_mask) with mask True = valid
             sg_pooled, sg_mask = self.sg_model.vision_tower(pixel_values)
-            sg_tokens = torch.cat(
-                [hs[m] for hs, m in zip(sg_pooled, sg_mask)]
-            )
-            sg_projected = self.sg_model.embed_vision(
-                sg_tokens.unsqueeze(0)
-            ).squeeze(0)
+            sg_tokens = torch.cat([hs[m] for hs, m in zip(sg_pooled, sg_mask)])
+            sg_projected = self.sg_model.embed_vision(sg_tokens.unsqueeze(0)).squeeze(0)
 
         self.assertEqual(hf_tokens.shape, sg_tokens.shape)
         print()
@@ -463,9 +457,7 @@ class TestGemma4EncoderAccuracy(unittest.TestCase):
             hf_valid = hf_enc[hf_valid_mask.unsqueeze(-1).expand_as(hf_enc)].reshape(
                 -1, hf_enc.shape[-1]
             )
-            hf_projected = self.hf_embed_audio(
-                hf_valid.unsqueeze(0)
-            ).squeeze(0)
+            hf_projected = self.hf_embed_audio(hf_valid.unsqueeze(0)).squeeze(0)
 
             # SGLang: returns (encodings, mask) — zero-fills padding positions
             sg_enc, sg_mask = self.sg_model.audio_tower(audio_mel, audio_mel_mask)
@@ -473,9 +465,7 @@ class TestGemma4EncoderAccuracy(unittest.TestCase):
             sg_valid = sg_enc[sg_valid_mask.unsqueeze(-1).expand_as(sg_enc)].reshape(
                 -1, sg_enc.shape[-1]
             )
-            sg_projected = self.sg_model.embed_audio(
-                sg_valid.unsqueeze(0)
-            ).squeeze(0)
+            sg_projected = self.sg_model.embed_audio(sg_valid.unsqueeze(0)).squeeze(0)
 
         self.assertEqual(hf_valid.shape, sg_valid.shape)
         print()
@@ -615,18 +605,24 @@ class TestGemma4EncoderAccuracyTP2(unittest.TestCase):
         with torch.no_grad():
             hf_enc, hf_mask = hf_audio_tower(audio_mel, audio_mel_mask)
             hf_valid_mask = ~hf_mask
-            cls.hf_audio_valid = hf_enc[
-                hf_valid_mask.unsqueeze(-1).expand_as(hf_enc)
-            ].reshape(-1, hf_enc.shape[-1]).cpu()
-            cls.hf_audio_proj = hf_embed_audio(
-                cls.hf_audio_valid.unsqueeze(0).to(cls.device)
-            ).squeeze(0).cpu()
+            cls.hf_audio_valid = (
+                hf_enc[hf_valid_mask.unsqueeze(-1).expand_as(hf_enc)]
+                .reshape(-1, hf_enc.shape[-1])
+                .cpu()
+            )
+            cls.hf_audio_proj = (
+                hf_embed_audio(cls.hf_audio_valid.unsqueeze(0).to(cls.device))
+                .squeeze(0)
+                .cpu()
+            )
 
             hf_vis_out = hf_vision_tower(pixel_values)
             cls.hf_vis_tokens = hf_vis_out.last_hidden_state.squeeze(0).cpu()
-            cls.hf_vis_proj = hf_embed_vision(
-                cls.hf_vis_tokens.unsqueeze(0).to(cls.device)
-            ).squeeze(0).cpu()
+            cls.hf_vis_proj = (
+                hf_embed_vision(cls.hf_vis_tokens.unsqueeze(0).to(cls.device))
+                .squeeze(0)
+                .cpu()
+            )
 
         del hf_audio_tower, hf_embed_audio, hf_vision_tower, hf_embed_vision
         import gc

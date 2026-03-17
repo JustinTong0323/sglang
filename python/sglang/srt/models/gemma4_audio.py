@@ -49,7 +49,6 @@ from sglang.srt.layers.linear import (
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.utils import add_prefix, make_layers, set_weight_attrs
 
-
 # ---------------------------------------------------------------------------
 # Relative Position Embedding
 # ---------------------------------------------------------------------------
@@ -249,7 +248,7 @@ class Gemma4AudioAttention(nn.Module):
 
         # softplus(0) = log(2); pre-fold into scale factors
         r_softplus_0 = 1.0 / math.log(2)
-        self.q_scale = (self.head_dim ** -0.5) * r_softplus_0
+        self.q_scale = (self.head_dim**-0.5) * r_softplus_0
         self.k_scale = r_softplus_0
 
         self.register_buffer(
@@ -306,10 +305,14 @@ class Gemma4AudioAttention(nn.Module):
 
         per_dim_scale_sp = F.softplus(self.per_dim_scale)
         broadcast_shape = (1, 1, 1, self.head_dim)
-        query_states = query_states * self.q_scale * per_dim_scale_sp.view(broadcast_shape)
+        query_states = (
+            query_states * self.q_scale * per_dim_scale_sp.view(broadcast_shape)
+        )
 
         per_dim_key_scale_sp = F.softplus(self.per_dim_key_scale)
-        key_states = key_states * self.k_scale * per_dim_key_scale_sp.view(broadcast_shape)
+        key_states = (
+            key_states * self.k_scale * per_dim_key_scale_sp.view(broadcast_shape)
+        )
 
         batch_size, q_time = query_states.shape[:2]
 
@@ -367,9 +370,9 @@ class Gemma4AudioAttention(nn.Module):
         prob_bun = probabilities.permute(0, 2, 1, 3, 4).reshape(-1, w_dim, c_dim)
         v_bun = value_blocks.permute(0, 1, 3, 2, 4).reshape(-1, c_dim, h_dim)
         result_bmm = torch.bmm(prob_bun, v_bun)
-        context_vectors = result_bmm.reshape(
-            b_dim, u_dim, n_dim, w_dim, h_dim
-        ).permute(0, 1, 3, 2, 4)
+        context_vectors = result_bmm.reshape(b_dim, u_dim, n_dim, w_dim, h_dim).permute(
+            0, 1, 3, 2, 4
+        )
         context_vectors = context_vectors.reshape(
             batch_size,
             num_query_blocks * self.chunk_size,
@@ -404,7 +407,10 @@ class Gemma4AudioSSCPConvBlock(nn.Module):
         stride_t, stride_f = config.sscp_conv_stride_size[idx]
         self.time_stride = stride_t
 
-        if config.sscp_conv_time_pad_top is not None and config.sscp_conv_time_pad_bottom is not None:
+        if (
+            config.sscp_conv_time_pad_top is not None
+            and config.sscp_conv_time_pad_bottom is not None
+        ):
             pad_t_top = config.sscp_conv_time_pad_top
             pad_t_bottom = config.sscp_conv_time_pad_bottom
         elif config.sscp_conv_padding_type == "semicausal":
@@ -543,9 +549,7 @@ class Gemma4AudioConformerAttention(nn.Module):
             persistent=False,
         )
 
-        self.pre_attn_norm = Gemma4RMSNorm(
-            config.hidden_size, scale_shift=0.0
-        )
+        self.pre_attn_norm = Gemma4RMSNorm(config.hidden_size, scale_shift=0.0)
         self.attn = Gemma4AudioAttention(
             config, quant_config, prefix=add_prefix("attn", prefix)
         )
@@ -556,9 +560,7 @@ class Gemma4AudioConformerAttention(nn.Module):
             quant_config=quant_config,
             prefix=add_prefix("post", prefix),
         )
-        self.post_norm = Gemma4RMSNorm(
-            config.hidden_size, scale_shift=0.0
-        )
+        self.post_norm = Gemma4RMSNorm(config.hidden_size, scale_shift=0.0)
 
     def forward(
         self,
@@ -603,9 +605,7 @@ class Gemma4AudioConformerFeedForward(nn.Module):
             persistent=False,
         )
 
-        self.pre_layer_norm = Gemma4RMSNorm(
-            config.hidden_size, scale_shift=0.0
-        )
+        self.pre_layer_norm = Gemma4RMSNorm(config.hidden_size, scale_shift=0.0)
         self.ffw_layer_1 = ClippableColumnParallelLinear(
             config.hidden_size,
             config.hidden_size * 4,
@@ -620,9 +620,7 @@ class Gemma4AudioConformerFeedForward(nn.Module):
             quant_config=quant_config,
             prefix=add_prefix("ffw_layer_2", prefix),
         )
-        self.post_layer_norm = Gemma4RMSNorm(
-            config.hidden_size, scale_shift=0.0
-        )
+        self.post_layer_norm = Gemma4RMSNorm(config.hidden_size, scale_shift=0.0)
         self.post_layer_scale = config.conf_residual_weight
 
     def forward(self, audio_encodings: torch.Tensor) -> torch.Tensor:
