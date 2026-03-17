@@ -1008,15 +1008,11 @@ class Gemma4ForCausalLM(PreTrainedModel):
             )
 
             # Try stacked (fused) params first
-            orig_name = name
             for param_name, weight_name, shard_id in self.stacked_params_mapping:
-                name = orig_name
-                m = re.search(r".layers\.(\d+)\.", name)
                 if weight_name not in name:
                     continue
                 name = name.replace(weight_name, param_name)
                 if name not in params_dict:
-                    name = orig_name
                     continue
                 param = params_dict[name]
                 weight_loader = param.weight_loader
@@ -1039,7 +1035,6 @@ class Gemma4ForCausalLM(PreTrainedModel):
                 else:
                     if name.endswith(".bias") and name not in params_dict:
                         continue
-                    
                     name = maybe_remap_kv_scale_name(name, params_dict)
                     if name is None:
                         continue

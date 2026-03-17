@@ -578,6 +578,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         k_eq_v_layers = self._get_k_eq_v_layers()
 
+        # TODO(pyc96): revisit and simplify.
         expert_params_mapping = FusedMoE.make_expert_params_mapping_gemma4(
             ckpt_gate_proj_name="gate_proj",
             ckpt_down_proj_name="down_proj",
@@ -624,15 +625,11 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             )
 
             # Try stacked (fused) params first
-            orig_name = name
             for param_name, weight_name, shard_id in self.stacked_params_mapping:
-                name = orig_name
-                m = re.search(r"language_model.layers\.(\d+)\.", name)
                 if weight_name not in name:
                     continue
                 name = name.replace(weight_name, param_name)
                 if name not in params_dict:
-                    name = orig_name
                     continue
                 param = params_dict[name]
                 weight_loader = param.weight_loader
@@ -655,7 +652,6 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 else:
                     if name.endswith(".bias") and name not in params_dict:
                         continue
-                    
                     name = maybe_remap_kv_scale_name(name, params_dict)
                     if name is None:
                         continue
