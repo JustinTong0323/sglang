@@ -456,9 +456,7 @@ class Gemma4DecoderLayer(nn.Module):
             self.per_layer_projection = None
             self.post_per_layer_input_norm = None
 
-        # Layer scalar for full-attention layers only
-        if self.is_full_attention:
-            self.register_buffer("layer_scalar", torch.ones(1), persistent=True)
+        self.register_buffer("layer_scalar", torch.ones(1), persistent=True)
         self.prefix = prefix
 
     def forward(
@@ -510,9 +508,7 @@ class Gemma4DecoderLayer(nn.Module):
             )
             hidden_states = hidden_states + per_layer_contribution
 
-        # Apply layer scalar for full-attention layers
-        if self.is_full_attention and hasattr(self, "layer_scalar"):
-            hidden_states = hidden_states * self.layer_scalar
+        hidden_states = hidden_states * self.layer_scalar
         return hidden_states, None
 
 
