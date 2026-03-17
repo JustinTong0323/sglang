@@ -97,14 +97,15 @@ class TritonAttnBackend(AttentionBackend):
         self.num_kv_head = model_runner.model_config.get_num_kv_heads(
             get_attention_tp_size()
         )
-        # The decode kernel's intermediate attn_logits buffer must match the
-        # exact v_head_dim of the layer being processed (the triton kernel uses
-        # a // Lv stride trick to derive attn_lse indices from attn_logits strides).
-        # When SWA and full attention layers have different v_head_dim (e.g. Gemma 4
-        # with swa=256, full=512), we need two separate attn_logits buffers.
+        # The decode triton kernel derives attn_lse offsets from attn_logits
+        # strides via integer division by v_head_dim (the "// Lv" trick in
+        # _fwd_kernel_stage1/stage2), so attn_logits.shape[-1] must exactly
+        # match the layer's v_head_dim. For hybrid SWA models where SWA and
+        # full-attention layers use different v_head_dim (e.g. Gemma 4:
+        # swa=256, full=512), we allocate a second buffer for SWA layers.
         full_v_head_dim = model_runner.model_config.v_head_dim
         swa_v_head_dim = model_runner.model_config.swa_v_head_dim
-        if swa_v_head_dim != full_v_head_dim:
+        if self.sliding_window_size is not None and swa_v_head_dim != full_v_head_dim:
             self.v_head_dim = full_v_head_dim
             self.swa_v_head_dim = swa_v_head_dim
         elif (
