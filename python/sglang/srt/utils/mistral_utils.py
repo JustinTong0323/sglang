@@ -134,11 +134,11 @@ def _remap_mistral_yarn_args(config: dict) -> dict:
         "original_max_position_embeddings": "original_max_position_embeddings",
         "beta": "beta_fast",
         "alpha": "beta_slow",
-        "apply_scale": None,
+        "apply_scale": "apply_yarn_scaling",
     }
     yarn_config = config.get("yarn") or {}
     config["rope_scaling"] = {
-        "rope_type": "yarn",
+        "rope_type": "deepseek_yarn",
         "mscale_all_dim": 1,
     }
     # Include rope_theta in rope_scaling if present at the top level,
