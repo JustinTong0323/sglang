@@ -48,6 +48,11 @@ from sglang.srt.distributed.communication_op import tensor_model_parallel_all_ga
 from sglang.srt.utils import flatten_nested_list
 
 
+def ensure_numpy(x):
+    """Convert torch.Tensor to numpy array if needed (v5 compat)."""
+    return x.numpy() if isinstance(x, torch.Tensor) else x
+
+
 def has_valid_data(data) -> bool:
     if data is None:
         return False
@@ -259,9 +264,7 @@ def process_anyres_image(image, processor, grid_pinpoints):
         for image_patch in image_patches
     ]
     # In transformers v5, image processors may return torch.Tensor instead of numpy arrays
-    image_patches = [
-        p.numpy() if isinstance(p, torch.Tensor) else p for p in image_patches
-    ]
+    image_patches = [ensure_numpy(p) for p in image_patches]
     return np.stack(image_patches, axis=0)
 
 

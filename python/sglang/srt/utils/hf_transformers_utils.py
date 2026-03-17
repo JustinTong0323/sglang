@@ -154,18 +154,6 @@ def _patch_text_config(parent_config: PretrainedConfig, text_config):
     so we propagate in both directions when an attribute is missing.
     (See https://github.com/huggingface/transformers/pull/41541)
     """
-    # Some models store text_config as a plain dict rather than a
-    # PretrainedConfig object.  Convert to PretrainedConfig so downstream
-    # code can use attribute access uniformly (e.g. config.hidden_size).
-    if isinstance(text_config, dict):
-        text_config = PretrainedConfig(**text_config)
-        # Propagate any parent-level torch_dtype so weight loading uses the
-        # correct precision.
-        if not hasattr(text_config, "torch_dtype") and hasattr(
-            parent_config, "torch_dtype"
-        ):
-            text_config.torch_dtype = parent_config.torch_dtype
-
     _ATTRS_TO_PROPAGATE = [
         "pad_token_id",
         "bos_token_id",
@@ -200,7 +188,7 @@ def get_hf_text_config(config: PretrainedConfig):
 
     # Some models (e.g. DeepSeek-OCR) store sub-configs as plain dicts.
     # Convert to PretrainedConfig early so hasattr() checks and asserts work.
-    for _attr in ("text_config", "llm_config", "language_config"):
+    for _attr in ("text_config", "llm_config", "language_config", "thinker_config"):
         _sub = getattr(config, _attr, None)
         if isinstance(_sub, dict):
             _converted = PretrainedConfig(**_sub)
@@ -212,20 +200,7 @@ def get_hf_text_config(config: PretrainedConfig):
                 _converted.torch_dtype = config.torch_dtype
             setattr(config, _attr, _converted)
 
-    if hasattr(config, "text_config"):
-        # The code operates under the assumption that text_config should have
-        # `num_attention_heads` (among others). Assert here to fail early
-        # if transformers config doesn't align with this assumption.
-        assert hasattr(config.text_config, "num_attention_heads")
-        text_config = config.text_config
-
-    if hasattr(config, "llm_config"):
-        # PointsV1.5 Chat Model
-        assert hasattr(config.llm_config, "num_attention_heads")
-        text_config = config.llm_config
-
-    if hasattr(config, "language_config"):
-        text_config = config.language_config
+    # Priority: thinker_config > llm_config > language_config > text_config
     if hasattr(config, "thinker_config"):
         # qwen2.5 omni
         thinker_config = config.thinker_config
@@ -238,9 +213,18 @@ def get_hf_text_config(config: PretrainedConfig):
             text_config = thinker_config.text_config
         else:
             text_config = thinker_config
-
-    if hasattr(config, "llm_config"):
+    elif hasattr(config, "llm_config"):
+        # PointsV1.5 Chat Model
+        assert hasattr(config.llm_config, "num_attention_heads")
         text_config = config.llm_config
+    elif hasattr(config, "language_config"):
+        text_config = config.language_config
+    elif hasattr(config, "text_config"):
+        # The code operates under the assumption that text_config should have
+        # `num_attention_heads` (among others). Assert here to fail early
+        # if transformers config doesn't align with this assumption.
+        assert hasattr(config.text_config, "num_attention_heads")
+        text_config = config.text_config
 
     # Ensure rope_scaling dicts have "type" for remote-code compat (v5).
     normalize_rope_scaling_compat(config)
@@ -531,9 +515,8 @@ def get_config(
                 )
                 model_type = config_dict.get("model_type")
                 if model_type in _CONFIG_REGISTRY:
-                    config = _CONFIG_REGISTRY[model_type].from_pretrained(
-                        model, revision=revision, **kwargs
-                    )
+                    config = _CONFIG_REGISTRY[model_type].from_dict(config_dict)
+                    config._name_or_path = model
                 else:
                     raise
 
@@ -820,6 +803,18 @@ def get_tokenizer(
     return tokenizer
 
 
+def _resolve_local_or_cached_file(model_name_or_path, filename, revision=None):
+    """Resolve a file from a local directory or HF hub cache (no network)."""
+    local_path = Path(model_name_or_path) / filename
+    if local_path.is_file():
+        return str(local_path)
+    from huggingface_hub import hf_hub_download
+
+    return hf_hub_download(
+        model_name_or_path, filename, revision=revision, local_files_only=True
+    )
+
+
 def _fix_v5_tokenizer_components(tokenizer, model_name_or_path, revision=None):
     """Fix pre_tokenizer/decoder when a v5 tokenizer class overwrites them.
 
@@ -837,14 +832,10 @@ def _fix_v5_tokenizer_components(tokenizer, model_name_or_path, revision=None):
         return
 
     try:
-        from huggingface_hub import hf_hub_download
         from tokenizers import Tokenizer as RawTokenizer
 
-        tok_file = hf_hub_download(
-            model_name_or_path,
-            "tokenizer.json",
-            revision=revision,
-            local_files_only=True,
+        tok_file = _resolve_local_or_cached_file(
+            model_name_or_path, "tokenizer.json", revision
         )
         raw = RawTokenizer.from_file(tok_file)
     except Exception:
@@ -899,19 +890,9 @@ def _fix_v5_add_bos_eos_token(tokenizer, model_name_or_path, revision=None):
     )
 
     try:
-        local_path = Path(model_name_or_path) / "tokenizer_config.json"
-        if local_path.is_file():
-            config_file = str(local_path)
-        else:
-            from huggingface_hub import hf_hub_download
-
-            config_file = hf_hub_download(
-                model_name_or_path,
-                "tokenizer_config.json",
-                revision=revision,
-                local_files_only=True,
-            )
-
+        config_file = _resolve_local_or_cached_file(
+            model_name_or_path, "tokenizer_config.json", revision
+        )
         with open(config_file) as f:
             config = json.load(f)
     except Exception as e:
@@ -1063,16 +1044,12 @@ def _build_processor_manually(
     proc_ref = auto_map.get("AutoProcessor")
     if not proc_ref:
         try:
-            pp_config_path = snapshot_download(
-                model_path,
-                allow_patterns=["preprocessor_config.json"],
-                revision=revision,
+            pp_file = _resolve_local_or_cached_file(
+                model_path, "preprocessor_config.json", revision
             )
-            pp_file = os.path.join(pp_config_path, "preprocessor_config.json")
-            if os.path.isfile(pp_file):
-                with open(pp_file) as f:
-                    pp_auto_map = json.load(f).get("auto_map", {})
-                proc_ref = pp_auto_map.get("AutoProcessor")
+            with open(pp_file) as f:
+                pp_auto_map = json.load(f).get("auto_map", {})
+            proc_ref = pp_auto_map.get("AutoProcessor")
         except Exception:
             pass
     if not proc_ref:
@@ -1093,8 +1070,10 @@ def _build_processor_manually(
             init_kwargs["image_processor"] = AutoImageProcessor.from_pretrained(
                 model_path, trust_remote_code=trust_remote_code, revision=revision
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "Failed to load image_processor for %s: %s", model_path, e
+            )
 
     # Instantiate feature extractor from its declared class
     fe_class_name = getattr(proc_cls, "feature_extractor_class", None)

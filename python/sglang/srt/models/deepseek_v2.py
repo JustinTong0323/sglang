@@ -127,6 +127,7 @@ from sglang.srt.models.deepseek_common.attention_forward_methods import (
 from sglang.srt.models.deepseek_common.deepseek_weight_loader import (
     DeepseekV2WeightLoaderMixin,
 )
+from sglang.srt.configs.model_config import compute_mla_mscale_scaling
 from sglang.srt.models.deepseek_common.utils import (
     _device_sm,
     _get_llama_4_scaling,
@@ -138,7 +139,6 @@ from sglang.srt.models.deepseek_common.utils import (
     _is_npu,
     _use_aiter,
     _use_aiter_gfx95,
-    yarn_get_mscale,
 )
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
@@ -1199,15 +1199,9 @@ class DeepseekV2AttentionMLA(
             )
 
             if rope_scaling:
-                mscale_all_dim = rope_scaling.get("mscale_all_dim", False)
-                if "factor" not in rope_scaling:
-                    logger.warning(
-                        "DeepSeek rope_scaling missing 'factor', defaulting to 1.0. "
-                        "Check model accuracy.",
-                    )
-                scaling_factor = rope_scaling.get("factor", 1.0)
-                mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
-                self.scaling = self.scaling * mscale * mscale
+                self.scaling = compute_mla_mscale_scaling(
+                    rope_scaling, self.scaling
+                )
         else:
             self.rotary_emb = None
         self.use_deepseek_yarn_rope = rope_scaling is not None

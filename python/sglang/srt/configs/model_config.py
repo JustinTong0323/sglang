@@ -467,16 +467,9 @@ class ModelConfig:
                     or "default"
                 )
                 if rope_type != "default":
-                    mscale_all_dim = rope_scaling.get("mscale_all_dim", False)
-                    if "factor" not in rope_scaling:
-                        logger.warning(
-                            "rope_scaling (type=%s) missing 'factor', defaulting to 1.0. "
-                            "Check model accuracy.",
-                            rope_type,
-                        )
-                    scaling_factor = rope_scaling.get("factor", 1.0)
-                    mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
-                    self.scaling = self.scaling * mscale * mscale
+                    self.scaling = compute_mla_mscale_scaling(
+                        rope_scaling, self.scaling
+                    )
         elif "MiniCPM3ForCausalLM" in self.hf_config.architectures:
             self.head_dim = 128
             self.attention_arch = AttentionArch.MLA
@@ -517,17 +510,9 @@ class ModelConfig:
             # Handle rope scaling with yarn
             self.scaling = 1 / math.sqrt(self.qk_nope_head_dim + self.qk_rope_head_dim)
             if self.hf_config.rope_scaling:
-                mscale_all_dim = self.hf_config.rope_scaling.get(
-                    "mscale_all_dim", False
+                self.scaling = compute_mla_mscale_scaling(
+                    self.hf_config.rope_scaling, self.scaling
                 )
-                if "factor" not in self.hf_config.rope_scaling:
-                    logger.warning(
-                        "BailingMoe rope_scaling missing 'factor', defaulting to 1.0. "
-                        "Check model accuracy.",
-                    )
-                scaling_factor = self.hf_config.rope_scaling.get("factor", 1.0)
-                mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
-                self.scaling = self.scaling * mscale * mscale
         elif "SarvamMLAForCausalLM" in self.hf_config.architectures:
             self.head_dim = (
                 self.hf_config.qk_nope_head_dim + self.hf_config.qk_rope_head_dim
@@ -539,17 +524,9 @@ class ModelConfig:
             self.v_head_dim = self.hf_config.v_head_dim
             self.scaling = 1 / math.sqrt(self.qk_nope_head_dim + self.qk_rope_head_dim)
             if self.hf_config.rope_scaling:
-                mscale_all_dim = self.hf_config.rope_scaling.get(
-                    "mscale_all_dim", False
+                self.scaling = compute_mla_mscale_scaling(
+                    self.hf_config.rope_scaling, self.scaling
                 )
-                if "factor" not in self.hf_config.rope_scaling:
-                    logger.warning(
-                        "SarvamMLA rope_scaling missing 'factor', defaulting to 1.0. "
-                        "Check model accuracy.",
-                    )
-                scaling_factor = self.hf_config.rope_scaling.get("factor", 1.0)
-                mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
-                self.scaling = self.scaling * mscale * mscale
         else:
             if (
                 "MistralModel" in self.hf_config.architectures
@@ -1434,6 +1411,23 @@ def yarn_get_mscale(scale: float = 1, mscale: float = 1) -> float:
     if scale <= 1:
         return 1.0
     return 0.1 * mscale * math.log(scale) + 1.0
+
+
+def compute_mla_mscale_scaling(rope_scaling: dict, base_scaling: float) -> float:
+    """Compute MLA attention scaling factor from rope_scaling with mscale.
+
+    Used by DeepSeek, BailingMoe, SarvamMLA and similar MLA models.
+    Warns if 'factor' is missing from rope_scaling (common in v5 configs).
+    """
+    mscale_all_dim = rope_scaling.get("mscale_all_dim", False)
+    if "factor" not in rope_scaling:
+        logger.warning(
+            "rope_scaling missing 'factor', defaulting to 1.0. "
+            "Check model accuracy.",
+        )
+    scaling_factor = rope_scaling.get("factor", 1.0)
+    mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
+    return base_scaling * mscale * mscale
 
 
 def is_hybrid_swa_model(model_architectures: List[str]):
