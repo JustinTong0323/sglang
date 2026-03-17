@@ -25,6 +25,10 @@ from transformers import (
     PreTrainedModel,
 )
 
+from sglang.srt.distributed import (
+    get_tensor_model_parallel_world_size,
+    tensor_model_parallel_all_reduce,
+)
 from sglang.srt.distributed import get_tensor_model_parallel_world_size
 from sglang.srt.layers.layernorm import Gemma4RMSNorm, GemmaRMSNorm, RMSNorm
 from sglang.srt.layers.linear import (
@@ -37,6 +41,19 @@ from sglang.srt.layers.moe.ep_moe.layer import get_moe_impl_class
 from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
+<<<<<<< HEAD
+=======
+from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
+from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+from sglang.srt.model_loader.weight_utils import (
+    default_weight_loader,
+    maybe_remap_kv_scale_name,
+)
+from sglang.srt.utils import add_prefix, make_layers
+from sglang.srt.layers.moe.ep_moe.layer import get_moe_impl_class
+from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
+from sglang.srt.server_args import get_global_server_args
+>>>>>>> 8aaf187f9 (gemma4 moe)
 from sglang.srt.layers.rotary_embedding import get_rope
 from sglang.srt.layers.vocab_parallel_embedding import (
     ParallelLMHead,
@@ -142,51 +159,138 @@ class Gemma4PerLayerEmbedding(nn.Module):
         return per_layer_input
 
 
-class Gemma4MoEBLock(nn.Module):
+class Gemma4Router(nn.Module):
+    """Router for Gemma4 MoE that preprocesses input before projection.
+
+    Applies RMSNorm (no learned weight), root_size scaling
+    (hidden_size^{-0.5}), then a learned per-dimension scale before
+    projecting to expert logits.
+
+    This preprocessing is applied ONLY to the router's input, not to
+    the expert MLPs' input.
+    """
+
     def __init__(
         self,
+        config,
+        quant_config: QuantizationConfig | None = None,
+        prefix: str = "",
+    ) -> None:
+        super().__init__()
+        self.hidden_size = config.hidden_size
+
+        # RMSNorm without learned weight — pure normalization only
+        self.norm = Gemma4RMSNorm(self.hidden_size, eps=config.rms_norm_eps, with_scale=False)
+        # Per-dimension learned scale, applied after norm + root_size
+        self.scale = nn.Parameter(torch.ones(self.hidden_size))
+        # Constant 1/sqrt(hidden_size) scaling factor
+        self.register_buffer(
+            "root_size",
+            torch.tensor(self.hidden_size**-0.5),
+            persistent=False,
+        )
+        # Project to expert logits; replicated across TP for consistent routing
+        self.proj = ReplicatedLinear(
+            self.hidden_size,
+            config.num_experts,
+            bias=False,
+            quant_config=None,
+            prefix=add_prefix("proj", prefix),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Returns raw router logits [T, E]."""
+        x = self.norm(x)
+        x = x * self.root_size.to(x.dtype)
+        x = x * self.scale.to(x.dtype)
+        router_logits, _ = self.proj(x)
+        return router_logits
+
+
+class Gemma4MoE(nn.Module):
+    """Mixture of Experts for Gemma4.
+
+    Wraps MoE implementation with custom routing. The router projection is
+    external (Gemma4Router) — this class only handles expert dispatch.
+
+    Gemma4 routing: softmax over ALL experts → top-k → renormalize.
+    per_expert_scale is folded into routing weights for mathematical
+    correctness with MoE's fused kernel.
+    """
+
+    def __init__(
+        self,
+        hidden_size: int,
         layer_id: int,
         config: Gemma4TextConfig,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
-    ):
+    ) -> None:
         super().__init__()
-        self.tp_size = get_tensor_model_parallel_world_size()
         self.layer_id = layer_id
-        self.activation = config.hidden_act
+        self.hidden_size = hidden_size
+        self.num_experts = config.num_experts
+        self.tp_size = get_tensor_model_parallel_world_size()
+
+        # Per-expert output scale folded into routing weights so that
+        # MoE's fused kernel computes: Σ_e (expert_e * w_e * scale_e)
+        self.per_expert_scale = nn.Parameter(torch.ones(config.num_experts))
+
+        # Gemma4 routing: softmax over ALL experts → top-k → renormalize.
+        per_expert_scale = self.per_expert_scale
+
+        def routing_function(
+            hidden_states: torch.Tensor,
+            gating_output: torch.Tensor,
+            topk: int,
+            renormalize: bool,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            _, topk_ids = torch.topk(gating_output, k=topk, dim=-1)
+            router_probabilities = torch.nn.functional.softmax(gating_output, dim=-1)
+            indicator = torch.nn.functional.one_hot(
+                topk_ids, num_classes=gating_output.size(-1)
+            ).sum(dim=-2)
+            gate_weights = indicator * router_probabilities
+            renorm_factor = torch.sum(gate_weights, dim=-1, keepdim=True)
+            renorm_factor = torch.where(renorm_factor > 0.0, renorm_factor, 1.0)
+            dispatch_weights = gate_weights / renorm_factor
+
+            topk_weights = dispatch_weights.gather(1, topk_ids)
+
+            # Fold per_expert_scale into routing weights
+            expert_scales = per_expert_scale[topk_ids].to(topk_weights.dtype)
+            topk_weights = topk_weights * expert_scales
+
+            return topk_weights.to(torch.float32), topk_ids.to(torch.int32)
 
         self.topk = TopK(
-            top_k=config.num_experts_per_tok,
-            renormalize=True,
+            top_k=config.top_k_experts,
             layer_id=layer_id,
+            custom_routing_function=routing_function,
         )
-        self.top_k = config.num_experts_per_tok
+
         experts_type = get_moe_impl_class(quant_config)
 
         self.experts = experts_type(
-            num_experts=config.num_local_experts
-            + get_global_server_args().ep_num_redundant_experts,
-            top_k=config.num_experts_per_tok,
-            layer_id=layer_id,
+            num_experts=config.num_experts + get_global_server_args().ep_num_redundant_experts,
             hidden_size=config.hidden_size,
-            intermediate_size=config.intermediate_size,
+            intermediate_size=config.expert_intermediate_size,
+            layer_id=layer_id,
+            top_k=config.top_k_experts,
             quant_config=quant_config,
-            activation=self.activation,
-            gemm1_alpha=self.gemm1_alpha,
-            gemm1_clamp_limit=self.gemm1_clamp_limit,
-            with_bias=True,
             prefix=add_prefix("experts", prefix),
+            activation="gelu",
+            reduce_results=True,
         )
 
-        self.router = ReplicatedLinear(
-            config.hidden_size,
-            config.num_local_experts,
-            bias=True,
-            quant_config=None,
-            prefix=add_prefix("gate", prefix),
-            params_dtype=config.torch_dtype,
-        )
+    def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor, should_allreduce_fusion: bool = False) -> torch.Tensor:
+        num_tokens, hidden_dim = hidden_states.shape
+        topk_output = self.topk(hidden_states, router_logits)
+        hidden_states = self.experts(hidden_states, topk_output)
 
+        if self.tp_size > 1 and not should_allreduce_fusion:
+            hidden_states = tensor_model_parallel_all_reduce(hidden_states)
+        return hidden_states.view(num_tokens, hidden_dim)
 
 class Gemma4Attention(nn.Module):
     def __init__(
@@ -194,6 +298,7 @@ class Gemma4Attention(nn.Module):
         layer_id: int,
         config: Gemma4TextConfig,
         head_dim: int,
+        total_num_kv_heads: int,
         max_position_embeddings: int,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
@@ -388,11 +493,21 @@ class Gemma4DecoderLayer(nn.Module):
         else:
             head_dim = getattr(config, "swa_head_dim", config.head_dim)
 
+        if self.is_full_attention and getattr(config, "attention_k_eq_v", False):
+            total_num_kv_heads = getattr(
+                config, "num_global_key_value_heads",
+                config.num_key_value_heads
+            )
+        else:
+            total_num_kv_heads = getattr(
+                config, "swa_num_key_value_heads", config.num_key_value_heads
+            )
         self.self_attn = Gemma4Attention(
             layer_id=layer_id,
             config=config,
             max_position_embeddings=config.max_position_embeddings,
             head_dim=head_dim,
+            total_num_kv_heads=total_num_kv_heads,
             quant_config=quant_config,
             prefix=add_prefix("self_attn", prefix),
         )
@@ -428,7 +543,7 @@ class Gemma4DecoderLayer(nn.Module):
         )
 
         # Per-Layer Embedding (PLE) components — present in each decoder layer
-        if self.hidden_size_per_layer_input > 0:
+        if self.hidden_size_per_layer_input and self.hidden_size_per_layer_input > 0:
             # Gate: projects hidden_states → per-layer dim for gating
             self.per_layer_input_gate = ReplicatedLinear(
                 self.hidden_size,
@@ -454,6 +569,40 @@ class Gemma4DecoderLayer(nn.Module):
             self.post_per_layer_input_norm = None
 
         self.register_buffer("layer_scalar", torch.ones(1), persistent=True)
+        # Parallel MoE
+        self.enable_moe_block = getattr(config, "enable_moe_block", False) or getattr(
+            config, "use_second_mlp_block", False
+        )
+        if self.enable_moe_block:
+            self.router = Gemma4Router(
+                config,
+                quant_config=quant_config,
+                prefix=add_prefix("router", prefix),
+            )
+            self.moe = Gemma4MoE(
+                hidden_size=self.hidden_size,
+                layer_id=layer_id,
+                config=config,
+                quant_config=quant_config,
+                prefix=add_prefix("moe", prefix),
+            )
+
+            self.post_feedforward_layernorm_1 = GemmaRMSNorm(
+                config.hidden_size, eps=config.rms_norm_eps
+            )
+            self.post_feedforward_layernorm_2 = GemmaRMSNorm(
+                config.hidden_size, eps=config.rms_norm_eps
+            )
+            self.pre_feedforward_layernorm_2 = GemmaRMSNorm(
+                config.hidden_size, eps=config.rms_norm_eps
+            )
+        else:
+            self.router = None
+            self.moe = None
+            self.post_feedforward_layernorm_1 = None
+            self.post_feedforward_layernorm_2 = None
+            self.pre_feedforward_layernorm_2 = None
+
         self.prefix = prefix
 
     def forward(
@@ -482,8 +631,27 @@ class Gemma4DecoderLayer(nn.Module):
         hidden_states = hidden_states + residual
 
         residual = hidden_states
-        hidden_states = self.pre_feedforward_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
+
+        if self.enable_moe_block:
+            # Dense MLP branch
+            hidden_states_1 = self.pre_feedforward_layernorm(hidden_states)
+            hidden_states_1 = self.mlp(hidden_states_1)
+            hidden_states_1 = self.post_feedforward_layernorm_1(hidden_states_1)
+
+            # MoE branch: router sees raw hidden_states (applies its own
+            # norm + scale internally); experts see separately normed input
+            router_logits = self.router(hidden_states)
+            hidden_states_2 = self.pre_feedforward_layernorm_2(hidden_states)
+            hidden_states_2 = self.moe(hidden_states_2, router_logits)
+            hidden_states_2 = self.moe_out(hidden_states_2)
+            hidden_states_2 = self.post_feedforward_layernorm_2(hidden_states_2)
+
+            # Combine branches
+            hidden_states = hidden_states_1 + hidden_states_2
+        else:
+            hidden_states = self.pre_feedforward_layernorm(hidden_states)
+            hidden_states = self.mlp(hidden_states)
+
         hidden_states = self.post_feedforward_layernorm(hidden_states)
         hidden_states = hidden_states + residual
 
@@ -538,7 +706,7 @@ class Gemma4TextModel(PreTrainedModel):
             config, "vocab_size_per_layer_input", None
         ) or config.vocab_size
 
-        if self.hidden_size_per_layer_input > 0:
+        if self.hidden_size_per_layer_input and self.hidden_size_per_layer_input > 0:
             self.embed_tokens_per_layer = Gemma4TextScaledWordEmbedding(
                 self.vocab_size_per_layer_input,
                 config.num_hidden_layers * self.hidden_size_per_layer_input,
@@ -835,6 +1003,14 @@ class Gemma4ForCausalLM(PreTrainedModel):
             ("gate_up_proj", "gate_proj", 0),
             ("gate_up_proj", "up_proj", 1),
         ]
+
+        expert_params_mapping = FusedMoE.make_expert_params_mapping(
+            ckpt_gate_proj_name="gate_proj",
+            ckpt_down_proj_name="down_proj",
+            ckpt_up_proj_name="up_proj",
+            num_experts=getattr(self.config, "num_experts", 0),
+        )
+
         k_eq_v_layers = self._get_k_eq_v_layers()
 
         params_dict = dict(self.named_parameters())
@@ -854,6 +1030,14 @@ class Gemma4ForCausalLM(PreTrainedModel):
                 and int(m.group(1)) in k_eq_v_layers
             )
 
+
+            if (
+                ".moe." in name
+                and "experts" not in name
+                and "per_expert_scale" not in name
+            ):
+                name = name.replace(".moe.", ".moe.experts.")
+
             for param_name, shard_name, shard_id in stacked_params_mapping:
                 if shard_name not in name:
                     continue
@@ -869,20 +1053,41 @@ class Gemma4ForCausalLM(PreTrainedModel):
                     weight_loader(param, loaded_weight, "v")
                 break
             else:
-                if "lm_head.weight" in name and self.config.tie_word_embeddings:
-                    continue
-                if name.endswith(".bias") and name not in params_dict:
-                    continue
-                name = maybe_remap_kv_scale_name(name, params_dict)
-                if name is None:
-                    continue
+                for mapping in expert_params_mapping:
+                    param_name, weight_name, expert_id, shard_id = mapping
+                    if weight_name not in name:
+                        continue
+                    name = name.replace(weight_name, param_name)
+                    if name in params_dict.keys():
+                        param = params_dict[name]
+                        weight_loader = param.weight_loader
+                        weight_loader(
+                            param,
+                            loaded_weight,
+                            name,
+                            shard_id=shard_id,
+                            expert_id=expert_id,
+                        )
+                    else:
+                        raise KeyError(
+                            f"Parameter '{name}' not found in model."
+                        )
+                    break
+                else:
+                    if "lm_head.weight" in name and self.config.tie_word_embeddings:
+                        continue
+                    if name.endswith(".bias") and name not in params_dict:
+                        continue
+                    name = maybe_remap_kv_scale_name(name, params_dict)
+                    if name is None:
+                        continue
 
-                if name not in params_dict:
-                    continue
+                    if name not in params_dict:
+                        continue
 
-                param = params_dict[name]
-                weight_loader = getattr(param, "weight_loader", default_weight_loader)
-                weight_loader(param, loaded_weight)
+                    param = params_dict[name]
+                    weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                    weight_loader(param, loaded_weight)
             loaded_params.add(name)
         unloaded_params = params_dict.keys() - loaded_params
         if unloaded_params:
@@ -893,4 +1098,3 @@ class Gemma4ForCausalLM(PreTrainedModel):
 
 
 EntryClass = Gemma4ForCausalLM
-AutoModel.register(Gemma4TextConfig, Gemma4ForCausalLM, exist_ok=True)

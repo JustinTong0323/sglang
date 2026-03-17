@@ -55,6 +55,9 @@ from sglang.srt.models.gemma4_vision import Gemma4VisionEncoder
 from sglang.srt.utils import add_prefix
 from sglang.srt.utils.hf_transformers_utils import get_processor
 
+from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
+from sglang.srt.server_args import get_global_server_args
+
 logger = logging.getLogger(__name__)
 
 cached_get_processor = lru_cache(get_processor)
@@ -575,6 +578,13 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         k_eq_v_layers = self._get_k_eq_v_layers()
 
+        expert_params_mapping = FusedMoE.make_expert_params_mapping_gemma4(
+            ckpt_gate_proj_name="gate_proj",
+            ckpt_down_proj_name="down_proj",
+            ckpt_up_proj_name="up_proj",
+        )
+        num_experts = self.config.num_experts
+
         params_dict = dict(self.named_parameters())
         params_dict.update(dict(self.named_buffers()))
         loaded_params: Set[str] = set()
@@ -588,6 +598,14 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 continue
 
             name = re.sub(r"^model\.", "", name)
+
+            # moe experts
+            if (
+                ".moe." in name
+                and "experts" not in name
+                and "per_expert_scale" not in name
+            ):
+                name = name.replace(".moe.", ".moe.experts.")
 
             # Remap vision / audio tower names (fused QKV/GateUp, clippable wrappers)
             if "vision_tower." in name or "audio_tower." in name:
@@ -608,6 +626,15 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             # Try stacked (fused) params first
             orig_name = name
             for param_name, weight_name, shard_id in self.stacked_params_mapping:
+                name = orig_name
+                m = re.search(r"language_model.layers\.(\d+)\.", name)
+                if "k_proj" in name and "k_proj" in weight_name and k_eq_v_layer_indices and m and int(m.group(1)) in k_eq_v_layer_indices:
+                    n = name.replace(weight_name, param_name)
+                    param = params_dict[n]
+                    weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                    weight_loader(param, loaded_weight, "v")
+                    loaded_params.add(n)
+
                 if weight_name not in name:
                     continue
                 name = name.replace(weight_name, param_name)
@@ -621,16 +648,29 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                     weight_loader(param, loaded_weight, "v")
                 break
             else:
-                if name.endswith(".bias") and name not in params_dict:
-                    continue
-                name = maybe_remap_kv_scale_name(name, params_dict)
-                if name is None:
-                    continue
-                if name not in params_dict:
-                    continue
-                param = params_dict[name]
-                weight_loader = getattr(param, "weight_loader", default_weight_loader)
-                weight_loader(param, loaded_weight)
+                for param_name, weight_name, shard_id in expert_params_mapping:
+                    if weight_name not in name:
+                        continue
+                    name = name.replace(weight_name, param_name)
+                    if name not in params_dict:
+                        continue
+                    param = params_dict[name]
+                    weight_loader = param.weight_loader
+                    for i in range(num_experts):
+                        weight_loader(param, loaded_weight[i].T, name, shard_id, i)
+                    break
+                else:
+                    if name.endswith(".bias") and name not in params_dict:
+                        continue
+                    
+                    name = maybe_remap_kv_scale_name(name, params_dict)
+                    if name is None:
+                        continue
+                    if name not in params_dict:
+                        continue
+                    param = params_dict[name]
+                    weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                    weight_loader(param, loaded_weight)
             loaded_params.add(name)
         unloaded_params = params_dict.keys() - loaded_params
         if unloaded_params:
@@ -660,7 +700,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             )
         elif module_name == "o_proj":
             return (
-                self.config.head_dim * self.config.num_attention_heads,
+                self.head_dim * self.num_attention_heads,
                 self.config.hidden_size,
             )
         elif module_name == "gate_up_proj":

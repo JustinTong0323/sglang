@@ -978,14 +978,13 @@ class MHATokenToKVPool(KVCache):
 
     def set_kv_buffer(
         self,
-        layer: Optional[RadixAttention],
+        layer: RadixAttention,
         loc: torch.Tensor,
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
         k_scale: Optional[float] = None,
         v_scale: Optional[float] = None,
         layer_id_override: Optional[int] = None,
-        row_dim: Optional[int] = None,
     ):
         if layer_id_override is not None:
             layer_id = layer_id_override
