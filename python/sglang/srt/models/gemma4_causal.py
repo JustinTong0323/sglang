@@ -283,13 +283,10 @@ class Gemma4MoE(nn.Module):
             reduce_results=True,
         )
 
-    def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor, should_allreduce_fusion: bool = False) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor) -> torch.Tensor:
         num_tokens, hidden_dim = hidden_states.shape
         topk_output = self.topk(hidden_states, router_logits)
         hidden_states = self.experts(hidden_states, topk_output)
-
-        if self.tp_size > 1 and not should_allreduce_fusion:
-            hidden_states = tensor_model_parallel_all_reduce(hidden_states)
         return hidden_states.view(num_tokens, hidden_dim)
 
 class Gemma4Attention(nn.Module):
@@ -532,7 +529,7 @@ class Gemma4DecoderLayer(nn.Module):
         )
 
         # Per-Layer Embedding (PLE) components — present in each decoder layer
-        if self.hidden_size_per_layer_input and self.hidden_size_per_layer_input > 0:
+        if self.hidden_size_per_layer_input > 0:
             # Gate: projects hidden_states → per-layer dim for gating
             self.per_layer_input_gate = ReplicatedLinear(
                 self.hidden_size,
@@ -1008,7 +1005,9 @@ class Gemma4ForCausalLM(PreTrainedModel):
             )
 
             # Try stacked (fused) params first
-            for param_name, weight_name, shard_id in self.stacked_params_mapping:
+            orig_name = name
+            for param_name, weight_name, shard_id in stacked_params_mapping:
+                name = orig_name
                 if weight_name not in name:
                     continue
                 name = name.replace(weight_name, param_name)
@@ -1022,6 +1021,7 @@ class Gemma4ForCausalLM(PreTrainedModel):
                 break
             else:
                 for param_name, weight_name, shard_id in expert_params_mapping:
+                    name = orig_name
                     if weight_name not in name:
                         continue
                     name = name.replace(weight_name, param_name)
@@ -1033,6 +1033,7 @@ class Gemma4ForCausalLM(PreTrainedModel):
                         weight_loader(param, loaded_weight[i].T, name, shard_id, i)
                     break
                 else:
+                    name = orig_name
                     if name.endswith(".bias") and name not in params_dict:
                         continue
                     name = maybe_remap_kv_scale_name(name, params_dict)

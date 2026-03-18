@@ -625,7 +625,9 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             )
 
             # Try stacked (fused) params first
+            orig_name = name
             for param_name, weight_name, shard_id in self.stacked_params_mapping:
+                name = orig_name
                 if weight_name not in name:
                     continue
                 name = name.replace(weight_name, param_name)
@@ -639,6 +641,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 break
             else:
                 for param_name, weight_name, shard_id in expert_params_mapping:
+                    name = orig_name
                     if weight_name not in name:
                         continue
                     name = name.replace(weight_name, param_name)
@@ -650,6 +653,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                         weight_loader(param, loaded_weight[i].T, name, shard_id, i)
                     break
                 else:
+                    name = orig_name
                     if name.endswith(".bias") and name not in params_dict:
                         continue
                     name = maybe_remap_kv_scale_name(name, params_dict)
@@ -689,7 +693,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             )
         elif module_name == "o_proj":
             return (
-                self.head_dim * self.num_attention_heads,
+                self.config.head_dim * self.config.num_attention_heads,
                 self.config.hidden_size,
             )
         elif module_name == "gate_up_proj":

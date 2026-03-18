@@ -418,10 +418,10 @@ def get_config(
         if global_kv_heads is not None:
             text_config.num_key_value_heads = global_kv_heads
 
-        if not hasattr(config.text_config, "v_head_dim"):
-            config.text_config.v_head_dim = config.text_config.head_dim
-        if not hasattr(config.text_config, "swa_v_head_dim"):
-            config.text_config.swa_v_head_dim = config.text_config.swa_head_dim
+        if not hasattr(text_config, "v_head_dim"):
+            text_config.v_head_dim = text_config.head_dim
+        if not hasattr(text_config, "swa_v_head_dim"):
+            text_config.swa_v_head_dim = text_config.swa_head_dim
 
     if config.model_type == "longcat_flash":
         config.update({"architectures": ["LongcatFlashForCausalLM"]})
