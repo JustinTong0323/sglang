@@ -16,7 +16,6 @@ import logging
 from typing import Iterable, Optional, Set, Tuple
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 from transformers import (
     AutoModel,
@@ -26,35 +25,33 @@ from transformers import (
 )
 
 from sglang.srt.distributed import get_tensor_model_parallel_world_size
+from sglang.srt.layers.layernorm import Gemma4RMSNorm, GemmaRMSNorm, RMSNorm
 from sglang.srt.layers.linear import (
-    ColumnParallelLinear,
     QKVParallelLinear,
     ReplicatedLinear,
     RowParallelLinear,
 )
-from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.layers.logits_processor import LogitsProcessor
+from sglang.srt.layers.moe.ep_moe.layer import get_moe_impl_class
+from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
-from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
-from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-from sglang.srt.model_loader.weight_utils import (
-    default_weight_loader,
-    maybe_remap_kv_scale_name,
-)
-from sglang.srt.utils import add_prefix, make_layers
-from sglang.srt.layers.moe.ep_moe.layer import get_moe_impl_class
-from sglang.srt.server_args import get_global_server_args
 from sglang.srt.layers.rotary_embedding import get_rope
 from sglang.srt.layers.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
 )
-from sglang.srt.layers.layernorm import RMSNorm, GemmaRMSNorm, Gemma4RMSNorm
-from sglang.srt.models.gemma3_causal import Gemma3TextScaledWordEmbedding, Gemma3MLP
-
+from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+from sglang.srt.model_loader.weight_utils import (
+    default_weight_loader,
+    maybe_remap_kv_scale_name,
+)
+from sglang.srt.models.gemma3_causal import Gemma3MLP, Gemma3TextScaledWordEmbedding
+from sglang.srt.server_args import get_global_server_args
+from sglang.srt.utils import add_prefix, make_layers
 
 logger = logging.getLogger(__name__)
+
 
 # Aligned with HF's implementation, using sliding window inclusive with the last token
 # SGLang assumes exclusive
@@ -65,13 +62,14 @@ def get_attention_sliding_window_size(config):
 Gemma4MLP = Gemma3MLP
 Gemma4TextScaledWordEmbedding = Gemma3TextScaledWordEmbedding
 
+
 class Gemma4PerLayerEmbedding(nn.Module):
     """Per-Layer Embedding (PLE) system for Gemma 4.
-    
+
     Gemma 4 uses a secondary embedding stream that provides layer-specific
     token embeddings. These are combined with the main hidden states via
     a gating mechanism in each decoder layer.
-    
+
     The PLE embedding stores embeddings for all layers packed together:
     (vocab_size, hidden_size_per_layer_input * num_hidden_layers)
     """
@@ -91,7 +89,7 @@ class Gemma4PerLayerEmbedding(nn.Module):
         self.hidden_size_per_layer = hidden_size_per_layer_input
         self.hidden_size = hidden_size
         self.num_layers = num_hidden_layers
-        
+
         # Packed embedding: (vocab_size, hidden_size_per_layer * num_layers)
         # We store embeddings for ALL layers together
         total_embed_dim = hidden_size_per_layer_input * num_hidden_layers
@@ -101,7 +99,7 @@ class Gemma4PerLayerEmbedding(nn.Module):
             quant_config=quant_config,
             prefix=f"{prefix}.embed_tokens_per_layer",
         )
-        
+
         # Projection from PLE space to hidden space
         # (hidden_size_per_layer * num_layers, hidden_size)
         self.per_layer_model_projection = nn.Linear(
@@ -109,26 +107,26 @@ class Gemma4PerLayerEmbedding(nn.Module):
             hidden_size,
             bias=False,
         )
-        
+
         # Normalization for PLE output
         # JAX uses scale_plus_one=False for this norm (x * scale, not x * (1+scale))
         self.per_layer_projection_norm = RMSNorm(
             self.hidden_size_per_layer,
             eps=rms_norm_eps,
         )
-    
+
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Compute per-layer embeddings and project to hidden size.
-        
+
         Args:
             input_ids: Token IDs (batch_size, seq_len)
-            
+
         Returns:
             Per-layer input tensor (batch_size, seq_len, hidden_size)
         """
         # Get packed per-layer embeddings
         per_layer_embeds = self.embed_tokens_per_layer(input_ids)
-        
+
         # Apply normalization (reshape to apply per-layer, then reshape back)
         # Original shape: (batch, seq, hidden_size_per_layer * num_layers)
         batch_size, seq_len, _ = per_layer_embeds.shape
@@ -136,10 +134,8 @@ class Gemma4PerLayerEmbedding(nn.Module):
             batch_size, seq_len, self.num_layers, self.hidden_size_per_layer
         )
         per_layer_embeds = self.per_layer_projection_norm(per_layer_embeds)
-        per_layer_embeds = per_layer_embeds.view(
-            batch_size, seq_len, -1
-        )
-        
+        per_layer_embeds = per_layer_embeds.view(batch_size, seq_len, -1)
+
         # Project to hidden size
         per_layer_input = self.per_layer_model_projection(per_layer_embeds)
         return per_layer_input
@@ -202,7 +198,7 @@ class Gemma4Attention(nn.Module):
         prefix: str = "",
     ) -> None:
         super().__init__()
-        
+
         self.layer_id = layer_id
         self.config = config
         tp_size = get_tensor_model_parallel_world_size()
@@ -251,10 +247,7 @@ class Gemma4Attention(nn.Module):
             eps=config.rms_norm_eps,
         )
         self.v_norm = Gemma4RMSNorm(
-            self.head_dim,
-            eps=config.rms_norm_eps,
-            scale_shift=0.0,
-            with_scale=False
+            self.head_dim, eps=config.rms_norm_eps, scale_shift=0.0, with_scale=False
         )
 
         # Determine if layer uses sliding window based on pattern
@@ -270,14 +263,13 @@ class Gemma4Attention(nn.Module):
             # JAX reference uses global_rope_proportion=0.25 for global attention
             if layer_type == "full_attention":
                 global_prf = getattr(config, "global_partial_rotary_factor", 0.25)
-                rope_parameters["partial_rotary_factor"] = global_prf                
+                rope_parameters["partial_rotary_factor"] = global_prf
         else:
             # Fallback for older config format
             rope_parameters = dict(
                 rope_type="default",
                 rope_theta=getattr(config, "rope_theta", 10000.0),
             )
-
 
         # Check if this is a KV shared layer
         first_kv_shared_layer_idx = (
@@ -294,8 +286,8 @@ class Gemma4Attention(nn.Module):
                 # Find the last non-shared layer of the same type (sliding/full)
                 prev_layers = config.layer_types[:first_kv_shared_layer_idx]
                 current_layer_type = config.layer_types[self.layer_id]
-                self.kv_shared_layer_index = len(prev_layers) - 1 - prev_layers[::-1].index(
-                    current_layer_type
+                self.kv_shared_layer_index = (
+                    len(prev_layers) - 1 - prev_layers[::-1].index(current_layer_type)
                 )
         self.rotary_emb = get_rope(
             self.head_dim,
@@ -347,7 +339,7 @@ class Gemma4Attention(nn.Module):
 
             v = v.unflatten(-1, (self.num_kv_heads, self.head_dim))
             v = self.v_norm(v)
-        
+
         # Apply rotary embedding
         if k is not None:
             k = k.flatten(-2, -1)
@@ -361,12 +353,17 @@ class Gemma4Attention(nn.Module):
             q, _ = self.rotary_emb(positions, q, dummy_k)
 
         q = q.unflatten(-1, (self.num_heads, self.head_dim))
-        attn_output = self.attn(q, k, v, forward_batch=forward_batch,
-            save_kv_cache=not self.is_kv_shared_layer)
+        attn_output = self.attn(
+            q,
+            k,
+            v,
+            forward_batch=forward_batch,
+            save_kv_cache=not self.is_kv_shared_layer,
+        )
         if attn_output.dim() == 3:
             attn_output = attn_output.flatten(-2, -1)
         output, _ = self.o_proj(attn_output)
-        
+
         return output
 
 
@@ -390,7 +387,7 @@ class Gemma4DecoderLayer(nn.Module):
         layer_type = config.layer_types[layer_id]
         self.is_full_attention = layer_type == "full_attention"
         if self.is_full_attention:
-            head_dim = config.head_dim # following sglang naming
+            head_dim = config.head_dim  # following sglang naming
         else:
             head_dim = getattr(config, "swa_head_dim", config.head_dim)
 
@@ -402,7 +399,7 @@ class Gemma4DecoderLayer(nn.Module):
             quant_config=quant_config,
             prefix=add_prefix("self_attn", prefix),
         )
-        
+
         first_kv_shared_layer_idx = config.num_hidden_layers - getattr(
             config, "num_kv_shared_layers", 0
         )
@@ -422,9 +419,7 @@ class Gemma4DecoderLayer(nn.Module):
             prefix=add_prefix("mlp", prefix),
         )
 
-        self.input_layernorm = GemmaRMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
-        )
+        self.input_layernorm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = GemmaRMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
         )
@@ -451,7 +446,7 @@ class Gemma4DecoderLayer(nn.Module):
                 self.hidden_size,
                 bias=False,
                 quant_config=quant_config,
-                prefix=add_prefix("per_layer_projection", prefix)
+                prefix=add_prefix("per_layer_projection", prefix),
             )
             self.post_per_layer_input_norm = Gemma4RMSNorm(
                 config.hidden_size, eps=config.rms_norm_eps
@@ -480,7 +475,7 @@ class Gemma4DecoderLayer(nn.Module):
         # 1. input_norm(x) -> attn -> post_attn_norm -> ADD residual
         # 2. pre_ff_norm -> mlp -> post_ff_norm -> ADD residual
         residual = hidden_states
-        
+
         # Apply input layernorm
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states = self.self_attn(
@@ -514,9 +509,9 @@ class Gemma4DecoderLayer(nn.Module):
                 per_layer_contribution
             )
             hidden_states = hidden_states + per_layer_contribution
-        
+
         # Apply layer scalar for full-attention layers
-        if self.is_full_attention and hasattr(self, 'layer_scalar'):
+        if self.is_full_attention and hasattr(self, "layer_scalar"):
             hidden_states = hidden_states * self.layer_scalar
         return hidden_states, None
 
@@ -538,9 +533,9 @@ class Gemma4TextModel(PreTrainedModel):
             config.vocab_size,
             config.hidden_size,
             self.padding_idx,
-            embed_scale=self.config.hidden_size**0.5, # embeded normalizer
+            embed_scale=self.config.hidden_size**0.5,  # embeded normalizer
         )
-        
+
         # Per-layer input embeddings
         self.hidden_size = config.hidden_size
         self.hidden_size_per_layer_input = getattr(
@@ -562,7 +557,7 @@ class Gemma4TextModel(PreTrainedModel):
             # self.embed_scale_per_layer = torch.tensor(
             #     self.hidden_size_per_layer_input**0.5,
             # )
-            
+
             # FIXME: Use replicated for now. Use ColumnParallel?.
             self.per_layer_model_projection = ReplicatedLinear(
                 self.hidden_size,
@@ -599,7 +594,7 @@ class Gemma4TextModel(PreTrainedModel):
         )
 
         self.norm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        
+
         # self.per_layer_projection_scale = torch.tensor(
         #     config.hidden_size**-0.5,
         # )
@@ -669,9 +664,7 @@ class Gemma4TextModel(PreTrainedModel):
         per_layer_projection, _ = self.per_layer_model_projection(inputs_embeds)
 
         # Apply w_scale (HF: Gemma4ScaledLinear with w_scale=hidden_size^{-0.5})
-        per_layer_projection = (
-            per_layer_projection * self.per_layer_projection_scale
-        )
+        per_layer_projection = per_layer_projection * self.per_layer_projection_scale
 
         # Reshape to (num_tokens, num_layers, hidden_size_per_layer_input)
         per_layer_projection = per_layer_projection.reshape(
@@ -681,17 +674,13 @@ class Gemma4TextModel(PreTrainedModel):
         )
 
         # Normalize
-        per_layer_projection = self.per_layer_projection_norm(
-            per_layer_projection
-        )
+        per_layer_projection = self.per_layer_projection_norm(per_layer_projection)
 
         if per_layer_inputs is None:
             return per_layer_projection
 
         # Combine: (projection + per_layer_inputs) * scale
-        return (
-            per_layer_projection + per_layer_inputs
-        ) * self.per_layer_input_scale
+        return (per_layer_projection + per_layer_inputs) * self.per_layer_input_scale
 
     def forward(
         self,
@@ -823,7 +812,12 @@ class Gemma4ForCausalLM(PreTrainedModel):
         **kwargs,
     ) -> LogitsProcessor:
         hidden_states = self.model(
-            input_ids, positions, forward_batch, input_embeds, per_layer_inputs, **kwargs
+            input_ids,
+            positions,
+            forward_batch,
+            input_embeds,
+            per_layer_inputs,
+            **kwargs,
         )
         return self.logits_processor(
             input_ids, hidden_states, self.lm_head, forward_batch
@@ -881,7 +875,7 @@ class Gemma4ForCausalLM(PreTrainedModel):
         if unloaded_params:
             logger.warning(
                 "Some weights are not initialized from checkpoints: %s", unloaded_params
-            ) 
+            )
         return loaded_params
 
 

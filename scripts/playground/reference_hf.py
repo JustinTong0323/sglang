@@ -164,7 +164,9 @@ def synthetic_tokens(args):
     for p in prompts:
         input_ids = p
         for i in range(output_len + 1):
-            output = m.forward(torch.tensor([input_ids], device="cuda"), output_hidden_states=True).logits[0][-1]
+            output = m.forward(
+                torch.tensor([input_ids], device="cuda"), output_hidden_states=True
+            ).logits[0][-1]
             prefill_logits = output
             if i == 0:
                 print("prefill logits", prefill_logits)

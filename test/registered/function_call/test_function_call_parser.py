@@ -3752,11 +3752,11 @@ class TestGemma4Detector(unittest.TestCase):
     def test_detect_and_parse(self):
         text = 'Some text before <|tool_call>call:get_weather{location:<|"|>Tokyo<|"|>}<tool_call|>'
         result = self.detector.detect_and_parse(text, self.tools)
-        
+
         self.assertEqual(result.normal_text, "Some text before ")
         self.assertEqual(len(result.calls), 1)
         self.assertEqual(result.calls[0].name, "get_weather")
-        
+
         params = json.loads(result.calls[0].parameters)
         self.assertEqual(params["location"], "Tokyo")
 
@@ -3767,17 +3767,17 @@ class TestGemma4Detector(unittest.TestCase):
             "_call>call:get_we",
             "ather{location:<|",
             '"|>Tokyo<|"|>}<tool_',
-            "call|> after"
+            "call|> after",
         ]
-        
+
         all_results = []
         for chunk in chunks:
             res = self.detector.parse_streaming_increment(chunk, self.tools)
             all_results.append(res)
-            
+
         combined_normal_text = "".join(r.normal_text for r in all_results)
         self.assertEqual(combined_normal_text, "Some text before  after")
-        
+
         found_name = False
         found_params = False
         for res in all_results:
@@ -3788,18 +3788,18 @@ class TestGemma4Detector(unittest.TestCase):
                     params = json.loads(call.parameters)
                     if params == {"location": "Tokyo"}:
                         found_params = True
-        
+
         self.assertTrue(found_name)
         self.assertTrue(found_params)
 
     def test_nested_array_streaming(self):
         # Additional coverage for complex structure
         chunks = [
-            "<|tool_call>call:get_weather{location:<|\"",
-            "|>New York<|\"|>,nested:[1, 2, {inner:<|\"|>",
-            "val<|\"|>}]}<tool_call|>"
+            '<|tool_call>call:get_weather{location:<|"',
+            '|>New York<|"|>,nested:[1, 2, {inner:<|"|>',
+            'val<|"|>}]}<tool_call|>',
         ]
-        
+
         all_results = []
         for chunk in chunks:
             res = self.detector.parse_streaming_increment(chunk, self.tools)
@@ -3811,9 +3811,13 @@ class TestGemma4Detector(unittest.TestCase):
                 if call.parameters:
                     params = json.loads(call.parameters)
                     if "location" in params and params["location"] == "New York":
-                        if "nested" in params and params["nested"] == [1, 2, {"inner": "val"}]:
+                        if "nested" in params and params["nested"] == [
+                            1,
+                            2,
+                            {"inner": "val"},
+                        ]:
                             found_params = True
-                            
+
         self.assertTrue(found_params)
 
 

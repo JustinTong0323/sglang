@@ -823,8 +823,8 @@ class TritonAttnBackend(AttentionBackend):
             k, v = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
             # FIXME: hacky way to make kv cache aligned
             # why???
-            k = k[1:q.shape[0]+1]
-            v = v[1:q.shape[0]+1]
+            k = k[1 : q.shape[0] + 1]
+            v = v[1 : q.shape[0] + 1]
             # print(layer.layer_id, k.cpu(), v.cpu())
         elif k is None or v is None:
             raise ValueError("Both k and v should be None or not None")
@@ -834,8 +834,8 @@ class TritonAttnBackend(AttentionBackend):
                 if (
                     self.use_mla or layer.k_scale is None
                 ):  # Triton MLA currently doesn't support quantized kv cache
-                        forward_batch.token_to_kv_pool.set_kv_buffer(
-                            layer,
+                    forward_batch.token_to_kv_pool.set_kv_buffer(
+                        layer,
                         forward_batch.out_cache_loc,
                         k,
                         v,
@@ -848,8 +848,7 @@ class TritonAttnBackend(AttentionBackend):
                         v.clone(),
                         layer.k_scale,
                         layer.v_scale,
-                        )
-
+                    )
 
         logits_soft_cap = logit_capping_mod(layer.logit_capping_method, layer.logit_cap)
 

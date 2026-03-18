@@ -56,15 +56,18 @@ logger = logging.getLogger(__name__)
 
 cached_get_processor = lru_cache(get_processor)
 
+
 class Gemma4ImagePixelInputs(TypedDict):
     pixel_values: torch.Tensor
     """Shape: `(batch_size * num_images, num_channels, height, width)`"""
+
 
 class Gemma4AudioInputs(TypedDict):
     input_features_padded: torch.Tensor
     """Shape: `(batch_size * num_audio, seq_length, num_features)`"""
     input_features_mask: torch.Tensor
     """Shape: `(batch_size * num_audio, seq_length)`"""
+
 
 class Gemma4MultimodalEmbedder(nn.Module):
     """Projects vision/audio soft tokens into LM embedding space."""
@@ -109,6 +112,7 @@ class Gemma4MultimodalEmbedder(nn.Module):
         """Project soft tokens from a multimodal tower into LM space."""
         embs_proj, _ = self.embedding_projection(inputs_embeds)
         return self.embedding_post_projection_norm(embs_proj)
+
 
 class Gemma4ForConditionalGeneration(PreTrainedModel):
     config_class = Gemma4Config
@@ -195,7 +199,11 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             self.embed_audio = None
 
         self.vocab_size = config.text_config.vocab_size
-        self.vocab_size_per_layer_input = getattr(config.text_config, "vocab_size_per_layer_input", config.text_config.vocab_size)
+        self.vocab_size_per_layer_input = getattr(
+            config.text_config,
+            "vocab_size_per_layer_input",
+            config.text_config.vocab_size,
+        )
 
         # Text model
         self.language_model = Gemma4TextModel(
@@ -227,7 +235,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
     def get_image_feature(self, items: List[MultimodalDataItem]) -> torch.Tensor:
         all_pixel_values = flatten_nested_list([item.feature for item in items])
         vt = self.vision_tower
-        
+
         all_embeds = []
         for pv in all_pixel_values:
             if pv.dim() == 5:
@@ -236,22 +244,25 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 pv = pv.unsqueeze(0)
             elif pv.dim() != 4:
                 raise ValueError(f"Unexpected pixel_values shape: {pv.shape}")
-                
+
             pv = pv.to(device=vt.device, dtype=self.language_model.dtype())
-            
+
             # Step 1: Patchify, pad to max_patches (2520), build positions
             patch_positions, padding_positions = vt._patch_positions(pv)
             inputs_embeds = vt.patch_embedder(
                 pv,
-                patch_positions[:, :vt._num_real_patches(pv)],
-                padding_positions[:, :vt._num_real_patches(pv)],
+                patch_positions[:, : vt._num_real_patches(pv)],
+                padding_positions[:, : vt._num_real_patches(pv)],
             )
             num_real = inputs_embeds.shape[1]
             num_padding = vt.max_patches - num_real
             if num_padding > 0:
                 pad_embeds = torch.zeros(
-                    inputs_embeds.shape[0], num_padding, inputs_embeds.shape[2],
-                    device=inputs_embeds.device, dtype=inputs_embeds.dtype,
+                    inputs_embeds.shape[0],
+                    num_padding,
+                    inputs_embeds.shape[2],
+                    device=inputs_embeds.device,
+                    dtype=inputs_embeds.dtype,
                 )
                 inputs_embeds = torch.cat([inputs_embeds, pad_embeds], dim=1)
 
@@ -281,31 +292,38 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             return torch.cat(all_embeds, dim=0)
         else:
             return torch.empty(
-                0, self.language_model.config.hidden_size,
+                0,
+                self.language_model.config.hidden_size,
                 device=next(self.parameters()).device,
-                dtype=self.language_model.dtype()
+                dtype=self.language_model.dtype(),
             )
 
     def get_audio_feature(self, items: List[MultimodalDataItem]) -> torch.Tensor:
         if self.audio_tower is None:
-            raise ValueError("Audio inputs provided but the model does not have an audio tower.")
-            
+            raise ValueError(
+                "Audio inputs provided but the model does not have an audio tower."
+            )
+
         all_input_features = flatten_nested_list([item.feature for item in items])
-        all_input_features_mask = flatten_nested_list([~item.input_features_mask for item in items])
-        
+        all_input_features_mask = flatten_nested_list(
+            [~item.input_features_mask for item in items]
+        )
+
         all_embeds = []
-        for input_features, input_features_mask in zip(all_input_features, all_input_features_mask):
+        for input_features, input_features_mask in zip(
+            all_input_features, all_input_features_mask
+        ):
             if input_features.dim() == 2:
                 input_features = input_features.unsqueeze(0)
             if input_features_mask.dim() == 1:
                 input_features_mask = input_features_mask.unsqueeze(0)
-                
+
             input_features = input_features.to(
                 device=next(self.audio_tower.parameters()).device,
                 dtype=self.language_model.dtype(),
             )
             input_features_mask = input_features_mask.to(device=input_features.device)
-            
+
             # Run audio tower (mask True=padding)
             audio_outputs = self.audio_tower(input_features, input_features_mask)
             if isinstance(audio_outputs, tuple):
@@ -313,20 +331,21 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             else:
                 audio_encodings = audio_outputs.last_hidden_state
                 audio_mask = audio_outputs.audio_mel_mask
-                
+
             audio_features = self.embed_audio(inputs_embeds=audio_encodings)
-            
+
             # Strip padding
             for enc, mask in zip(audio_features, audio_mask):
                 all_embeds.append(enc[~mask])
-                
+
         if all_embeds:
             return torch.cat(all_embeds, dim=0)
         else:
             return torch.empty(
-                0, self.language_model.config.hidden_size,
+                0,
+                self.language_model.config.hidden_size,
                 device=next(self.parameters()).device,
-                dtype=self.language_model.dtype()
+                dtype=self.language_model.dtype(),
             )
 
     def get_per_layer_inputs(
@@ -402,7 +421,9 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             # Vestigial weights to ignore
             if "embed_vision.embedding." in name or "embed_audio.embedding." in name:
                 continue
-            if self.audio_tower is None and ("audio_tower." in name or "embed_audio." in name):
+            if self.audio_tower is None and (
+                "audio_tower." in name or "embed_audio." in name
+            ):
                 continue
 
             name = re.sub(r"^model\.", "", name)
@@ -440,7 +461,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         if unloaded_params:
             logger.warning(
                 "Some weights are not initialized from checkpoints: %s", unloaded_params
-            ) 
+            )
         return loaded_params
 
     lora_pattern = re.compile(

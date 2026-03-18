@@ -868,13 +868,12 @@ class DynamicNTKScalingRotaryEmbedding(RotaryEmbedding):
         return cache
 
 
-
 class Gemma4RotaryEmbedding(RotaryEmbedding):
     """Gemma4-specific RoPE with cross-mixing.
-    
+
     Instead of rotating the first `rotary_dim` dimensions contiguously,
     splits the head into two halves and applies rotation across both.
-    
+
     For a head_dim of D and rotary_dim of R:
     - Standard RoPE rotates: [0, R)
     - Gemma4 RoPE rotates: [0, R/2) cross-mixed with [D/2, D/2 + R/2)
@@ -906,21 +905,22 @@ class Gemma4RotaryEmbedding(RotaryEmbedding):
 
     def _compute_inv_freq(self, base: float) -> torch.Tensor:
         """Compute frequencies only for the rotated dimensions.
-        
+
         Non-rotated dims are padded with 0.0 to produce identity rotation.
         """
         freq_exponents = (
-            torch.arange(0, 2 * self.rope_angles, 2, dtype=torch.float)
-            / self.head_size
+            torch.arange(0, 2 * self.rope_angles, 2, dtype=torch.float) / self.head_size
         )
-        inv_freq = 1.0 / (base ** freq_exponents)
+        inv_freq = 1.0 / (base**freq_exponents)
 
         # Zero-pad for non-rotated dims (identity rotation: cos=1, sin=0)
         if self.nope_angles > 0:
-            inv_freq = torch.cat([
-                inv_freq,
-                torch.zeros(self.nope_angles, dtype=torch.float),
-            ])
+            inv_freq = torch.cat(
+                [
+                    inv_freq,
+                    torch.zeros(self.nope_angles, dtype=torch.float),
+                ]
+            )
         return inv_freq
 
     def extra_repr(self) -> str:

@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from sglang.srt.entrypoints.openai.protocol import Tool
 from sglang.srt.function_call.base_format_detector import BaseFormatDetector
@@ -280,7 +280,9 @@ class Gemma4Detector(BaseFormatDetector):
                 next_start = current_slice.find(self.tool_call_start_token)
                 if next_start == -1:
                     # Check for partial match at the end
-                    partial_len = self._ends_with_partial_token(current_slice, self.tool_call_start_token)
+                    partial_len = self._ends_with_partial_token(
+                        current_slice, self.tool_call_start_token
+                    )
                     if partial_len > 0:
                         text_to_append = current_slice[:-partial_len]
                         if text_to_append:
@@ -301,14 +303,14 @@ class Gemma4Detector(BaseFormatDetector):
                     continue
             else:
                 # Inside tool call block
-                
+
                 # Check for TOOL_CALL_END first
                 if current_slice.startswith(self.tool_call_end_token):
                     self.parsed_pos += len(self.tool_call_end_token)
                     self.is_inside_tool_call = False
                     self.current_func_name = None
                     continue
-                
+
                 if not self.current_func_name:
                     # Skip leading whitespace
                     if current_slice[0] in (" ", "\n", "\t"):
@@ -338,9 +340,11 @@ class Gemma4Detector(BaseFormatDetector):
                             break
                     else:
                         # Check for partial matches
-                        if "call:".startswith(current_slice) or self.tool_call_end_token.startswith(current_slice):
+                        if "call:".startswith(
+                            current_slice
+                        ) or self.tool_call_end_token.startswith(current_slice):
                             break
-                        
+
                         # Unexpected content, skip
                         self.parsed_pos += 1
                         continue
@@ -355,7 +359,7 @@ class Gemma4Detector(BaseFormatDetector):
                             i += len(STRING_DELIM)
                             next_delim = current_slice.find(STRING_DELIM, i)
                             if next_delim == -1:
-                                i = n # Force wait
+                                i = n  # Force wait
                                 break
                             i = next_delim + len(STRING_DELIM)
                             continue

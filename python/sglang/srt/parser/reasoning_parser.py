@@ -63,7 +63,9 @@ class BaseReasoningFormatDetector:
             return StreamingParseResult(normal_text=text)
 
         # The text is considered to be in a reasoning block.
-        processed_text = text.replace(self.think_start_token + self.think_start_self_label, "").strip()
+        processed_text = text.replace(
+            self.think_start_token + self.think_start_self_label, ""
+        ).strip()
 
         if (
             self.think_end_token not in processed_text
@@ -121,7 +123,7 @@ class BaseReasoningFormatDetector:
             for token in tokens_to_check
         ):
             return StreamingParseResult()
-        
+
         think_start_text = self.think_start_token + self.think_start_self_label
 
         # Strip `<think>` token if present
@@ -444,8 +446,10 @@ class Nemotron3Detector(BaseReasoningFormatDetector):
             previous_content=previous_content,
         )
 
+
 class Gemma4Detector(BaseReasoningFormatDetector):
     """Gemma4 reasoning detector."""
+
     def __init__(
         self,
         stream_reasoning: bool = True,

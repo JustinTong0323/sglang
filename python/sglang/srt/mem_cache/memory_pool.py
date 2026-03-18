@@ -754,7 +754,20 @@ class MHATokenToKVPool(KVCache):
         )
         self.head_num = swa_head_num if swa_head_num is not None else head_num
         self.head_dim = swa_head_dim if swa_head_dim is not None else head_dim
-        print("head_num: ", self.head_num, "head_dim: ", self.head_dim, "swa_head_num: ", swa_head_num, "swa_head_dim: ", swa_head_dim, "head_num: ", head_num, "head_dim: ", head_dim)
+        print(
+            "head_num: ",
+            self.head_num,
+            "head_dim: ",
+            self.head_dim,
+            "swa_head_num: ",
+            swa_head_num,
+            "swa_head_dim: ",
+            swa_head_dim,
+            "head_num: ",
+            head_num,
+            "head_dim: ",
+            head_dim,
+        )
         self.v_head_dim = (
             swa_v_head_dim
             if swa_v_head_dim is not None
@@ -833,7 +846,9 @@ class MHATokenToKVPool(KVCache):
                 if self.enable_custom_mem_pool
                 else nullcontext()
             ):
-                print(f"Allocating KV cache buffers with size {self.size}, page_size {self.page_size}, head_num {self.head_num}, head_dim {self.head_dim}, v_head_dim {self.v_head_dim}, dtype {self.store_dtype}, device {self.device}")
+                print(
+                    f"Allocating KV cache buffers with size {self.size}, page_size {self.page_size}, head_num {self.head_num}, head_dim {self.head_dim}, v_head_dim {self.v_head_dim}, dtype {self.store_dtype}, device {self.device}"
+                )
                 # [size, head_num, head_dim] for each layer
                 # The padded slot 0 is used for writing dummy outputs from padded tokens.
                 # adjust for global

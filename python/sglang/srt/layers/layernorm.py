@@ -596,7 +596,6 @@ class Gemma4RMSNorm(nn.Module):
         return normed_output.type_as(x)
 
 
-
 class RMSNormWithoutScale(MultiPlatformOp):
     def __init__(self, hidden_size: int, eps=1e-6):
         super().__init__()

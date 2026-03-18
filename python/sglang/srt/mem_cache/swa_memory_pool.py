@@ -158,7 +158,7 @@ class SWAKVPool(KVCache):
 
         layer_id = layer.layer_id
         layer_id_pool, is_swa_layer = self.layers_mapping[layer_id]
-        
+
         if is_swa_layer:
             if self.swa_loc is not None:
                 loc = self.swa_loc

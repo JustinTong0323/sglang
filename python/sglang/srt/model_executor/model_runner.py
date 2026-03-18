@@ -1037,7 +1037,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             logger.info(
                 f"Setting sliding_window_size to be attention_chunk_size: {self.sliding_window_size}"
             )
-        
+
         # Note(pyc): gemma4 has different swa def
 
         self.dtype = self.model_config.dtype

@@ -20,9 +20,9 @@ from sglang.srt.layers.rotary_embedding.rope_variant import (
     DynamicNTKAlphaRotaryEmbedding,
     DynamicNTKScalingRotaryEmbedding,
     FourierRotaryEmbedding,
+    Gemma4RotaryEmbedding,
     Llama3RotaryEmbedding,
     Phi3LongRoPEScaledRotaryEmbedding,
-    Gemma4RotaryEmbedding,
 )
 from sglang.srt.layers.rotary_embedding.yarn import YaRNScalingRotaryEmbedding
 from sglang.srt.utils import get_bool_env_var, is_hip

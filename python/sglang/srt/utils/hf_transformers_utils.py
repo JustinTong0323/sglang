@@ -399,12 +399,14 @@ def get_config(
 
     if config.model_type == "gemma4":
         global_head_dim = getattr(config.text_config, "global_head_dim", None)
-        num_global_key_value_heads = getattr(config.text_config, "num_global_key_value_heads", None)
-        
+        num_global_key_value_heads = getattr(
+            config.text_config, "num_global_key_value_heads", None
+        )
+
         if global_head_dim is not None:
             config.text_config.swa_head_dim = config.text_config.head_dim
             config.text_config.head_dim = global_head_dim
-        
+
         config.text_config.swa_num_key_value_heads = config.num_key_value_heads
         if num_global_key_value_heads is not None:
             config.text_config.num_key_value_heads = num_global_key_value_heads
