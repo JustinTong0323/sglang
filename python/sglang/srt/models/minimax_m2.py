@@ -566,7 +566,8 @@ class MiniMaxM2Attention(nn.Module):
         self.scaling = self.head_dim**-0.5
 
         # RoPE settings - support partial RoPE
-        self.rope_theta = getattr(config, "rope_theta", 10000)
+        # FIXME: minimax_m2 config use external config that not compatible with transformers v5
+        self.rope_theta = config.rope_theta
         self.max_position_embeddings = getattr(config, "max_position_embeddings", 8192)
         self.rotary_dim = getattr(
             config, "rotary_dim", self.head_dim
@@ -940,6 +941,18 @@ class MiniMaxM2Model(nn.Module):
 
 class MiniMaxM2ForCausalLM(nn.Module):
     """MiniMax M2 model for causal language modeling."""
+
+    packed_modules_mapping = {
+        "qkv_proj": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+        ],
+        "gate_up_proj": [
+            "gate_proj",
+            "up_proj",
+        ],
+    }
 
     def __init__(
         self,
