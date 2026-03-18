@@ -823,7 +823,7 @@ class Gemma4ForCausalLM(PreTrainedModel):
         return {
             i
             for i, lt in enumerate(self.config.layer_types)
-            if lt != "sliding_attention"
+            if lt == "full_attention"
         }
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):

@@ -28,6 +28,7 @@ from transformers import (
     PreTrainedModel,
 )
 
+from sglang.srt.layers.attention.triton_backend import TritonAttnBackend
 from sglang.srt.layers.layernorm import Gemma4RMSNorm
 from sglang.srt.layers.linear import ReplicatedLinear
 from sglang.srt.layers.logits_processor import LogitsProcessor
@@ -42,7 +43,8 @@ from sglang.srt.managers.schedule_batch import (
     MultimodalInputs,
     flatten_nested_list,
 )
-from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
+from sglang.srt.server_args import get_global_server_args
 from sglang.srt.model_loader.weight_utils import (
     default_weight_loader,
     maybe_remap_kv_scale_name,
@@ -237,6 +239,84 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
     def get_attention_sliding_window_size(self):
         return getattr(self.config.text_config, "sliding_window", -1) - 1
 
+    def prepare_attn_masks(
+        self,
+        forward_batch: ForwardBatch,
+        input_ids: torch.Tensor,
+        mask_dtype: torch.dtype,
+    ):
+        """Prepare bidirectional attention masks for image tokens.
+    
+        Gemma 4 uses bidirectional attention for image soft tokens during prefill.
+        Following the HF implementation, bidirectional attention is only enabled
+        within each individual image group (same-image tokens), not across images.
+        Currently only the TritonAttnBackend supports this.
+
+        TODO(kpham-sgl): Guard appropriately for gemma3_mm.py:prepare_attn_masks()
+        """
+        if not isinstance(forward_batch.attn_backend, TritonAttnBackend):
+            logger.warning_once(
+                "Bidirectional attention for image tokens requires TritonAttnBackend. "
+                "Falling back to causal attention, which may degrade image quality."
+            )
+            return
+        if get_global_server_args().chunked_prefill_size != -1:
+            logger.warning_once(
+                "Bidirectional attention for image tokens is not supported with chunked prefill. "
+                "Image token spans split across chunk boundaries will receive causal attention. "
+                "Disable chunked prefill (--chunked-prefill-size=-1) to fix this."
+            )
+            return
+        assert forward_batch.forward_mode == ForwardMode.EXTEND
+
+        bidirectional_attn_masks_list = []
+        bidirectional_attn_mask_indptr = torch.zeros(
+            forward_batch.batch_size + 1, dtype=torch.int32, device=input_ids.device
+        )
+
+        for i in range(forward_batch.batch_size):
+            extend_seq_len = forward_batch.extend_seq_lens[i]
+            prefix_len = forward_batch.extend_prefix_lens[i]
+            bidirectional_attn_mask = torch.zeros(
+                extend_seq_len,
+                extend_seq_len + prefix_len,
+                dtype=mask_dtype,
+                device=input_ids.device,
+            )
+            # Start with causal mask
+            bidirectional_attn_mask.fill_(1)
+            bidirectional_attn_mask = bidirectional_attn_mask.tril(
+                diagonal=prefix_len
+            )
+
+            # Enable bidirectional attention within each image group
+            mm_inputs = forward_batch.mm_inputs[i]
+            if mm_inputs is not None:
+                for mm_item in mm_inputs.mm_items:
+                    if mm_item.is_image():
+                        for im_begin, im_end in mm_item.offsets:
+                            # Only handle image tokens in the extend portion
+                            # (compatible with radix cache)
+                            if im_begin >= prefix_len:
+                                bidirectional_attn_mask[
+                                    im_begin - prefix_len : im_end + 1 - prefix_len,
+                                    im_begin : im_end + 1,
+                                ] = 1
+
+            bidirectional_attn_masks_list.append(bidirectional_attn_mask.flatten())
+            bidirectional_attn_mask_indptr[i + 1] = (
+                bidirectional_attn_mask_indptr[i] + bidirectional_attn_mask.nelement()
+            )
+
+        if bidirectional_attn_masks_list:
+            bidirectional_attn_masks = torch.cat(bidirectional_attn_masks_list, dim=0)
+            forward_batch.attn_backend.forward_metadata.mask_indptr = (
+                bidirectional_attn_mask_indptr
+            )
+            forward_batch.attn_backend.forward_metadata.custom_mask = (
+                bidirectional_attn_masks
+            )
+
     def get_image_feature(self, items: List[MultimodalDataItem]) -> torch.Tensor:
         all_pixel_values = flatten_nested_list([item.feature for item in items])
         vt = self.vision_tower
@@ -360,6 +440,20 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             ple_ids[input_ids == self.config.audio_token_id] = 0
             per_layer_inputs = self.get_per_layer_inputs(ple_ids)
 
+        # Prepare bidirectional attention masks for image tokens during prefill.
+        # Gemma 4 uses bidirectional attention for image soft tokens.
+        # Only TritonAttnBackend supports this; incompatible with CUDA Graph and
+        # chunked prefill.
+        if (
+            forward_batch.forward_mode == ForwardMode.EXTEND
+            and forward_batch.contains_image_inputs()
+        ):
+            self.prepare_attn_masks(
+                forward_batch,
+                input_ids,
+                mask_dtype=torch.bool,
+            )
+
         # Use general_mm_embed_routine for handling multimodal data
         hidden_states = general_mm_embed_routine(
             input_ids=input_ids,
@@ -462,7 +556,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         return {
             i
             for i, lt in enumerate(text_config.layer_types)
-            if lt != "sliding_attention"
+            if lt == "full_attention"
         }
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
