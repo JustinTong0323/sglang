@@ -405,6 +405,7 @@ def get_config(
 
         if global_head_dim is not None:
             config.text_config.swa_head_dim = config.text_config.head_dim
+            config.text_config.swa_v_head_dim = config.text_config.head_dim
             config.text_config.head_dim = global_head_dim
 
         config.text_config.swa_num_key_value_heads = config.num_key_value_heads
@@ -639,7 +640,11 @@ def get_processor(
             kwargs["size"] = {"shortest_edge": 3136, "longest_edge": 1003520}
 
     if config.model_type not in {"llava", "clip"}:
-        kwargs["use_fast"] = use_fast
+        if config.model_type == "gemma4":
+            # TODO(kpham-sgl): revert this once we have a fast tokenizer for gemma4
+            kwargs["use_fast"] = False
+        else:
+            kwargs["use_fast"] = use_fast
     try:
         if "InternVL3_5" in tokenizer_name:
             processor = AutoTokenizer.from_pretrained(

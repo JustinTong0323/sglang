@@ -418,7 +418,7 @@ class ModelConfig:
         self.swa_v_head_dim = getattr(
             self.hf_text_config,
             "swa_v_head_dim",
-            self.v_head_dim,
+            self.swa_head_dim,
         )
         # FIXME: temporary special judge for MLA architecture
         if (

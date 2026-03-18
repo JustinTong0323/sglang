@@ -27,10 +27,9 @@ from transformers import (
     Gemma4VisionConfig,
     PreTrainedModel,
 )
-from transformers.models.auto.modeling_auto import AutoModel
 
 from sglang.srt.layers.layernorm import Gemma4RMSNorm
-from sglang.srt.layers.linear import RowParallelLinear
+from sglang.srt.layers.linear import ReplicatedLinear
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.managers.mm_utils import (
@@ -48,7 +47,9 @@ from sglang.srt.model_loader.weight_utils import (
     default_weight_loader,
     maybe_remap_kv_scale_name,
 )
+from sglang.srt.models.gemma4_audio import Gemma4AudioEncoder
 from sglang.srt.models.gemma4_causal import Gemma4TextModel
+from sglang.srt.models.gemma4_vision import Gemma4VisionEncoder
 from sglang.srt.utils import add_prefix
 from sglang.srt.utils.hf_transformers_utils import get_processor
 
@@ -91,7 +92,7 @@ class Gemma4MultimodalEmbedder(nn.Module):
             or multimodal_config.hidden_size
         )
 
-        self.embedding_projection = RowParallelLinear(
+        self.embedding_projection = ReplicatedLinear(
             embedding_dim,
             self.text_hidden_size,
             bias=False,
@@ -127,7 +128,6 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         ".k_proj.",
         ".v_proj.",
         ".o_proj.",
-        ".out_proj.",
     ]
     bitsandbytes_stacked_params_mapping = {
         "q_proj": ("qkv_proj", 0),
@@ -135,7 +135,6 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         "v_proj": ("qkv_proj", 2),
         "gate_proj": ("gate_up_proj", 0),
         "up_proj": ("gate_up_proj", 1),
-        "out_proj": ("proj", 0),
     }
 
     packed_modules_mapping = {
@@ -174,8 +173,11 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
 
         prefix = add_prefix("model", prefix)
 
-        # Vision components
-        self.vision_tower = AutoModel.from_config(config=config.vision_config)
+        self.vision_tower = Gemma4VisionEncoder(
+            config=config.vision_config,
+            quant_config=quant_config,
+            prefix=add_prefix("vision_tower", prefix),
+        )
 
         self.embed_vision = Gemma4MultimodalEmbedder(
             config.vision_config,
@@ -186,8 +188,11 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
 
         # Audio components
         if getattr(config, "audio_config", None) is not None:
-            self.audio_tower = AutoModel.from_config(config=config.audio_config)
-            self.audio_tower.post_init()
+            self.audio_tower = Gemma4AudioEncoder(
+                config=config.audio_config,
+                quant_config=quant_config,
+                prefix=add_prefix("audio_tower", prefix),
+            )
             self.embed_audio = Gemma4MultimodalEmbedder(
                 config.audio_config,
                 config.text_config,
@@ -238,6 +243,13 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
 
         all_embeds = []
         for pv in all_pixel_values:
+            if (
+                pv.dim() in (2, 3)
+                and pv.shape[-1] == self.config.text_config.hidden_size
+            ):
+                all_embeds.append(pv.to(self.language_model.device))
+                continue
+
             if pv.dim() == 5:
                 pv = pv.squeeze(0)
             if pv.dim() == 3:
@@ -247,42 +259,9 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
 
             pv = pv.to(device=vt.device, dtype=self.language_model.dtype())
 
-            # Step 1: Patchify, pad to max_patches (2520), build positions
-            patch_positions, padding_positions = vt._patch_positions(pv)
-            inputs_embeds = vt.patch_embedder(
-                pv,
-                patch_positions[:, : vt._num_real_patches(pv)],
-                padding_positions[:, : vt._num_real_patches(pv)],
-            )
-            num_real = inputs_embeds.shape[1]
-            num_padding = vt.max_patches - num_real
-            if num_padding > 0:
-                pad_embeds = torch.zeros(
-                    inputs_embeds.shape[0],
-                    num_padding,
-                    inputs_embeds.shape[2],
-                    device=inputs_embeds.device,
-                    dtype=inputs_embeds.dtype,
-                )
-                inputs_embeds = torch.cat([inputs_embeds, pad_embeds], dim=1)
+            pooled, pooler_mask = vt(pv)
 
-            # Step 2: Encode
-            model_output = vt.encoder(
-                inputs_embeds=inputs_embeds,
-                attention_mask=~padding_positions,
-                patch_positions=patch_positions,
-            )
-
-            # Step 3: Pool to default_output_length (280) tokens
-            pooler_output = vt.pooler(
-                hidden_states=model_output.last_hidden_state,
-                patch_positions=patch_positions,
-                padding_positions=padding_positions,
-            )
-            hidden_states, pooler_mask = pooler_output[0]
-
-            # Step 4: Strip padding per-image and embed
-            for hs, mask in zip(hidden_states, pooler_mask):
+            for hs, mask in zip(pooled, pooler_mask):
                 real_tokens = hs[mask]
                 all_embeds.append(
                     self.embed_vision(inputs_embeds=real_tokens.unsqueeze(0)).squeeze(0)
@@ -319,22 +298,18 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 input_features_mask = input_features_mask.unsqueeze(0)
 
             input_features = input_features.to(
-                device=next(self.audio_tower.parameters()).device,
+                device=self.audio_tower.device,
                 dtype=self.language_model.dtype(),
             )
             input_features_mask = input_features_mask.to(device=input_features.device)
 
-            # Run audio tower (mask True=padding)
-            audio_outputs = self.audio_tower(input_features, input_features_mask)
-            if isinstance(audio_outputs, tuple):
-                audio_encodings, audio_mask = audio_outputs
-            else:
-                audio_encodings = audio_outputs.last_hidden_state
-                audio_mask = audio_outputs.audio_mel_mask
+            # audio_mel_mask convention: True = padding
+            audio_encodings, audio_mask = self.audio_tower(
+                input_features, input_features_mask
+            )
 
             audio_features = self.embed_audio(inputs_embeds=audio_encodings)
 
-            # Strip padding
             for enc, mask in zip(audio_features, audio_mask):
                 all_embeds.append(enc[~mask])
 
@@ -378,8 +353,12 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             )
 
         positions += 1
+        per_layer_inputs = None
         if input_ids is not None:
-            per_layer_inputs = self.get_per_layer_inputs(input_ids)
+            ple_ids = input_ids.clone()
+            ple_ids[input_ids == self.config.image_token_id] = 0
+            ple_ids[input_ids == self.config.audio_token_id] = 0
+            per_layer_inputs = self.get_per_layer_inputs(ple_ids)
 
         # Use general_mm_embed_routine for handling multimodal data
         hidden_states = general_mm_embed_routine(
@@ -403,22 +382,84 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
     def tie_weights(self, recompute_mapping=False):
         return self.language_model.tie_weights()
 
+    # Standard stacked-params mapping for fused QKV / GateUp linears
+    # in the text decoder.  Also consumed by the tower QKV remap (step 2).
+    stacked_params_mapping = [
+        # (param_name, shard_name, shard_id)
+        (".qkv_proj", ".q_proj", "q"),
+        (".qkv_proj", ".k_proj", "k"),
+        (".qkv_proj", ".v_proj", "v"),
+        (".gate_up_proj", ".up_proj", 1),
+        (".gate_up_proj", ".gate_proj", 0),
+    ]
+
+    # Regex for fused QKV in vision/audio towers.
+    # Vision: *.self_attn.{q,k,v}_proj.*  Audio: *.attn.{q,k,v}_proj.*
+    _RE_TOWER_QKV = re.compile(
+        r"(.+\.(?:self_attn|attn))\.(q_proj|k_proj|v_proj)\.(.*)"
+    )
+    # Regex for fused GateUp in the vision tower MLP.
+    _RE_TOWER_GATE_UP = re.compile(r"(.+\.mlp)\.(gate_proj|up_proj)\.(.*)")
+
+    @staticmethod
+    def _remap_tower_name(name: str, params_dict: dict) -> str:
+        """Remap a vision/audio tower checkpoint name to our module tree.
+
+        Three transformations, applied in order:
+
+        1. **Fused QKV** — ``{q,k,v}_proj.*`` → ``qkv.*``
+           Weight/bias are redirected into the fused ``qkv.{proj}.{attr}``
+           namespace (stacked-params then merges them into ``qkv_proj``).
+           Clip buffers are split: ``input_*`` → shared ``qkv.input_*``,
+           ``output_*`` → per-projection ``qkv.{q,k,v}_output_*``.
+
+        2. **Fused GateUp** — ``{gate,up}_proj.*`` → ``gate_up.*``
+           Same pattern as QKV.
+
+        3. **Clippable wrapper** — ``*.weight``/``*.bias`` → ``*.linear.weight``
+           Catches the remaining (non-fused) clippable linears whose inner
+           ``RowParallelLinear``/``ColumnParallelLinear`` lives at ``.linear``.
+           Falls back to the original name when ``.linear.`` does not exist
+           in ``params_dict`` (plain linears, norms, conv weights, etc.).
+        """
+        # Step 1: fused QKV
+        m = Gemma4ForConditionalGeneration._RE_TOWER_QKV.match(name)
+        if m:
+            pfx, proj, attr = m.groups()
+            if attr in ("weight", "bias"):
+                return f"{pfx}.qkv.{proj}.{attr}"
+            if attr.startswith("output_"):
+                return f"{pfx}.qkv.{proj[0]}_{attr}"
+            if attr.startswith("input_"):
+                return f"{pfx}.qkv.{attr}"
+
+        # Step 2: fused GateUp
+        m = Gemma4ForConditionalGeneration._RE_TOWER_GATE_UP.match(name)
+        if m:
+            pfx, proj, attr = m.groups()
+            short = proj.split("_")[0]  # "gate" or "up"
+            if attr in ("weight", "bias"):
+                return f"{pfx}.gate_up.{proj}.{attr}"
+            if attr.startswith("output_"):
+                return f"{pfx}.gate_up.{short}_{attr}"
+            if attr.startswith("input_"):
+                return f"{pfx}.gate_up.{attr}"
+
+        # Step 3: clippable wrapper (.weight → .linear.weight)
+        if name.endswith(".weight") or name.endswith(".bias"):
+            base, attr = name.rsplit(".", 1)
+            alt = f"{base}.linear.{attr}"
+            if alt in params_dict:
+                return alt
+
+        return name
+
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        stacked_params_mapping = [
-            # (param_name, shard_name, shard_id)
-            (".qkv_proj", ".q_proj", "q"),
-            (".qkv_proj", ".k_proj", "k"),
-            (".qkv_proj", ".v_proj", "v"),
-            (".gate_up_proj", ".up_proj", 1),
-            (".gate_up_proj", ".gate_proj", 0),
-        ]
-        """Load weights for the model."""
         params_dict = dict(self.named_parameters())
         params_dict.update(dict(self.named_buffers()))
         loaded_params: Set[str] = set()
 
         for name, loaded_weight in weights:
-            # Vestigial weights to ignore
             if "embed_vision.embedding." in name or "embed_audio.embedding." in name:
                 continue
             if self.audio_tower is None and (
@@ -427,27 +468,27 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 continue
 
             name = re.sub(r"^model\.", "", name)
-            for param_name, weight_name, shard_id in stacked_params_mapping:
+
+            # Remap vision / audio tower names (fused QKV/GateUp, clippable wrappers)
+            if "vision_tower." in name or "audio_tower." in name:
+                name = self._remap_tower_name(name, params_dict)
+
+            # Try stacked (fused) params first
+            orig_name = name
+            for param_name, weight_name, shard_id in self.stacked_params_mapping:
                 if weight_name not in name:
                     continue
                 name = name.replace(weight_name, param_name)
-                # Skip loading extra bias for GPTQ models
-                if name.endswith(".bias") and name not in params_dict:
-                    continue
                 if name not in params_dict:
+                    name = orig_name
                     continue
                 param = params_dict[name]
                 weight_loader = param.weight_loader
                 weight_loader(param, loaded_weight, shard_id)
                 break
             else:
-                if "vision_model" in name:
-                    # adapt to VisionAttention
-                    name = name.replace(".self_attn.out_proj", ".self_attn.proj")
-                # Skip loading extra bias for GPTQ models
                 if name.endswith(".bias") and name not in params_dict:
                     continue
-                # Remapping the name of FP8 kv-scale
                 name = maybe_remap_kv_scale_name(name, params_dict)
                 if name is None:
                     continue
@@ -460,7 +501,8 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         unloaded_params = params_dict.keys() - loaded_params
         if unloaded_params:
             logger.warning(
-                "Some weights are not initialized from checkpoints: %s", unloaded_params
+                "Some weights are not initialized from checkpoints: %s",
+                unloaded_params,
             )
         return loaded_params
 

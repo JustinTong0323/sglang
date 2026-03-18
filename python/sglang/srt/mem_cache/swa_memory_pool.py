@@ -98,6 +98,11 @@ class SWAKVPool(KVCache):
         k_size_swa, v_size_swa = self.swa_kv_pool.get_kv_size_bytes()
         return k_size + k_size_swa, v_size + v_size_swa
 
+    def get_v_head_dim(self):
+        swa_v_dim = self.swa_kv_pool.get_value_buffer(0).shape[-1]
+        full_v_dim = self.full_kv_pool.get_value_buffer(0).shape[-1]
+        return max(swa_v_dim, full_v_dim)
+
     def get_contiguous_buf_infos(self):
         full_kv_data_ptrs, full_kv_data_lens, full_kv_item_lens = (
             self.full_kv_pool.get_contiguous_buf_infos()
