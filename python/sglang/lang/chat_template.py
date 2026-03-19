@@ -649,7 +649,6 @@ def match_granite_instruct(model_path: str):
         return "granite-3-instruct"
 
 
-
 @register_chat_template_matching_function
 def match_internvl_chat(model_path: str):
     if re.search(r"internvl2_5", model_path, re.IGNORECASE):

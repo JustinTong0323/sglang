@@ -19,7 +19,6 @@ from typing import Iterable, Optional, Set, Tuple
 import torch
 from torch import nn
 from transformers import (
-    AutoModel,
     Gemma4TextConfig,
     PretrainedConfig,
     PreTrainedModel,
@@ -27,9 +26,7 @@ from transformers import (
 
 from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
-    tensor_model_parallel_all_reduce,
 )
-from sglang.srt.distributed import get_tensor_model_parallel_world_size
 from sglang.srt.layers.layernorm import Gemma4RMSNorm, GemmaRMSNorm, RMSNorm
 from sglang.srt.layers.linear import (
     QKVParallelLinear,
@@ -38,19 +35,10 @@ from sglang.srt.layers.linear import (
 )
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.moe.ep_moe.layer import get_moe_impl_class
+from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
 from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
-from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
-from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-from sglang.srt.model_loader.weight_utils import (
-    default_weight_loader,
-    maybe_remap_kv_scale_name,
-)
-from sglang.srt.utils import add_prefix, make_layers
-from sglang.srt.layers.moe.ep_moe.layer import get_moe_impl_class
-from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
-from sglang.srt.server_args import get_global_server_args
 from sglang.srt.layers.rotary_embedding import get_rope
 from sglang.srt.layers.vocab_parallel_embedding import (
     ParallelLMHead,
@@ -177,7 +165,9 @@ class Gemma4Router(nn.Module):
         self.hidden_size = config.hidden_size
 
         # RMSNorm without learned weight — pure normalization only
-        self.norm = Gemma4RMSNorm(self.hidden_size, eps=config.rms_norm_eps, with_scale=False)
+        self.norm = Gemma4RMSNorm(
+            self.hidden_size, eps=config.rms_norm_eps, with_scale=False
+        )
         # Per-dimension learned scale, applied after norm + root_size
         self.scale = nn.Parameter(torch.ones(self.hidden_size))
         # Constant 1/sqrt(hidden_size) scaling factor
@@ -269,7 +259,8 @@ class Gemma4MoE(nn.Module):
         experts_type = get_moe_impl_class(quant_config)
 
         self.experts = experts_type(
-            num_experts=config.num_experts + get_global_server_args().ep_num_redundant_experts,
+            num_experts=config.num_experts
+            + get_global_server_args().ep_num_redundant_experts,
             hidden_size=config.hidden_size,
             intermediate_size=config.expert_intermediate_size,
             layer_id=layer_id,
@@ -280,11 +271,14 @@ class Gemma4MoE(nn.Module):
             reduce_results=True,
         )
 
-    def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, router_logits: torch.Tensor
+    ) -> torch.Tensor:
         num_tokens, hidden_dim = hidden_states.shape
         topk_output = self.topk(hidden_states, router_logits)
         hidden_states = self.experts(hidden_states, topk_output)
         return hidden_states.view(num_tokens, hidden_dim)
+
 
 class Gemma4Attention(nn.Module):
     def __init__(
@@ -303,7 +297,9 @@ class Gemma4Attention(nn.Module):
         tp_size = get_tensor_model_parallel_world_size()
 
         layer_type = config.layer_types[layer_id]
-        self.sliding_window = config.sliding_window if layer_type == "sliding_attention" else None
+        self.sliding_window = (
+            config.sliding_window if layer_type == "sliding_attention" else None
+        )
 
         self.total_num_heads = config.num_attention_heads
         assert self.total_num_heads % tp_size == 0
@@ -371,17 +367,17 @@ class Gemma4Attention(nn.Module):
 
         # KV sharing logic
         num_kv_shared_layers = getattr(config, "num_kv_shared_layers", 0)
-        first_kv_shared_layer_idx = (
-            config.num_hidden_layers - num_kv_shared_layers
+        first_kv_shared_layer_idx = config.num_hidden_layers - num_kv_shared_layers
+        self.is_kv_shared_layer = (
+            layer_id >= first_kv_shared_layer_idx and num_kv_shared_layers > 0
         )
-        self.is_kv_shared_layer = layer_id >= first_kv_shared_layer_idx and num_kv_shared_layers > 0
 
         self.kv_shared_layer_index = None
         if num_kv_shared_layers > 0 and self.layer_id >= first_kv_shared_layer_idx:
             prev_layers = config.layer_types[:first_kv_shared_layer_idx]
             current_layer_type = config.layer_types[self.layer_id]
-            self.kv_shared_layer_index = len(prev_layers) - 1 - prev_layers[::-1].index(
-                current_layer_type
+            self.kv_shared_layer_index = (
+                len(prev_layers) - 1 - prev_layers[::-1].index(current_layer_type)
             )
 
         self.rotary_emb = get_rope(
@@ -472,9 +468,9 @@ class Gemma4DecoderLayer(nn.Module):
     ) -> None:
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.hidden_size_per_layer_input = getattr(
-            config, "hidden_size_per_layer_input", None
-        ) or 0
+        self.hidden_size_per_layer_input = (
+            getattr(config, "hidden_size_per_layer_input", None) or 0
+        )
 
         self.layer_id = layer_id
 
@@ -654,7 +650,7 @@ class Gemma4DecoderLayer(nn.Module):
                 per_layer_contribution
             )
             hidden_states = hidden_states + per_layer_contribution
-        
+
         hidden_states = hidden_states * self.layer_scalar
         return hidden_states, None
 
@@ -676,17 +672,17 @@ class Gemma4TextModel(PreTrainedModel):
             config.vocab_size,
             config.hidden_size,
             self.padding_idx,
-            embed_scale=self.config.hidden_size**0.5,  # embeded normalizer
+            embed_scale=self.config.hidden_size**0.5,  # embedded normalizer
         )
 
         # Per-layer input embeddings
         self.hidden_size = config.hidden_size
-        self.hidden_size_per_layer_input = getattr(
-            config, "hidden_size_per_layer_input", None
-        ) or 0
-        self.vocab_size_per_layer_input = getattr(
-            config, "vocab_size_per_layer_input", None
-        ) or config.vocab_size
+        self.hidden_size_per_layer_input = (
+            getattr(config, "hidden_size_per_layer_input", None) or 0
+        )
+        self.vocab_size_per_layer_input = (
+            getattr(config, "vocab_size_per_layer_input", None) or config.vocab_size
+        )
 
         if self.hidden_size_per_layer_input and self.hidden_size_per_layer_input > 0:
             self.embed_tokens_per_layer = Gemma4TextScaledWordEmbedding(
@@ -695,7 +691,7 @@ class Gemma4TextModel(PreTrainedModel):
                 self.padding_idx,
                 embed_scale=self.hidden_size_per_layer_input**0.5,
             )
-            
+
             self.per_layer_model_projection = ReplicatedLinear(
                 self.hidden_size,
                 config.num_hidden_layers * self.hidden_size_per_layer_input,
@@ -757,7 +753,7 @@ class Gemma4TextModel(PreTrainedModel):
         per_layer_embeds = self.embed_tokens_per_layer(per_layer_inputs_tokens)
 
         # Apply embed_scale (sqrt of per-layer hidden dim)
-        # Alreayd done in embedding layer
+        # Already done in embedding layer
         # per_layer_embeds = per_layer_embeds * self.embed_scale_per_layer
 
         # Reshape to (num_tokens, num_layers, hidden_size_per_layer_input)
@@ -1039,7 +1035,9 @@ class Gemma4ForCausalLM(PreTrainedModel):
                     if name not in params_dict:
                         continue
                     param = params_dict[name]
-                    weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                    weight_loader = getattr(
+                        param, "weight_loader", default_weight_loader
+                    )
                     weight_loader(param, loaded_weight)
             loaded_params.add(name)
         unloaded_params = params_dict.keys() - loaded_params

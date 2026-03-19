@@ -1059,7 +1059,7 @@ class FusedMoE(torch.nn.Module):
             ("experts.w2_weight", f"experts.{ckpt_down_proj_name}", "w2"),
             ("experts.w2_weight_bias", f"experts.{ckpt_down_proj_bias_name}", "w2"),
         ]
-    
+
     @classmethod
     def make_expert_params_mapping_gemma4(
         cls,

@@ -597,7 +597,7 @@ class Gemma4RMSNorm(nn.Module):
 
     def _norm(self, x):
         mean_squared = x.pow(2).mean(-1, keepdim=True) + self.eps
-        # Use torch.pow() (over torch.sqrt() or torch.rsqrt()) to addess compiler differences between Torch and JAX
+        # Use torch.pow() (over torch.sqrt() or torch.rsqrt()) to address compiler differences between Torch and JAX
         return x * torch.pow(mean_squared, -0.5)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

@@ -89,7 +89,7 @@ def main(args):
         preds = []
         labels = []
         tic = time.perf_counter()
-        
+
         for i in range(test_df.shape[0]):
             prompt_end = format_example(test_df, i, include_answer=False)
             prompt = few_shot_examples + prompt_end
