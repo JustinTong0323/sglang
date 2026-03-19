@@ -6,6 +6,16 @@ from typing import Optional
 import requests
 import torch
 
+# Compatibility shim: flash-attn-4 registers a bare ``flash_attn`` namespace
+# that makes ``is_flash_attn_2_available()`` return True, but lacks the v2 API
+# (``flash_attn_func``, etc.).  Force it to False so HF remote model code
+# (e.g. Kimi-VL) skips the flash-attn v2 import path.
+import transformers.utils as _hf_utils
+import transformers.utils.import_utils as _hf_import_utils
+
+_hf_import_utils.is_flash_attn_2_available = lambda: False
+_hf_utils.is_flash_attn_2_available = lambda: False
+
 # Compatibility shim: Kimi-VL dynamic module expects PytorchGELUTanh which may
 # be missing in transformers==4.57.1. Inject a lightweight implementation so
 # the model can import successfully without downgrading transformers.
