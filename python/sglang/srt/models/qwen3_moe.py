@@ -708,6 +708,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
                 "Missing rope_theta in Qwen3 config. Expected either "
                 "config.rope_parameters['rope_theta'] or config.rope_theta."
             )
+        self.rope_theta = rope_theta
         max_position_embeddings = getattr(config, "max_position_embeddings", 8192)
         head_dim = getattr(
             config, "head_dim", config.hidden_size // config.num_attention_heads
