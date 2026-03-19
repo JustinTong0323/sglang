@@ -260,19 +260,14 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 "Falling back to causal attention, which may degrade image quality."
             )
             return
-        if get_global_server_args().chunked_prefill_size != -1:
-            logger.warning_once(
-                "Bidirectional attention for image tokens is not supported with chunked prefill. "
-                "Image token spans split across chunk boundaries will receive causal attention. "
-                "Disable chunked prefill (--chunked-prefill-size=-1) to fix this."
-            )
-            return
         assert forward_batch.forward_mode == ForwardMode.EXTEND
 
         bidirectional_attn_masks_list = []
         bidirectional_attn_mask_indptr = torch.zeros(
             forward_batch.batch_size + 1, dtype=torch.int32, device=input_ids.device
         )
+
+        split_images = []
 
         for i in range(forward_batch.batch_size):
             extend_seq_len = forward_batch.extend_seq_lens[i]
@@ -295,19 +290,37 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 for mm_item in mm_inputs.mm_items:
                     if mm_item.is_image():
                         for im_begin, im_end in mm_item.offsets:
-                            # Only handle image tokens in the extend portion
-                            # (compatible with radix cache)
-                            if im_begin >= prefix_len:
+                            # Note(kpham-sgl): We only apply bidirectional attention when the image token span 
+                            # is fully contained in the extend window. Otherwise, we silently fall back to 
+                            # causal attention.
+                            # FIXME(kpham-sgl): This is a hack to work around the fact that the image token span
+                            # might not be fully contained in the extend window during chunked prefill. 
+                            # We should fix this by properly making chunked prefill mask aware.
+                            if im_begin >= prefix_len and im_end < prefix_len + extend_seq_len:
                                 bidirectional_attn_mask[
                                     im_begin - prefix_len : im_end + 1 - prefix_len,
                                     im_begin : im_end + 1,
                                 ] = 1
+                            elif im_end >= prefix_len and im_begin < prefix_len + extend_seq_len:
+                                split_images.append((i, im_begin, im_end))
 
             bidirectional_attn_masks_list.append(bidirectional_attn_mask.flatten())
             bidirectional_attn_mask_indptr[i + 1] = (
                 bidirectional_attn_mask_indptr[i] + bidirectional_attn_mask.nelement()
             )
-
+        if split_images:
+            num_split_images = len(split_images)
+            logger.warning_once(
+                f"{num_split_images} images are split across chunk boundaries. "
+                "Below are the first 5 images that are split across chunk boundaries: "
+            )
+            for i, im_begin, im_end in split_images[:5]:
+                logger.warning_once(
+                    f"Image {i}:{im_begin}-{im_end} is split across chunk boundaries.\n",
+                )
+            logger.warning_once(
+                "Those images will receive causal attention. Disable chunked prefill (--chunked-prefill-size=-1) for full bidirectional attention.",
+            )
         if bidirectional_attn_masks_list:
             bidirectional_attn_masks = torch.cat(bidirectional_attn_masks_list, dim=0)
             forward_batch.attn_backend.forward_metadata.mask_indptr = (
