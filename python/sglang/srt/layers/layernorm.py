@@ -123,6 +123,11 @@ class RMSNorm(MultiPlatformOp):
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         if x.numel() == 0:
             return x
+        # sgl_kernel rmsnorm requires 2D input; reshape higher-rank tensors
+        needs_reshape = x.dim() != 2 and residual is None
+        if needs_reshape:
+            original_shape = x.shape
+            x = x.contiguous().reshape(-1, original_shape[-1])
         if self.variance_size_override is not None:
             return self.forward_native(x, residual, post_residual_addition)
         if is_batch_invariant_mode_enabled():
@@ -146,6 +151,8 @@ class RMSNorm(MultiPlatformOp):
             fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
             return x, residual
         out = rmsnorm(x, self.weight.data, self.variance_epsilon)
+        if needs_reshape:
+            out = out.reshape(original_shape)
         return out
 
     def forward_npu(
@@ -440,6 +447,10 @@ class GemmaRMSNorm(MultiPlatformOp):
         residual: Optional[torch.Tensor] = None,
         post_residual_addition: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        needs_reshape = x.dim() != 2 and residual is None
+        if needs_reshape:
+            original_shape = x.shape
+            x = x.contiguous().reshape(-1, original_shape[-1])
         if residual is not None:
             if post_residual_addition is not None:
                 residual = residual + post_residual_addition
@@ -448,6 +459,8 @@ class GemmaRMSNorm(MultiPlatformOp):
             )
             return x, residual
         out = gemma_rmsnorm(x, self.weight.data, self.variance_epsilon)
+        if needs_reshape:
+            out = out.reshape(original_shape)
         return out
 
     def forward_native(

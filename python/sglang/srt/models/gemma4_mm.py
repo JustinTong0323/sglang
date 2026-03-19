@@ -579,12 +579,15 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         k_eq_v_layers = self._get_k_eq_v_layers()
 
         # TODO(pyc96): revisit and simplify.
-        expert_params_mapping = FusedMoE.make_expert_params_mapping_gemma4(
-            ckpt_gate_proj_name="gate_proj",
-            ckpt_down_proj_name="down_proj",
-            ckpt_up_proj_name="up_proj",
-        )
-        num_experts = self.config.num_experts
+        num_experts = getattr(self.config.text_config, "num_experts", 0) or 0
+        if num_experts > 0:
+            expert_params_mapping = FusedMoE.make_expert_params_mapping_gemma4(
+                ckpt_gate_proj_name="gate_proj",
+                ckpt_down_proj_name="down_proj",
+                ckpt_up_proj_name="up_proj",
+            )
+        else:
+            expert_params_mapping = []
 
         params_dict = dict(self.named_parameters())
         params_dict.update(dict(self.named_buffers()))

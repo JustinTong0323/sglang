@@ -41,8 +41,6 @@ from sglang.srt.layers.moe.ep_moe.layer import get_moe_impl_class
 from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
-<<<<<<< HEAD
-=======
 from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import (
@@ -53,7 +51,6 @@ from sglang.srt.utils import add_prefix, make_layers
 from sglang.srt.layers.moe.ep_moe.layer import get_moe_impl_class
 from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
 from sglang.srt.server_args import get_global_server_args
->>>>>>> 8aaf187f9 (gemma4 moe)
 from sglang.srt.layers.rotary_embedding import get_rope
 from sglang.srt.layers.vocab_parallel_embedding import (
     ParallelLMHead,
@@ -554,7 +551,6 @@ class Gemma4DecoderLayer(nn.Module):
             self.per_layer_projection = None
             self.post_per_layer_input_norm = None
 
-        self.register_buffer("layer_scalar", torch.ones(1), persistent=True)
         # Parallel MoE
         self.enable_moe_block = getattr(config, "enable_moe_block", False) or getattr(
             config, "use_second_mlp_block", False
@@ -589,6 +585,7 @@ class Gemma4DecoderLayer(nn.Module):
             self.post_feedforward_layernorm_2 = None
             self.pre_feedforward_layernorm_2 = None
 
+        self.register_buffer("layer_scalar", torch.ones(1), persistent=True)
         self.prefix = prefix
 
     def forward(
@@ -657,7 +654,7 @@ class Gemma4DecoderLayer(nn.Module):
                 per_layer_contribution
             )
             hidden_states = hidden_states + per_layer_contribution
-
+        
         hidden_states = hidden_states * self.layer_scalar
         return hidden_states, None
 
