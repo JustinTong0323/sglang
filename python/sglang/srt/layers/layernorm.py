@@ -121,8 +121,6 @@ class RMSNorm(MultiPlatformOp):
         residual: Optional[torch.Tensor] = None,
         post_residual_addition: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        # # TODO: fix cuda: having some shape issue with sgl kernel
-        return self.forward_native(x, residual, post_residual_addition)
         if x.numel() == 0:
             return x
         if self.variance_size_override is not None:
@@ -478,7 +476,7 @@ class GemmaRMSNorm(MultiPlatformOp):
         residual: Optional[torch.Tensor] = None,
         post_residual_addition: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        return self.forward_native(x, residual, post_residual_addition)
+        return self._forward_impl(x, residual, post_residual_addition)
 
     def forward_cpu(
         self,
