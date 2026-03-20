@@ -1061,6 +1061,31 @@ class FusedMoE(torch.nn.Module):
         ]
 
     @classmethod
+    def make_expert_params_mapping_gemma4(
+        cls,
+        ckpt_gate_proj_name: str,
+        ckpt_down_proj_name: str,
+        ckpt_up_proj_name: str,
+    ):
+        return [
+            # (param_name, weight_name, shard_id)
+            (
+                (
+                    "experts.w13_weight"
+                    if weight_name in [ckpt_gate_proj_name, ckpt_up_proj_name]
+                    else "experts.w2_weight"
+                ),
+                f"experts.{weight_name}",
+                shard_id,
+            )
+            for shard_id, weight_name in [
+                ("w1", ckpt_gate_proj_name),
+                ("w2", ckpt_down_proj_name),
+                ("w3", ckpt_up_proj_name),
+            ]
+        ]
+
+    @classmethod
     def make_expert_params_mapping_fused_mxfp4(
         cls,
         ckpt_gate_up_proj_name: str,

@@ -121,10 +121,13 @@ class RMSNorm(MultiPlatformOp):
         residual: Optional[torch.Tensor] = None,
         post_residual_addition: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        # # TODO: fix cuda: having some shape issue with sgl kernel
-        return self.forward_native(x, residual, post_residual_addition)
         if x.numel() == 0:
             return x
+        # sgl_kernel rmsnorm requires 2D input; reshape higher-rank tensors
+        needs_reshape = x.dim() != 2 and residual is None
+        if needs_reshape:
+            original_shape = x.shape
+            x = x.contiguous().reshape(-1, original_shape[-1])
         if self.variance_size_override is not None:
             return self.forward_native(x, residual, post_residual_addition)
         if is_batch_invariant_mode_enabled():
@@ -148,6 +151,8 @@ class RMSNorm(MultiPlatformOp):
             fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
             return x, residual
         out = rmsnorm(x, self.weight.data, self.variance_epsilon)
+        if needs_reshape:
+            out = out.reshape(original_shape)
         return out
 
     def forward_npu(
@@ -442,6 +447,10 @@ class GemmaRMSNorm(MultiPlatformOp):
         residual: Optional[torch.Tensor] = None,
         post_residual_addition: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        needs_reshape = x.dim() != 2 and residual is None
+        if needs_reshape:
+            original_shape = x.shape
+            x = x.contiguous().reshape(-1, original_shape[-1])
         if residual is not None:
             if post_residual_addition is not None:
                 residual = residual + post_residual_addition
@@ -450,6 +459,8 @@ class GemmaRMSNorm(MultiPlatformOp):
             )
             return x, residual
         out = gemma_rmsnorm(x, self.weight.data, self.variance_epsilon)
+        if needs_reshape:
+            out = out.reshape(original_shape)
         return out
 
     def forward_native(
@@ -478,7 +489,7 @@ class GemmaRMSNorm(MultiPlatformOp):
         residual: Optional[torch.Tensor] = None,
         post_residual_addition: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        return self.forward_native(x, residual, post_residual_addition)
+        return self._forward_impl(x, residual, post_residual_addition)
 
     def forward_cpu(
         self,
@@ -586,7 +597,7 @@ class Gemma4RMSNorm(nn.Module):
 
     def _norm(self, x):
         mean_squared = x.pow(2).mean(-1, keepdim=True) + self.eps
-        # Use torch.pow() (over torch.sqrt() or torch.rsqrt()) to addess compiler differences between Torch and JAX
+        # Use torch.pow() (over torch.sqrt() or torch.rsqrt()) to address compiler differences between Torch and JAX
         return x * torch.pow(mean_squared, -0.5)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

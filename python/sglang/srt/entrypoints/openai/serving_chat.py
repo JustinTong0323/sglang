@@ -1233,7 +1233,7 @@ class OpenAIServingChat(OpenAIServingBase):
         """Judge whether the request needs reasoning"""
         if not self.reasoning_parser:
             return False
-        # Do we want to think by default?
+
         if self.reasoning_parser in ["deepseek-v3", "gemma4"]:
             # Models that require explicit enable thinking (thinking=True)
             return (

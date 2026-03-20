@@ -548,8 +548,8 @@ class ModelRunnerKVCacheMixin:
                             // get_attention_tp_size(),
                         ),
                         "swa_head_dim": self.model_config.hf_text_config.swa_head_dim,
-                        "swa_v_head_dim": self.model_config.hf_text_config.swa_head_dim,
-                        "v_head_dim": self.model_config.hf_text_config.head_dim,
+                        "swa_v_head_dim": self.model_config.hf_text_config.swa_v_head_dim,
+                        "v_head_dim": self.model_config.hf_text_config.v_head_dim,
                     }
                 self.token_to_kv_pool = SWAKVPool(
                     size=self.full_max_total_num_tokens,
@@ -619,8 +619,6 @@ class ModelRunnerKVCacheMixin:
                         ),
                     )
                 else:
-                    # self.max_total_num_tokens = self.max_total_num_tokens // 2 if global_head_dim is not None else self.max_total_num_tokens
-                    # print(f"global_head_dim: {global_head_dim}, head_dim: {self.model_config.head_dim}, head_num: {self.model_config.get_total_num_kv_heads()}, max_total_num_tokens: {self.max_total_num_tokens}")
                     self.token_to_kv_pool = MHATokenToKVPool(
                         self.max_total_num_tokens,
                         page_size=self.page_size,
@@ -628,7 +626,6 @@ class ModelRunnerKVCacheMixin:
                         head_num=self.model_config.get_num_kv_heads(
                             get_attention_tp_size()
                         ),
-                        # head_dim=self.model_config.head_dim if global_head_dim is None else global_head_dim,
                         head_dim=self.model_config.head_dim,
                         layer_num=self.num_effective_layers,
                         device=self.device,
