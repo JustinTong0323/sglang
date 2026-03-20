@@ -78,6 +78,7 @@ from sglang.srt.utils import (
     is_non_idle_and_non_empty,
     is_npu,
 )
+from sglang.srt.utils.hf_transformers_utils import get_rope_config
 
 _is_cuda = is_cuda()
 
@@ -691,23 +692,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size
-        rope_scaling = getattr(config, "rope_parameters", None)
-        if rope_scaling is None:
-            rope_scaling = getattr(config, "rope_scaling", None)
-
-        if isinstance(rope_scaling, dict):
-            rope_theta = rope_scaling.get(
-                "rope_theta", getattr(config, "rope_theta", None)
-            )
-        else:
-            rope_scaling = None
-            rope_theta = getattr(config, "rope_theta", None)
-
-        if rope_theta is None:
-            raise ValueError(
-                "Missing rope_theta in Qwen3 config. Expected either "
-                "config.rope_parameters['rope_theta'] or config.rope_theta."
-            )
+        rope_theta, rope_scaling = get_rope_config(config)
         self.rope_theta = rope_theta
         max_position_embeddings = getattr(config, "max_position_embeddings", 8192)
         head_dim = getattr(
