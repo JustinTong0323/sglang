@@ -398,19 +398,25 @@ def get_config(
         config.update({"architectures": ["MultiModalityCausalLM"]})
 
     if config.model_type == "gemma4":
-        global_head_dim = getattr(config.text_config, "global_head_dim", None)
-        num_global_key_value_heads = getattr(
-            config.text_config, "num_global_key_value_heads", None
-        )
+        # Gemma4 configs use base attributes for SWA layers and `global_*`
+        # variants for full-attention layers.  SGLang expects the opposite:
+        # base = full-attention, `swa_*` = sliding-window overrides.
+        # Remap here so the rest of the stack sees a uniform convention.
+        text_config = config.text_config
+        global_head_dim = getattr(text_config, "global_head_dim", None)
+        global_kv_heads = getattr(text_config, "num_global_key_value_heads", None)
+
+        swa_head_dim = text_config.head_dim
+        swa_kv_heads = text_config.num_key_value_heads
+
+        text_config.swa_head_dim = swa_head_dim
+        text_config.swa_v_head_dim = swa_head_dim
+        text_config.swa_num_key_value_heads = swa_kv_heads
 
         if global_head_dim is not None:
-            config.text_config.swa_head_dim = config.text_config.head_dim
-            config.text_config.swa_v_head_dim = config.text_config.head_dim
-            config.text_config.head_dim = global_head_dim
-
-        config.text_config.swa_num_key_value_heads = config.num_key_value_heads
-        if num_global_key_value_heads is not None:
-            config.text_config.num_key_value_heads = num_global_key_value_heads
+            text_config.head_dim = global_head_dim
+        if global_kv_heads is not None:
+            text_config.num_key_value_heads = global_kv_heads
 
     if config.model_type == "longcat_flash":
         config.update({"architectures": ["LongcatFlashForCausalLM"]})

@@ -13,6 +13,7 @@
 # ==============================================================================
 
 import logging
+import re
 from typing import Iterable, Optional, Set, Tuple
 
 import torch
@@ -203,10 +204,19 @@ class Gemma4Attention(nn.Module):
         self.config = config
         tp_size = get_tensor_model_parallel_world_size()
 
+        layer_type = config.layer_types[layer_id]
+        self.sliding_window = config.sliding_window if layer_type == "sliding_attention" else None
+
         self.total_num_heads = config.num_attention_heads
         assert self.total_num_heads % tp_size == 0
         self.num_heads = self.total_num_heads // tp_size
-        self.total_num_kv_heads = config.num_key_value_heads
+
+        if layer_type == "sliding_attention":
+            self.total_num_kv_heads = getattr(
+                config, "swa_num_key_value_heads", config.num_key_value_heads
+            )
+        else:
+            self.total_num_kv_heads = config.num_key_value_heads
 
         self.num_kv_heads = max(1, self.total_num_kv_heads // tp_size)
 
@@ -250,45 +260,32 @@ class Gemma4Attention(nn.Module):
             self.head_dim, eps=config.rms_norm_eps, scale_shift=0.0, with_scale=False
         )
 
-        # Determine if layer uses sliding window based on pattern
-        layer_type = config.layer_types[layer_id]
-        self.is_sliding = layer_type == "sliding_attention"
-        self.sliding_window = config.sliding_window if self.is_sliding else None
-
-        # Initialize the rotary embedding based on layer type.
-        # Gemma 4 uses different RoPE parameters for sliding vs full attention.
         if layer_type in config.rope_parameters:
             rope_parameters = dict(config.rope_parameters[layer_type])
-            # Fix: Use global_partial_rotary_factor for full_attention layers
-            # JAX reference uses global_rope_proportion=0.25 for global attention
             if layer_type == "full_attention":
                 global_prf = getattr(config, "global_partial_rotary_factor", 0.25)
                 rope_parameters["partial_rotary_factor"] = global_prf
         else:
-            # Fallback for older config format
             rope_parameters = dict(
                 rope_type="default",
                 rope_theta=getattr(config, "rope_theta", 10000.0),
             )
 
-        # Check if this is a KV shared layer
-        first_kv_shared_layer_idx = (
-            config.num_hidden_layers - config.num_kv_shared_layers
-        )
-        self.is_kv_shared_layer = layer_id >= first_kv_shared_layer_idx
-
-        # KV sharing logic for Gemma 4
-        # kv_sharing_target_layer_name = None
+        # KV sharing logic
         num_kv_shared_layers = getattr(config, "num_kv_shared_layers", 0)
-        if num_kv_shared_layers > 0:
-            first_kv_shared_layer_idx = config.num_hidden_layers - num_kv_shared_layers
-            if self.layer_id >= first_kv_shared_layer_idx:
-                # Find the last non-shared layer of the same type (sliding/full)
-                prev_layers = config.layer_types[:first_kv_shared_layer_idx]
-                current_layer_type = config.layer_types[self.layer_id]
-                self.kv_shared_layer_index = (
-                    len(prev_layers) - 1 - prev_layers[::-1].index(current_layer_type)
-                )
+        first_kv_shared_layer_idx = (
+            config.num_hidden_layers - num_kv_shared_layers
+        )
+        self.is_kv_shared_layer = layer_id >= first_kv_shared_layer_idx and num_kv_shared_layers > 0
+
+        self.kv_shared_layer_index = None
+        if num_kv_shared_layers > 0 and self.layer_id >= first_kv_shared_layer_idx:
+            prev_layers = config.layer_types[:first_kv_shared_layer_idx]
+            current_layer_type = config.layer_types[self.layer_id]
+            self.kv_shared_layer_index = len(prev_layers) - 1 - prev_layers[::-1].index(
+                current_layer_type
+            )
+
         self.rotary_emb = get_rope(
             self.head_dim,
             rotary_dim=self.head_dim,
@@ -378,8 +375,8 @@ class Gemma4DecoderLayer(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.hidden_size_per_layer_input = getattr(
-            config, "hidden_size_per_layer_input", 0
-        )
+            config, "hidden_size_per_layer_input", None
+        ) or 0
 
         self.layer_id = layer_id
 
@@ -535,11 +532,11 @@ class Gemma4TextModel(PreTrainedModel):
         # Per-layer input embeddings
         self.hidden_size = config.hidden_size
         self.hidden_size_per_layer_input = getattr(
-            config, "hidden_size_per_layer_input", 0
-        )
+            config, "hidden_size_per_layer_input", None
+        ) or 0
         self.vocab_size_per_layer_input = getattr(
-            config, "vocab_size_per_layer_input", config.vocab_size
-        )
+            config, "vocab_size_per_layer_input", None
+        ) or config.vocab_size
 
         if self.hidden_size_per_layer_input > 0:
             self.embed_tokens_per_layer = Gemma4TextScaledWordEmbedding(
@@ -819,6 +816,16 @@ class Gemma4ForCausalLM(PreTrainedModel):
             input_ids, hidden_states, self.lm_head, forward_batch
         )
 
+    def _get_k_eq_v_layers(self) -> set:
+        """Return set of layer indices where attention_k_eq_v applies (full-attention layers)."""
+        if not getattr(self.config, "attention_k_eq_v", False):
+            return set()
+        return {
+            i
+            for i, lt in enumerate(self.config.layer_types)
+            if lt == "full_attention"
+        }
+
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
@@ -828,34 +835,44 @@ class Gemma4ForCausalLM(PreTrainedModel):
             ("gate_up_proj", "gate_proj", 0),
             ("gate_up_proj", "up_proj", 1),
         ]
+        k_eq_v_layers = self._get_k_eq_v_layers()
+
         params_dict = dict(self.named_parameters())
         params_dict.update(dict(self.named_buffers()))
         loaded_params: Set[str] = set()
         for name, loaded_weight in weights:
             name = name.replace("model.language_model.", "model.")
+
+            # attention_k_eq_v: full-attention layers have no v_proj in the
+            # checkpoint (K and V share weights).  When we see a k_proj weight
+            # for one of these layers, load it into both the "k" and "v" shards
+            # of the fused QKV so the forward produces v_raw == k_raw.
+            should_dup_k_to_v = (
+                ".k_proj." in name
+                and k_eq_v_layers
+                and (m := re.search(r"layers\.(\d+)\.", name)) is not None
+                and int(m.group(1)) in k_eq_v_layers
+            )
+
             for param_name, shard_name, shard_id in stacked_params_mapping:
                 if shard_name not in name:
                     continue
                 name = name.replace(shard_name, param_name)
-                # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:
                     continue
                 if name not in params_dict:
-                    # Skip loading weights that are not in the model
                     continue
                 param = params_dict[name]
                 weight_loader = param.weight_loader
                 weight_loader(param, loaded_weight, shard_id)
+                if should_dup_k_to_v:
+                    weight_loader(param, loaded_weight, "v")
                 break
             else:
-                # lm_head is not used in vllm as it is tied with embed_token.
-                # To prevent errors, skip loading lm_head.weight.
                 if "lm_head.weight" in name and self.config.tie_word_embeddings:
                     continue
-                # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:
                     continue
-                # Remapping the name of FP8 kv-scale.
                 name = maybe_remap_kv_scale_name(name, params_dict)
                 if name is None:
                     continue
