@@ -28,6 +28,7 @@ from transformers import (
     PreTrainedModel,
 )
 
+from sglang.srt.layers.attention.triton_backend import TritonAttnBackend
 from sglang.srt.layers.layernorm import Gemma4RMSNorm
 from sglang.srt.layers.linear import ReplicatedLinear
 from sglang.srt.layers.logits_processor import LogitsProcessor
@@ -42,7 +43,8 @@ from sglang.srt.managers.schedule_batch import (
     MultimodalInputs,
     flatten_nested_list,
 )
-from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
+from sglang.srt.server_args import get_global_server_args
 from sglang.srt.model_loader.weight_utils import (
     default_weight_loader,
     maybe_remap_kv_scale_name,
@@ -237,6 +239,97 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
     def get_attention_sliding_window_size(self):
         return getattr(self.config.text_config, "sliding_window", -1) - 1
 
+    def prepare_attn_masks(
+        self,
+        forward_batch: ForwardBatch,
+        input_ids: torch.Tensor,
+        mask_dtype: torch.dtype,
+    ):
+        """Prepare bidirectional attention masks for image tokens.
+    
+        Gemma 4 uses bidirectional attention for image soft tokens during prefill.
+        Following the HF implementation, bidirectional attention is only enabled
+        within each individual image group (same-image tokens), not across images.
+        Currently only the TritonAttnBackend supports this.
+
+        TODO(kpham-sgl): Guard appropriately for gemma3_mm.py:prepare_attn_masks()
+        """
+        if not isinstance(forward_batch.attn_backend, TritonAttnBackend):
+            logger.warning_once(
+                "Bidirectional attention for image tokens requires TritonAttnBackend. "
+                "Falling back to causal attention, which may degrade image quality."
+            )
+            return
+        assert forward_batch.forward_mode == ForwardMode.EXTEND
+
+        bidirectional_attn_masks_list = []
+        bidirectional_attn_mask_indptr = torch.zeros(
+            forward_batch.batch_size + 1, dtype=torch.int32, device=input_ids.device
+        )
+
+        split_images = []
+
+        for i in range(forward_batch.batch_size):
+            extend_seq_len = forward_batch.extend_seq_lens[i]
+            prefix_len = forward_batch.extend_prefix_lens[i]
+            bidirectional_attn_mask = torch.zeros(
+                extend_seq_len,
+                extend_seq_len + prefix_len,
+                dtype=mask_dtype,
+                device=input_ids.device,
+            )
+            # Start with causal mask
+            bidirectional_attn_mask.fill_(1)
+            bidirectional_attn_mask = bidirectional_attn_mask.tril(
+                diagonal=prefix_len
+            )
+
+            # Enable bidirectional attention within each image group
+            mm_inputs = forward_batch.mm_inputs[i]
+            if mm_inputs is not None:
+                for mm_item in mm_inputs.mm_items:
+                    if mm_item.is_image():
+                        for im_begin, im_end in mm_item.offsets:
+                            # Note(kpham-sgl): We only apply bidirectional attention when the image token span 
+                            # is fully contained in the extend window. Otherwise, we silently fall back to 
+                            # causal attention.
+                            # FIXME(kpham-sgl): This is a hack to work around the fact that the image token span
+                            # might not be fully contained in the extend window during chunked prefill. 
+                            # We should fix this by properly making chunked prefill mask aware.
+                            if im_begin >= prefix_len and im_end < prefix_len + extend_seq_len:
+                                bidirectional_attn_mask[
+                                    im_begin - prefix_len : im_end + 1 - prefix_len,
+                                    im_begin : im_end + 1,
+                                ] = 1
+                            elif im_end >= prefix_len and im_begin < prefix_len + extend_seq_len:
+                                split_images.append((i, im_begin, im_end))
+
+            bidirectional_attn_masks_list.append(bidirectional_attn_mask.flatten())
+            bidirectional_attn_mask_indptr[i + 1] = (
+                bidirectional_attn_mask_indptr[i] + bidirectional_attn_mask.nelement()
+            )
+        if split_images:
+            num_split_images = len(split_images)
+            logger.warning_once(
+                f"{num_split_images} images are split across chunk boundaries. "
+                "Below are the first 5 images that are split across chunk boundaries: "
+            )
+            for i, im_begin, im_end in split_images[:5]:
+                logger.warning_once(
+                    f"Image {i}:{im_begin}-{im_end} is split across chunk boundaries.\n",
+                )
+            logger.warning_once(
+                "Those images will receive causal attention. Disable chunked prefill (--chunked-prefill-size=-1) for full bidirectional attention.",
+            )
+        if bidirectional_attn_masks_list:
+            bidirectional_attn_masks = torch.cat(bidirectional_attn_masks_list, dim=0)
+            forward_batch.attn_backend.forward_metadata.mask_indptr = (
+                bidirectional_attn_mask_indptr
+            )
+            forward_batch.attn_backend.forward_metadata.custom_mask = (
+                bidirectional_attn_masks
+            )
+
     def get_image_feature(self, items: List[MultimodalDataItem]) -> torch.Tensor:
         all_pixel_values = flatten_nested_list([item.feature for item in items])
         vt = self.vision_tower
@@ -360,6 +453,20 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             ple_ids[input_ids == self.config.audio_token_id] = 0
             per_layer_inputs = self.get_per_layer_inputs(ple_ids)
 
+        # Prepare bidirectional attention masks for image tokens during prefill.
+        # Gemma 4 uses bidirectional attention for image soft tokens.
+        # Only TritonAttnBackend supports this; incompatible with CUDA Graph and
+        # chunked prefill.
+        if (
+            forward_batch.forward_mode == ForwardMode.EXTEND
+            and forward_batch.contains_image_inputs()
+        ):
+            self.prepare_attn_masks(
+                forward_batch,
+                input_ids,
+                mask_dtype=torch.bool,
+            )
+
         # Use general_mm_embed_routine for handling multimodal data
         hidden_states = general_mm_embed_routine(
             input_ids=input_ids,
@@ -454,7 +561,20 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
 
         return name
 
+    def _get_k_eq_v_layers(self) -> set:
+        """Return set of layer indices where attention_k_eq_v applies (full-attention layers)."""
+        text_config = self.config.text_config
+        if not getattr(text_config, "attention_k_eq_v", False):
+            return set()
+        return {
+            i
+            for i, lt in enumerate(text_config.layer_types)
+            if lt == "full_attention"
+        }
+
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        k_eq_v_layers = self._get_k_eq_v_layers()
+
         params_dict = dict(self.named_parameters())
         params_dict.update(dict(self.named_buffers()))
         loaded_params: Set[str] = set()
@@ -473,6 +593,18 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             if "vision_tower." in name or "audio_tower." in name:
                 name = self._remap_tower_name(name, params_dict)
 
+            # attention_k_eq_v: full-attention layers have no v_proj in the
+            # checkpoint (K and V share weights).  When we see a k_proj weight
+            # for one of these layers, load it into both the "k" and "v" shards
+            # of the fused QKV so the forward produces v_raw == k_raw.
+            should_dup_k_to_v = (
+                ".k_proj." in name
+                and k_eq_v_layers
+                and "language_model." in name
+                and (m := re.search(r"layers\.(\d+)\.", name)) is not None
+                and int(m.group(1)) in k_eq_v_layers
+            )
+
             # Try stacked (fused) params first
             orig_name = name
             for param_name, weight_name, shard_id in self.stacked_params_mapping:
@@ -485,6 +617,8 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 param = params_dict[name]
                 weight_loader = param.weight_loader
                 weight_loader(param, loaded_weight, shard_id)
+                if should_dup_k_to_v:
+                    weight_loader(param, loaded_weight, "v")
                 break
             else:
                 if name.endswith(".bias") and name not in params_dict:
