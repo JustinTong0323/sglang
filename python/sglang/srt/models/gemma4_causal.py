@@ -949,9 +949,7 @@ class Gemma4ForCausalLM(PreTrainedModel):
         if not getattr(self.config, "attention_k_eq_v", False):
             return set()
         return {
-            i
-            for i, lt in enumerate(self.config.layer_types)
-            if lt == "full_attention"
+            i for i, lt in enumerate(self.config.layer_types) if lt == "full_attention"
         }
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
@@ -975,6 +973,12 @@ class Gemma4ForCausalLM(PreTrainedModel):
 
         params_dict = dict(self.named_parameters())
         params_dict.update(dict(self.named_buffers()))
+        non_persistent_buffers: Set[str] = set()
+        for mod_name, mod in self.named_modules():
+            for buf_name in getattr(mod, "_non_persistent_buffers_set", set()):
+                full = f"{mod_name}.{buf_name}" if mod_name else buf_name
+                non_persistent_buffers.add(full)
+
         loaded_params: Set[str] = set()
         for name, loaded_weight in weights:
             name = name.replace("model.language_model.", "model.")
@@ -1042,9 +1046,25 @@ class Gemma4ForCausalLM(PreTrainedModel):
             loaded_params.add(name)
         unloaded_params = params_dict.keys() - loaded_params
         if unloaded_params:
-            logger.warning(
-                "Some weights are not initialized from checkpoints: %s", unloaded_params
-            )
+            param_names = set(dict(self.named_parameters()).keys())
+            buckets = {
+                logging.WARNING: (
+                    "Some weights are not initialized from checkpoints",
+                    lambda p: p in param_names,
+                ),
+                logging.INFO: (
+                    "Persistent buffers not in checkpoint (using default init)",
+                    lambda p: p not in param_names and p not in non_persistent_buffers,
+                ),
+                logging.DEBUG: (
+                    "Non-persistent buffers not in checkpoint (expected)",
+                    lambda p: p in non_persistent_buffers,
+                ),
+            }
+            for level, (msg, pred) in buckets.items():
+                names = sorted(p for p in unloaded_params if pred(p))
+                if names:
+                    logger.log(level, "%s: %s", msg, names)
         return loaded_params
 
 
