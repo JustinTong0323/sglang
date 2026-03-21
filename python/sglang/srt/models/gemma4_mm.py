@@ -45,7 +45,6 @@ from sglang.srt.managers.schedule_batch import (
     flatten_nested_list,
 )
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
-from sglang.srt.server_args import get_global_server_args
 from sglang.srt.model_loader.weight_utils import (
     default_weight_loader,
     maybe_remap_kv_scale_name,
@@ -247,7 +246,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         mask_dtype: torch.dtype,
     ):
         """Prepare bidirectional attention masks for image tokens.
-    
+
         Gemma 4 uses bidirectional attention for image soft tokens during prefill.
         Following the HF implementation, bidirectional attention is only enabled
         within each individual image group (same-image tokens), not across images.
@@ -281,9 +280,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             )
             # Start with causal mask
             bidirectional_attn_mask.fill_(1)
-            bidirectional_attn_mask = bidirectional_attn_mask.tril(
-                diagonal=prefix_len
-            )
+            bidirectional_attn_mask = bidirectional_attn_mask.tril(diagonal=prefix_len)
 
             # Enable bidirectional attention within each image group
             mm_inputs = forward_batch.mm_inputs[i]
@@ -291,18 +288,24 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 for mm_item in mm_inputs.mm_items:
                     if mm_item.is_image():
                         for im_begin, im_end in mm_item.offsets:
-                            # Note(kpham-sgl): We only apply bidirectional attention when the image token span 
-                            # is fully contained in the extend window. Otherwise, we silently fall back to 
+                            # Note(kpham-sgl): We only apply bidirectional attention when the image token span
+                            # is fully contained in the extend window. Otherwise, we silently fall back to
                             # causal attention.
                             # FIXME(kpham-sgl): This is a hack to work around the fact that the image token span
-                            # might not be fully contained in the extend window during chunked prefill. 
+                            # might not be fully contained in the extend window during chunked prefill.
                             # We should fix this by properly making chunked prefill mask aware.
-                            if im_begin >= prefix_len and im_end < prefix_len + extend_seq_len:
+                            if (
+                                im_begin >= prefix_len
+                                and im_end < prefix_len + extend_seq_len
+                            ):
                                 bidirectional_attn_mask[
                                     im_begin - prefix_len : im_end + 1 - prefix_len,
                                     im_begin : im_end + 1,
                                 ] = 1
-                            elif im_end >= prefix_len and im_begin < prefix_len + extend_seq_len:
+                            elif (
+                                im_end >= prefix_len
+                                and im_begin < prefix_len + extend_seq_len
+                            ):
                                 split_images.append((i, im_begin, im_end))
 
             bidirectional_attn_masks_list.append(bidirectional_attn_mask.flatten())
@@ -568,9 +571,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         if not getattr(text_config, "attention_k_eq_v", False):
             return set()
         return {
-            i
-            for i, lt in enumerate(text_config.layer_types)
-            if lt == "full_attention"
+            i for i, lt in enumerate(text_config.layer_types) if lt == "full_attention"
         }
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
@@ -589,6 +590,12 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
 
         params_dict = dict(self.named_parameters())
         params_dict.update(dict(self.named_buffers()))
+        non_persistent_buffers: Set[str] = set()
+        for mod_name, mod in self.named_modules():
+            for buf_name in getattr(mod, "_non_persistent_buffers_set", set()):
+                full = f"{mod_name}.{buf_name}" if mod_name else buf_name
+                non_persistent_buffers.add(full)
+
         loaded_params: Set[str] = set()
 
         for name, loaded_weight in weights:
@@ -670,10 +677,25 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             loaded_params.add(name)
         unloaded_params = params_dict.keys() - loaded_params
         if unloaded_params:
-            logger.warning(
-                "Some weights are not initialized from checkpoints: %s",
-                unloaded_params,
-            )
+            param_names = set(dict(self.named_parameters()).keys())
+            buckets = {
+                logging.WARNING: (
+                    "Some weights are not initialized from checkpoints",
+                    lambda p: p in param_names,
+                ),
+                logging.INFO: (
+                    "Persistent buffers not in checkpoint (using default init)",
+                    lambda p: p not in param_names and p not in non_persistent_buffers,
+                ),
+                logging.DEBUG: (
+                    "Non-persistent buffers not in checkpoint (expected)",
+                    lambda p: p in non_persistent_buffers,
+                ),
+            }
+            for level, (msg, pred) in buckets.items():
+                names = sorted(p for p in unloaded_params if pred(p))
+                if names:
+                    logger.log(level, "%s: %s", msg, names)
         return loaded_params
 
     lora_pattern = re.compile(
