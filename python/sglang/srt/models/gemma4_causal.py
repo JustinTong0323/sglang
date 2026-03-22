@@ -49,6 +49,7 @@ from sglang.srt.model_loader.weight_utils import (
     default_weight_loader,
     maybe_remap_kv_scale_name,
 )
+from sglang.srt.layers.gemma4_fused_ops import gemma_rmsnorm_residual_scalar
 from sglang.srt.models.gemma3_causal import Gemma3MLP, Gemma3TextScaledWordEmbedding
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import add_prefix, make_layers
@@ -582,6 +583,7 @@ class Gemma4DecoderLayer(nn.Module):
             self.pre_feedforward_layernorm_2 = None
 
         self.register_buffer("layer_scalar", torch.ones(1), persistent=True)
+        self.has_ple = self.hidden_size_per_layer_input > 0
         self.prefix = prefix
 
     def forward(
@@ -597,6 +599,12 @@ class Gemma4DecoderLayer(nn.Module):
         # Gemma4 residual pattern following JAX implementation:
         # 1. input_norm(x) -> attn -> post_attn_norm -> ADD residual
         # 2. pre_ff_norm -> mlp -> post_ff_norm -> ADD residual
+        #
+        # Optimization: fuse "post_attn_norm(h) + residual; pre_ff_norm(...)"
+        # into "post_attn_norm(h); pre_ff_norm(h, residual)" using
+        # gemma_fused_add_rmsnorm which computes:
+        #   residual = h + residual (in-place)
+        #   h = gemma_norm(residual)
         residual = hidden_states
 
         # Apply input layernorm
@@ -607,51 +615,63 @@ class Gemma4DecoderLayer(nn.Module):
             forward_batch=forward_batch,
         )
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = hidden_states + residual
-
-        residual = hidden_states
 
         if self.enable_moe_block:
+            # Fuse: hidden_states + residual -> residual; pre_ff_norm(residual) -> hidden_states
+            # Also need raw (unfused) residual for router and pre_ff_norm_2
+            hidden_states, residual = self.pre_feedforward_layernorm(
+                hidden_states, residual
+            )
+            # For MoE: router and pre_ff_norm_2 need the unfused residual
+            # (which is now updated to post_attn_out + old_residual)
+            moe_input = residual
+
             # Dense MLP branch
-            hidden_states_1 = self.pre_feedforward_layernorm(hidden_states)
-            hidden_states_1 = self.mlp(hidden_states_1)
+            hidden_states_1 = self.mlp(hidden_states)
             hidden_states_1 = self.post_feedforward_layernorm_1(hidden_states_1)
 
-            # MoE branch: router sees raw hidden_states (applies its own
-            # norm + scale internally); experts see separately normed input
-            router_logits = self.router(hidden_states)
-            hidden_states_2 = self.pre_feedforward_layernorm_2(hidden_states)
+            # MoE branch: router sees residual (= post_attn_out + old_residual)
+            router_logits = self.router(moe_input)
+            hidden_states_2 = self.pre_feedforward_layernorm_2(moe_input)
             hidden_states_2 = self.moe(hidden_states_2, router_logits)
             hidden_states_2 = self.post_feedforward_layernorm_2(hidden_states_2)
 
             # Combine branches
             hidden_states = hidden_states_1 + hidden_states_2
         else:
-            hidden_states = self.pre_feedforward_layernorm(hidden_states)
+            # Fuse: hidden_states + residual -> residual; pre_ff_norm(residual) -> hidden_states
+            hidden_states, residual = self.pre_feedforward_layernorm(
+                hidden_states, residual
+            )
             hidden_states = self.mlp(hidden_states)
 
-        hidden_states = self.post_feedforward_layernorm(hidden_states)
-        hidden_states = hidden_states + residual
-
-        if (
-            per_layer_input is not None
-            and self.per_layer_input_gate is not None
-            and self.per_layer_projection is not None
-            and self.post_per_layer_input_norm is not None
-        ):
-            gate, _ = self.per_layer_input_gate(hidden_states)
-            # PLE uses gelu activation for the gate
-            # Note: GeluAndMul expects concatenated [gate, up] but here we
-            # only have a single projection. Use F.gelu directly.
-            gate = torch.nn.functional.gelu(gate, approximate="tanh")
-            gated_per_layer = gate * per_layer_input
-            per_layer_contribution, _ = self.per_layer_projection(gated_per_layer)
-            per_layer_contribution = self.post_per_layer_input_norm(
-                per_layer_contribution
+        if not self.has_ple and hidden_states.is_cuda and hidden_states.dim() == 2:
+            # Fused: (post_ff_norm(h) + residual) * layer_scalar in one kernel
+            norm = self.post_feedforward_layernorm
+            hidden_states = gemma_rmsnorm_residual_scalar(
+                hidden_states,
+                norm.weight.data,
+                residual,
+                self.layer_scalar,
+                norm.variance_epsilon,
             )
-            hidden_states = hidden_states + per_layer_contribution
+        else:
+            hidden_states = self.post_feedforward_layernorm(hidden_states)
+            hidden_states = hidden_states + residual
 
-        hidden_states = hidden_states * self.layer_scalar
+            if self.has_ple and per_layer_input is not None:
+                gate, _ = self.per_layer_input_gate(hidden_states)
+                gate = torch.nn.functional.gelu(gate, approximate="tanh")
+                gated_per_layer = gate * per_layer_input
+                per_layer_contribution, _ = self.per_layer_projection(
+                    gated_per_layer
+                )
+                per_layer_contribution = self.post_per_layer_input_norm(
+                    per_layer_contribution
+                )
+                hidden_states = hidden_states + per_layer_contribution
+
+            hidden_states = hidden_states * self.layer_scalar
         return hidden_states, None
 
 
