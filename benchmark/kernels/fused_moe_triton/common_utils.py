@@ -40,7 +40,10 @@ def get_model_config(
 
     # Replace config with text_config for encoder-decoder models after getting block_shape and architecture
     if hasattr(config, "text_config"):
+        architecture = config.architectures[0]
         config = config.get_text_config()
+    else:
+        architecture = config.architectures[0]
 
     block_shape = None
     if (
@@ -62,7 +65,6 @@ def get_model_config(
         block_shape = [0, group_size]
         assert len(block_shape) == 2
 
-    architecture = config.architectures[0]
 
     hidden_size = config.hidden_size
     if architecture == "DbrxForCausalLM":
@@ -133,6 +135,10 @@ def get_model_config(
         topk = config.num_experts_per_tok
         intermediate_size = config.moe_intermediate_size
         hidden_size = getattr(config, "moe_latent_size", None) or hidden_size
+    elif architecture == "Gemma4ForConditionalGeneration":
+        E = config.num_experts // ep_size
+        topk = config.top_k_experts
+        intermediate_size = config.expert_intermediate_size
     else:
         # Default: Mixtral
         E = config.num_local_experts // ep_size
