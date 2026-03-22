@@ -569,7 +569,7 @@ class Gemma3RMSNorm(MultiPlatformOp):
         return f"{tuple(self.weight.shape)}, eps={self.eps}"
 
 
-class Gemma4RMSNorm(nn.Module):
+class Gemma4RMSNorm(MultiPlatformOp):
     def __init__(
         self,
         dim: int,
@@ -583,13 +583,14 @@ class Gemma4RMSNorm(nn.Module):
         if self.with_scale:
             self.weight = nn.Parameter(torch.zeros(dim))
         else:
-            self.register_buffer("weight", torch.tensor(1.0), persistent=False)
+            # Zero buffer: gemma_rmsnorm(x, zeros) = norm(x) * (1+0) = norm(x)
+            self.register_buffer("weight", torch.zeros(dim), persistent=False)
 
         self.eps = eps
         self.scale_shift = scale_shift
 
     def __repr__(self):
-        dim = self.weight.shape[-1] if self.weight.shape else None
+        dim = self.weight.shape[0]
         return (
             f"{self.__class__.__name__}(dim={dim}, eps={self.eps}, "
             f"with_scale={self.with_scale}, scale_shift={self.scale_shift})"
@@ -597,14 +598,37 @@ class Gemma4RMSNorm(nn.Module):
 
     def _norm(self, x):
         mean_squared = x.pow(2).mean(-1, keepdim=True) + self.eps
-        # Use torch.pow() (over torch.sqrt() or torch.rsqrt()) to address compiler differences between Torch and JAX
         return x * torch.pow(mean_squared, -0.5)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward_native(self, x: torch.Tensor) -> torch.Tensor:
         normed_output = self._norm(x.float())
         if self.with_scale:
             normed_output = normed_output * (self.weight.float() + self.scale_shift)
         return normed_output.type_as(x)
+
+    def forward_cuda(self, x: torch.Tensor) -> torch.Tensor:
+        if x.numel() == 0:
+            return x
+        needs_reshape = x.dim() != 2
+        if needs_reshape:
+            original_shape = x.shape
+            x = x.contiguous().reshape(-1, original_shape[-1])
+        if self.scale_shift == 1.0:
+            # gemma_rmsnorm: norm(x) * (1 + weight)
+            # When with_scale=False, weight is zeros → norm(x) * 1 = norm(x)
+            # When with_scale=True, weight is learned → norm(x) * (1 + w)
+            out = gemma_rmsnorm(x, self.weight.data, self.eps)
+        elif self.scale_shift == 0.0 and self.with_scale:
+            # rmsnorm: norm(x) * weight (standard RMSNorm without +1 shift)
+            out = rmsnorm(x, self.weight.data, self.eps)
+        else:
+            out = self.forward_native(
+                x.reshape(original_shape) if needs_reshape else x
+            )
+            return out
+        if needs_reshape:
+            out = out.reshape(original_shape)
+        return out
 
 
 class RMSNormWithoutScale(MultiPlatformOp):
