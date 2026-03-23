@@ -16,9 +16,6 @@ Requires:
 """
 
 import io
-import json
-import subprocess
-import time
 import unittest
 
 import requests
