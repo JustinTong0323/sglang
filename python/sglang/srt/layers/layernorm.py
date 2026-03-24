@@ -583,8 +583,8 @@ class Gemma4RMSNorm(MultiPlatformOp):
         if self.with_scale:
             self.weight = nn.Parameter(torch.zeros(dim))
         else:
-            # Zero buffer: gemma_rmsnorm(x, zeros) = norm(x) * (1+0) = norm(x)
-            self.register_buffer("weight", torch.zeros(dim), persistent=False)
+            # Ones buffer: rmsnorm(x, ones) = norm(x) * 1 = norm(x)
+            self.register_buffer("weight", torch.ones(dim), persistent=False)
 
         self.eps = eps
         self.scale_shift = scale_shift
@@ -615,15 +615,12 @@ class Gemma4RMSNorm(MultiPlatformOp):
             x = x.contiguous().reshape(-1, original_shape[-1])
         if self.with_scale and self.scale_shift == 1.0:
             # gemma_rmsnorm: norm(x) * (1 + weight)
-            # When with_scale=False, weight is zeros → norm(x) * 1 = norm(x)
-            # When with_scale=True, weight is learned → norm(x) * (1 + w)
             out = gemma_rmsnorm(x, self.weight.data, self.eps)
-        elif not self.with_scale or self.scale_shift == 0.0:
-            # scale_shift == 0.0
-            # rmsnorm: norm(x) * weight (standard RMSNorm without +1 shift)
-            out = rmsnorm(x, self.weight.data, self.eps)
         else:
-            return self.forward_native(x.reshape(original_shape))
+            # rmsnorm: norm(x) * weight
+            # with_scale=False → weight is ones → norm(x) * 1 = norm(x)
+            # scale_shift=0.0 → standard RMSNorm without +1 shift
+            out = rmsnorm(x, self.weight.data, self.eps)
 
         if needs_reshape:
             out = out.reshape(original_shape)
