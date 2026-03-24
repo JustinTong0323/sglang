@@ -301,8 +301,6 @@ class SWATokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
 
         self.clear()
         self._kvcache = kvcache
-        # why do we need this?
-        # self._kvcache.register_mapping(weakref.proxy(self.full_to_swa_index_mapping))
         self._kvcache.register_mapping(self.full_to_swa_index_mapping)
 
     def available_size(self):
