@@ -437,10 +437,8 @@ class Gemma4Attention(nn.Module):
             q, k = self.rotary_emb(positions, q, k)
             k = k.unflatten(-1, (self.num_kv_heads, self.head_dim))
         else:
-            # For shared KV layers, create a dummy key for rotary embedding and discard it
-            dummy_k = torch.zeros_like(
-                q[:, : self.kv_size]
-            )  # Create dummy key with same shape as needed
+            # Rotary embedding requires a key input; use zeros since KV is shared from another layer
+            dummy_k = torch.zeros_like(q[:, : self.kv_size])
             q, _ = self.rotary_emb(positions, q, dummy_k)
 
         q = q.unflatten(-1, (self.num_heads, self.head_dim))

@@ -1487,15 +1487,10 @@ def get_hybrid_layer_ids(
     elif "Step3p5MTP" in model_architectures:
         swa_attention_layer_ids = [0]
         full_attention_layer_ids = []
-    elif "Gemma4ForCausalLM" in model_architectures:
-        layer_types = getattr(hf_text_config, "layer_types", None)
-        swa_attention_layer_ids = [
-            i for i, x in enumerate(layer_types) if x == "sliding_attention"
-        ]
-        full_attention_layer_ids = [
-            i for i, x in enumerate(layer_types) if x == "full_attention"
-        ]
-    elif "Gemma4ForConditionalGeneration" in model_architectures:
+    elif (
+        "Gemma4ForCausalLM" in model_architectures
+        or "Gemma4ForConditionalGeneration" in model_architectures
+    ):
         layer_types = getattr(hf_text_config, "layer_types", None)
         swa_attention_layer_ids = [
             i for i, x in enumerate(layer_types) if x == "sliding_attention"
