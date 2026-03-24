@@ -186,11 +186,16 @@ class Gemma4Router(nn.Module):
             prefix=add_prefix("proj", prefix),
         )
 
+    def fuse_scale(self):
+        """Pre-compute scale * root_size. Call after weights are loaded."""
+        self._fused_scale = (self.scale * self.root_size).to(self.scale.dtype)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Returns raw router logits [T, E]."""
         x = self.norm(x)
-        x = x * self.root_size.to(x.dtype)
-        x = x * self.scale.to(x.dtype)
+        if not hasattr(self, "_fused_scale"):
+            self.fuse_scale()
+        x = x * self._fused_scale.to(x.dtype)
         router_logits, _ = self.proj(x)
         return router_logits
 
@@ -224,30 +229,24 @@ class Gemma4MoE(nn.Module):
         # MoE's fused kernel computes: Σ_e (expert_e * w_e * scale_e)
         self.per_expert_scale = nn.Parameter(torch.ones(config.num_experts))
 
-        # Gemma4 routing: softmax over ALL experts → top-k → renormalize.
+        # Capture param directly to avoid closing over self in the routing closure.
         per_expert_scale = self.per_expert_scale
 
         def routing_function(
             hidden_states: torch.Tensor,
             gating_output: torch.Tensor,
             topk: int,
-            renormalize: bool,
+            renormalize: bool,  # always True for Gemma4; softmax identity only holds when renormalizing
         ) -> tuple[torch.Tensor, torch.Tensor]:
-            _, topk_ids = torch.topk(gating_output, k=topk, dim=-1)
-            router_probabilities = torch.nn.functional.softmax(gating_output, dim=-1)
-            indicator = torch.nn.functional.one_hot(
-                topk_ids, num_classes=gating_output.size(-1)
-            ).sum(dim=-2)
-            gate_weights = indicator * router_probabilities
-            renorm_factor = torch.sum(gate_weights, dim=-1, keepdim=True)
-            renorm_factor = torch.where(renorm_factor > 0.0, renorm_factor, 1.0)
-            dispatch_weights = gate_weights / renorm_factor
-
-            topk_weights = dispatch_weights.gather(1, topk_ids)
+            # softmax(all)[topk] / sum(softmax(all)[topk]) = softmax(topk_logits),
+            # so we softmax only the top-k logits (fewer kernel launches).
+            topk_logits, topk_ids = torch.topk(gating_output, k=topk, dim=-1)
+            topk_weights = torch.nn.functional.softmax(topk_logits, dim=-1)
 
             # Fold per_expert_scale into routing weights
-            expert_scales = per_expert_scale[topk_ids].to(topk_weights.dtype)
-            topk_weights = topk_weights * expert_scales
+            topk_weights = topk_weights * per_expert_scale[topk_ids].to(
+                topk_weights.dtype
+            )
 
             return topk_weights.to(torch.float32), topk_ids.to(torch.int32)
 
