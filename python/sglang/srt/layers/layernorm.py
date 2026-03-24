@@ -613,19 +613,18 @@ class Gemma4RMSNorm(MultiPlatformOp):
         if needs_reshape:
             original_shape = x.shape
             x = x.contiguous().reshape(-1, original_shape[-1])
-        if self.scale_shift == 1.0:
+        if self.with_scale and self.scale_shift == 1.0:
             # gemma_rmsnorm: norm(x) * (1 + weight)
             # When with_scale=False, weight is zeros → norm(x) * 1 = norm(x)
             # When with_scale=True, weight is learned → norm(x) * (1 + w)
             out = gemma_rmsnorm(x, self.weight.data, self.eps)
-        elif self.scale_shift == 0.0 and self.with_scale:
+        elif not self.with_scale or self.scale_shift == 0.0:
+            # scale_shift == 0.0
             # rmsnorm: norm(x) * weight (standard RMSNorm without +1 shift)
             out = rmsnorm(x, self.weight.data, self.eps)
         else:
-            out = self.forward_native(
-                x.reshape(original_shape) if needs_reshape else x
-            )
-            return out
+            return self.forward_native(x.reshape(original_shape))
+
         if needs_reshape:
             out = out.reshape(original_shape)
         return out
