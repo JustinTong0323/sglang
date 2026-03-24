@@ -3765,7 +3765,7 @@ class TestGemma4Detector(unittest.TestCase):
             "Some text ",
             "before <|tool",
             "_call>call:get_we",
-            "ather{location:<|",
+            "ather{location:<|",  # codespell:ignore
             '"|>Tokyo<|"|>}<tool_',
             "call|> after",
         ]
