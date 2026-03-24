@@ -1,7 +1,5 @@
 """Multimodal encoder accuracy tests: compare HF vs SGLang encoder outputs.
 
-# TODO(kpham-sgl): Rename this file to test_mm_accuracy.py — it now covers both
-# vision and audio encoder comparisons, not just VLM embeddings.
 """
 
 import os

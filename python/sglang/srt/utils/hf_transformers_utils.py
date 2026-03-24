@@ -1182,11 +1182,7 @@ def get_processor(
             kwargs["size"] = {"shortest_edge": 3136, "longest_edge": 1003520}
 
     if config.model_type not in {"llava", "clip"}:
-        if config.model_type == "gemma4":
-            # TODO(kpham-sgl): revert this once we have a fast tokenizer for gemma4
-            kwargs["use_fast"] = False
-        else:
-            kwargs["use_fast"] = use_fast
+        kwargs["use_fast"] = use_fast
     try:
         if "InternVL3_5" in tokenizer_name:
             processor = AutoTokenizer.from_pretrained(
