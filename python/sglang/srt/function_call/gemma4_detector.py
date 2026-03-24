@@ -73,8 +73,8 @@ def _parse_gemma4_array(arr_str: str) -> list:
             while i < n and depth > 0:
                 if arr_str[i:].startswith(STRING_DELIM):
                     i += len(STRING_DELIM)
-                    nd = arr_str.find(STRING_DELIM, i)
-                    i = nd + len(STRING_DELIM) if nd != -1 else n
+                    next_delim = arr_str.find(STRING_DELIM, i)
+                    i = next_delim + len(STRING_DELIM) if next_delim != -1 else n
                     continue
                 if arr_str[i] == "{":
                     depth += 1

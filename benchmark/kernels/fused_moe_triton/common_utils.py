@@ -65,7 +65,6 @@ def get_model_config(
         block_shape = [0, group_size]
         assert len(block_shape) == 2
 
-
     hidden_size = config.hidden_size
     if architecture == "DbrxForCausalLM":
         E = config.ffn_config.moe_num_experts // ep_size

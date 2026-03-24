@@ -27,6 +27,7 @@ from transformers import (
 from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
 )
+from sglang.srt.layers.gemma4_fused_ops import gemma_rmsnorm_residual_scalar
 from sglang.srt.layers.layernorm import Gemma4RMSNorm, GemmaRMSNorm, RMSNorm
 from sglang.srt.layers.linear import (
     QKVParallelLinear,
@@ -49,7 +50,6 @@ from sglang.srt.model_loader.weight_utils import (
     default_weight_loader,
     maybe_remap_kv_scale_name,
 )
-from sglang.srt.layers.gemma4_fused_ops import gemma_rmsnorm_residual_scalar
 from sglang.srt.models.gemma3_causal import Gemma3MLP, Gemma3TextScaledWordEmbedding
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import add_prefix, make_layers
@@ -662,9 +662,7 @@ class Gemma4DecoderLayer(nn.Module):
                 gate, _ = self.per_layer_input_gate(hidden_states)
                 gate = torch.nn.functional.gelu(gate, approximate="tanh")
                 gated_per_layer = gate * per_layer_input
-                per_layer_contribution, _ = self.per_layer_projection(
-                    gated_per_layer
-                )
+                per_layer_contribution, _ = self.per_layer_projection(gated_per_layer)
                 per_layer_contribution = self.post_per_layer_input_norm(
                     per_layer_contribution
                 )
