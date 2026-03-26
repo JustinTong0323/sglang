@@ -32,7 +32,6 @@ from sglang.srt.layers.attention.triton_backend import TritonAttnBackend
 from sglang.srt.layers.layernorm import Gemma4RMSNorm
 from sglang.srt.layers.linear import ReplicatedLinear
 from sglang.srt.layers.logits_processor import LogitsProcessor
-from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.managers.mm_utils import (
     MultiModalityDataPaddingPatternMultimodalTokens,
@@ -597,16 +596,13 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         k_eq_v_layers = self._get_k_eq_v_layers()
 
-        # TODO(pyc96): revisit and simplify.
         num_experts = getattr(self.config.text_config, "num_experts", 0) or 0
-        if num_experts > 0:
-            expert_params_mapping = FusedMoE.make_expert_params_mapping_gemma4(
-                ckpt_gate_proj_name="gate_proj",
-                ckpt_down_proj_name="down_proj",
-                ckpt_up_proj_name="up_proj",
-            )
-        else:
-            expert_params_mapping = []
+        expert_params_mapping = [
+            # (param_name, ckpt_weight_name, shard_ids)
+            # gate_up_proj is fused [E, 2*I, H] — chunk into w1 (gate) + w3 (up)
+            ("experts.w13_weight", "experts.gate_up_proj", ("w1", "w3")),
+            ("experts.w2_weight", "experts.down_proj", ("w2",)),
+        ]
 
         params_dict = dict(self.named_parameters())
         params_dict.update(dict(self.named_buffers()))
@@ -652,9 +648,10 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 and int(m.group(1)) in k_eq_v_layers
             )
 
-            # Try stacked (fused) params first
+            # MoE expert weights checked first (gate_up_proj contains "up_proj"
+            # which would false-match the stacked dense MLP mapping).
             orig_name = name
-            for param_name, weight_name, shard_id in self.stacked_params_mapping:
+            for param_name, weight_name, shard_ids in expert_params_mapping:
                 name = orig_name
                 if weight_name not in name:
                     continue
@@ -663,12 +660,13 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                     continue
                 param = params_dict[name]
                 weight_loader = param.weight_loader
-                weight_loader(param, loaded_weight, shard_id)
-                if should_dup_k_to_v:
-                    weight_loader(param, loaded_weight, "v")
+                for i in range(num_experts):
+                    chunks = loaded_weight[i].chunk(len(shard_ids), dim=0)
+                    for chunk, sid in zip(chunks, shard_ids):
+                        weight_loader(param, chunk, name, sid, i)
                 break
             else:
-                for param_name, weight_name, shard_id in expert_params_mapping:
+                for param_name, weight_name, shard_id in self.stacked_params_mapping:
                     name = orig_name
                     if weight_name not in name:
                         continue
@@ -677,8 +675,9 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                         continue
                     param = params_dict[name]
                     weight_loader = param.weight_loader
-                    for i in range(num_experts):
-                        weight_loader(param, loaded_weight[i].T, name, shard_id, i)
+                    weight_loader(param, loaded_weight, shard_id)
+                    if should_dup_k_to_v:
+                        weight_loader(param, loaded_weight, "v")
                     break
                 else:
                     name = orig_name
