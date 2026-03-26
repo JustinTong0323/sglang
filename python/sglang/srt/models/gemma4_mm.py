@@ -335,34 +335,49 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             )
 
     def get_image_feature(self, items: List[MultimodalDataItem]) -> torch.Tensor:
-        all_pixel_values = flatten_nested_list([item.feature for item in items])
         vt = self.vision_tower
 
         all_embeds = []
-        for pv in all_pixel_values:
-            if (
-                pv.dim() in (2, 3)
-                and pv.shape[-1] == self.config.text_config.hidden_size
-            ):
-                all_embeds.append(pv.to(self.language_model.device))
-                continue
+        for item in items:
+            all_pixel_values = flatten_nested_list([item.feature])
+            all_position_ids = flatten_nested_list(
+                [getattr(item, "pixel_position_ids", None)]
+            )
+            vol = getattr(item, "vision_output_length", None)
+            if isinstance(vol, torch.Tensor):
+                vol = vol.item()
 
-            if pv.dim() == 5:
-                pv = pv.squeeze(0)
-            if pv.dim() == 3:
-                pv = pv.unsqueeze(0)
-            elif pv.dim() != 4:
-                raise ValueError(f"Unexpected pixel_values shape: {pv.shape}")
+            for pv_idx, pv in enumerate(all_pixel_values):
+                if (
+                    pv.dim() in (2, 3)
+                    and pv.shape[-1] == self.config.text_config.hidden_size
+                ):
+                    all_embeds.append(pv.to(self.language_model.device))
+                    continue
 
-            pv = pv.to(device=vt.device, dtype=self.language_model.dtype())
-
-            pooled, pooler_mask = vt(pv)
-
-            for hs, mask in zip(pooled, pooler_mask):
-                real_tokens = hs[mask]
-                all_embeds.append(
-                    self.embed_vision(inputs_embeds=real_tokens.unsqueeze(0)).squeeze(0)
+                pp = (
+                    all_position_ids[pv_idx]
+                    if pv_idx < len(all_position_ids) and all_position_ids[pv_idx] is not None
+                    else None
                 )
+
+                # Pre-patchified pixel_values: (num_images, num_patches, patch_pixels)
+                if pv.dim() == 2:
+                    pv = pv.unsqueeze(0)
+                if pp is not None and pp.dim() == 2:
+                    pp = pp.unsqueeze(0)
+
+                pv = pv.to(device=vt.device, dtype=self.language_model.dtype())
+                if pp is not None:
+                    pp = pp.to(device=vt.device)
+
+                pooled, pooler_mask = vt(pv, pp, output_length=vol)
+
+                for hs, mask in zip(pooled, pooler_mask):
+                    real_tokens = hs[mask]
+                    all_embeds.append(
+                        self.embed_vision(inputs_embeds=real_tokens.unsqueeze(0)).squeeze(0)
+                    )
 
         if all_embeds:
             return torch.cat(all_embeds, dim=0)

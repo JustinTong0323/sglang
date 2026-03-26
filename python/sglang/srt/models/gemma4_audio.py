@@ -439,7 +439,7 @@ class Gemma4AudioSSCPConvBlock(nn.Module):
 
         self.norm = nn.LayerNorm(
             [out_channels],
-            eps=config.sscp_conv_group_norm_eps,
+            eps=getattr(config, "sscp_conv_eps", getattr(config, "sscp_conv_group_norm_eps", 1e-3)),
             elementwise_affine=True,
             bias=False,
         )

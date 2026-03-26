@@ -19,6 +19,7 @@ import numpy as np
 from sglang.srt.managers.multimodal_processor import (
     BaseMultimodalProcessor as SGLangBaseProcessor,
 )
+from sglang.srt.managers.schedule_batch import Modality
 from sglang.srt.models.gemma4_mm import Gemma4ForConditionalGeneration
 from sglang.srt.multimodal.processors.base_processor import MultimodalSpecialTokens
 
@@ -40,6 +41,11 @@ class Gemma4SGLangProcessor(SGLangBaseProcessor):
             image_token_id=hf_config.image_token_id,
             audio_token_id=hf_config.audio_token_id,
         ).build(_processor)
+
+        # Register new image-processor outputs so they are stored on
+        # MultimodalDataItem via collect_mm_items_from_processor_output.
+        self.ATTR_NAME_TO_MODALITY["pixel_position_ids"] = Modality.IMAGE
+        self.ATTR_NAME_TO_MODALITY["vision_output_length"] = Modality.IMAGE
 
     def _get_audio_pad_multiple(self) -> int:
         """Derive the waveform padding alignment from processor config.

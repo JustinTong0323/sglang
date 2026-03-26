@@ -382,7 +382,7 @@ class Gemma4VisionTransformer(nn.Module):
         Returns:
             last_hidden_state: [batch, seq, hidden_size]
         """
-        cos, sin = self.rotary_emb(inputs_embeds, patch_positions)
+        cos, sin = self.rotary_emb(inputs_embeds, patch_positions.clamp(min=0))
         hidden_states = inputs_embeds
         for layer in self.layers:
             hidden_states = layer(hidden_states, cos, sin, attention_mask)
@@ -420,40 +420,34 @@ class Gemma4VisionPatchEmbedder(nn.Module):
         )
         return position_embeddings
 
-    def _patchify(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        batch_size, num_channels, height, width = pixel_values.shape
-        patch_height = height // self.patch_size
-        patch_width = width // self.patch_size
-        patchified_shape = (
-            batch_size,
-            num_channels,
-            patch_height,
-            self.patch_size,
-            patch_width,
-            self.patch_size,
-        )
-        consolidated_shape = (
-            batch_size,
-            patch_height * patch_width,
-            num_channels * self.patch_size**2,
-        )
-        patches = (
-            pixel_values.reshape(patchified_shape)
-            .permute(0, 2, 4, 3, 5, 1)
-            .reshape(consolidated_shape)
-        )
-        patches = 2 * (patches - 0.5)
+    def _patch_projection(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        """Project pre-patchified pixels into model space.
+
+        Args:
+            pixel_values: [batch, num_patches, patch_pixels] — already patchified
+                          by the image processor, values in [0, 1].
+        """
+        patches = 2 * (pixel_values - 0.5)
         return self.input_proj(patches.to(self.input_proj.weight.dtype))
 
     def forward(
         self,
         pixel_values: torch.Tensor,
-        patch_positions: torch.Tensor,
+        pixel_position_ids: torch.Tensor,
         padding_positions: torch.Tensor,
     ) -> torch.Tensor:
-        hidden_states = self._patchify(pixel_values)
+        """Compute patch embeddings with positional information.
+
+        Args:
+            pixel_values: [batch, num_patches, patch_pixels] — pre-patchified.
+            pixel_position_ids: [batch, num_patches, 2] — (x, y) positions,
+                                -1 for padding patches.
+            padding_positions: [batch, num_patches] — True for padding patches.
+        """
+        hidden_states = self._patch_projection(pixel_values)
+        clamped_positions = pixel_position_ids.clamp(min=0)
         position_embeddings = self._position_embeddings(
-            patch_positions, padding_positions
+            clamped_positions, padding_positions
         )
         return hidden_states + position_embeddings
 
@@ -529,9 +523,7 @@ class Gemma4VisionEncoder(nn.Module):
         super().__init__()
         self.config = config
         self.patch_size = config.patch_size
-        self.pooling_kernel_size = config.pooling_kernel_size
         self.default_output_length = config.default_output_length
-        self.max_patches = self.default_output_length * self.pooling_kernel_size**2
 
         self.patch_embedder = Gemma4VisionPatchEmbedder(config)
         self.encoder = Gemma4VisionTransformer(
@@ -545,83 +537,42 @@ class Gemma4VisionEncoder(nn.Module):
     def device(self) -> torch.device:
         return self.patch_embedder.input_proj.weight.device
 
-    def _num_real_patches(self, pixel_values: torch.Tensor) -> int:
-        _, _, height, width = pixel_values.shape
-        return (height // self.patch_size) * (width // self.patch_size)
-
-    def _patch_positions(
-        self, pixel_values: torch.Tensor
+    def forward(
+        self,
+        pixel_values: torch.Tensor,
+        pixel_position_ids: torch.Tensor,
+        output_length: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        batch_size, _, height, width = pixel_values.shape
-        device = pixel_values.device
-        patch_height = height // self.patch_size
-        patch_width = width // self.patch_size
-        num_patches = patch_height * patch_width
-        num_padding = self.max_patches - num_patches
-
-        patch_grid = torch.meshgrid(
-            torch.arange(patch_width, device=device),
-            torch.arange(patch_height, device=device),
-            indexing="xy",
-        )
-        stacked_grid = torch.stack(patch_grid, dim=-1)
-        real_positions = (
-            stacked_grid.reshape(num_patches, 2).unsqueeze(0).repeat(batch_size, 1, 1)
-        )
-
-        if num_padding > 0:
-            pad_positions = torch.full(
-                (batch_size, num_padding, 2), -1, device=device, dtype=torch.long
-            )
-            patch_positions = torch.cat([real_positions, pad_positions], dim=1)
-        else:
-            patch_positions = real_positions
-
-        padding_positions = torch.zeros(
-            batch_size, self.max_patches, device=device, dtype=torch.bool
-        )
-        if num_padding > 0:
-            padding_positions[:, num_patches:] = True
-
-        return patch_positions.long(), padding_positions
-
-    def forward(self, pixel_values: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Encode pixel_values into soft tokens.
+        """Encode pre-patchified pixel_values into soft tokens.
 
         Args:
-            pixel_values: [batch, channels, height, width]
+            pixel_values: [batch, num_patches, patch_pixels] — pre-patchified
+                          by the image processor.
+            pixel_position_ids: [batch, num_patches, 2] — (x, y) positions,
+                                -1 for padding patches.
+            output_length: target number of output soft tokens (optional,
+                           defaults to config.default_output_length).
 
         Returns:
             (hidden_states, pooler_mask) — hidden_states [batch, output_len, hidden],
             pooler_mask [batch, output_len] True = valid.
         """
-        patch_positions, padding_positions = self._patch_positions(pixel_values)
+        padding_positions = (pixel_position_ids == -1).all(dim=-1)
 
         inputs_embeds = self.patch_embedder(
-            pixel_values,
-            patch_positions[:, : self._num_real_patches(pixel_values)],
-            padding_positions[:, : self._num_real_patches(pixel_values)],
+            pixel_values, pixel_position_ids, padding_positions
         )
-
-        num_real = inputs_embeds.shape[1]
-        num_padding = self.max_patches - num_real
-        if num_padding > 0:
-            pad_embeds = torch.zeros(
-                inputs_embeds.shape[0],
-                num_padding,
-                inputs_embeds.shape[2],
-                device=inputs_embeds.device,
-                dtype=inputs_embeds.dtype,
-            )
-            inputs_embeds = torch.cat([inputs_embeds, pad_embeds], dim=1)
 
         last_hidden = self.encoder(
             inputs_embeds=inputs_embeds,
             attention_mask=~padding_positions,
-            patch_positions=patch_positions,
+            patch_positions=pixel_position_ids,
         )
 
+        if output_length is None:
+            output_length = self.default_output_length
+
         pooled, pooler_mask = self.pooler(
-            last_hidden, patch_positions, padding_positions
+            last_hidden, pixel_position_ids, padding_positions
         )
         return pooled, pooler_mask
