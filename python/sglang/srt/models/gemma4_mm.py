@@ -552,8 +552,9 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         m = Gemma4ForConditionalGeneration._RE_TOWER_QKV.match(name)
         if m:
             pfx, proj, attr = m.groups()
-            if attr in ("weight", "bias"):
-                return f"{pfx}.qkv.{proj}.{attr}"
+            if attr in ("weight", "bias", "linear.weight", "linear.bias"):
+                bare_attr = attr.rsplit(".", 1)[-1]
+                return f"{pfx}.qkv.{proj}.{bare_attr}"
             if attr.startswith("output_"):
                 return f"{pfx}.qkv.{proj[0]}_{attr}"
             if attr.startswith("input_"):
@@ -564,8 +565,9 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         if m:
             pfx, proj, attr = m.groups()
             short = proj.split("_")[0]  # "gate" or "up"
-            if attr in ("weight", "bias"):
-                return f"{pfx}.gate_up.{proj}.{attr}"
+            if attr in ("weight", "bias", "linear.weight", "linear.bias"):
+                bare_attr = attr.rsplit(".", 1)[-1]
+                return f"{pfx}.gate_up.{proj}.{bare_attr}"
             if attr.startswith("output_"):
                 return f"{pfx}.gate_up.{short}_{attr}"
             if attr.startswith("input_"):
