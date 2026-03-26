@@ -597,15 +597,12 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         k_eq_v_layers = self._get_k_eq_v_layers()
 
         num_experts = getattr(self.config.text_config, "num_experts", 0) or 0
-        if num_experts > 0:
-            expert_params_mapping = [
-                # (param_name, ckpt_weight_name, shard_ids)
-                # gate_up_proj is fused [E, 2*I, H] — chunk into w1 (gate) + w3 (up)
-                ("experts.w13_weight", "experts.gate_up_proj", ("w1", "w3")),
-                ("experts.w2_weight", "experts.down_proj", ("w2",)),
-            ]
-        else:
-            expert_params_mapping = []
+        expert_params_mapping = [
+            # (param_name, ckpt_weight_name, shard_ids)
+            # gate_up_proj is fused [E, 2*I, H] — chunk into w1 (gate) + w3 (up)
+            ("experts.w13_weight", "experts.gate_up_proj", ("w1", "w3")),
+            ("experts.w2_weight", "experts.down_proj", ("w2",)),
+        ]
 
         params_dict = dict(self.named_parameters())
         params_dict.update(dict(self.named_buffers()))
