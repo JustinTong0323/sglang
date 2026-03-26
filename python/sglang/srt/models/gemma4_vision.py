@@ -382,7 +382,7 @@ class Gemma4VisionTransformer(nn.Module):
         Returns:
             last_hidden_state: [batch, seq, hidden_size]
         """
-        cos, sin = self.rotary_emb(inputs_embeds, patch_positions.clamp(min=0))
+        cos, sin = self.rotary_emb(inputs_embeds, patch_positions)
         hidden_states = inputs_embeds
         for layer in self.layers:
             hidden_states = layer(hidden_states, cos, sin, attention_mask)
@@ -411,7 +411,8 @@ class Gemma4VisionPatchEmbedder(nn.Module):
     def _position_embeddings(
         self, patch_positions: torch.Tensor, padding_positions: torch.Tensor
     ) -> torch.Tensor:
-        one_hot = F.one_hot(patch_positions, num_classes=self.position_embedding_size)
+        clamped_positions = patch_positions.clamp(min=0)
+        one_hot = F.one_hot(clamped_positions, num_classes=self.position_embedding_size)
         one_hot = one_hot.permute(0, 2, 1, 3).to(self.position_embedding_table)
         position_embeddings = one_hot @ self.position_embedding_table
         position_embeddings = position_embeddings.sum(dim=1)
@@ -445,9 +446,8 @@ class Gemma4VisionPatchEmbedder(nn.Module):
             padding_positions: [batch, num_patches] — True for padding patches.
         """
         hidden_states = self._patch_projection(pixel_values)
-        clamped_positions = pixel_position_ids.clamp(min=0)
         position_embeddings = self._position_embeddings(
-            clamped_positions, padding_positions
+            pixel_position_ids, padding_positions
         )
         return hidden_states + position_embeddings
 
