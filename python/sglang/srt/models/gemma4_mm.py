@@ -357,7 +357,8 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
 
                 pp = (
                     all_position_ids[pv_idx]
-                    if pv_idx < len(all_position_ids) and all_position_ids[pv_idx] is not None
+                    if pv_idx < len(all_position_ids)
+                    and all_position_ids[pv_idx] is not None
                     else None
                 )
 
@@ -376,7 +377,9 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 for hs, mask in zip(pooled, pooler_mask):
                     real_tokens = hs[mask]
                     all_embeds.append(
-                        self.embed_vision(inputs_embeds=real_tokens.unsqueeze(0)).squeeze(0)
+                        self.embed_vision(
+                            inputs_embeds=real_tokens.unsqueeze(0)
+                        ).squeeze(0)
                     )
 
         if all_embeds:

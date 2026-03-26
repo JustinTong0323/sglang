@@ -1,6 +1,4 @@
-"""Multimodal encoder accuracy tests: compare HF vs SGLang encoder outputs.
-
-"""
+1"""Multimodal encoder accuracy tests: compare HF vs SGLang encoder outputs."""
 
 import os
 import socket

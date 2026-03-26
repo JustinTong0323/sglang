@@ -30,7 +30,6 @@ from transformers import (
     GenerationConfig,
 )
 
-
 from sglang.srt.entrypoints.engine import Engine
 from sglang.srt.model_loader.ci_weight_validation import ci_validate_and_clean_hf_cache
 from sglang.srt.utils import get_device, is_npu, load_image
