@@ -488,12 +488,13 @@ class Gemma4VisionPooler(nn.Module):
         hidden_states: torch.Tensor,
         patch_positions: torch.Tensor,
         padding_positions: torch.Tensor,
+        output_length: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Returns:
             (pooled_hidden_states, mask) where mask is True for valid tokens.
         """
-        length = self.default_output_length
+        length = self.default_output_length if output_length is None else output_length
         if isinstance(length, (list, tuple)):
             length = length[0]
         if hidden_states.shape[1] == length:
@@ -569,10 +570,10 @@ class Gemma4VisionEncoder(nn.Module):
             patch_positions=pixel_position_ids,
         )
 
-        if output_length is None:
-            output_length = self.default_output_length
-
         pooled, pooler_mask = self.pooler(
-            last_hidden, pixel_position_ids, padding_positions
+            last_hidden,
+            pixel_position_ids,
+            padding_positions,
+            output_length=output_length,
         )
         return pooled, pooler_mask
