@@ -36,7 +36,6 @@ from sglang.srt.layers.linear import (
 )
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.moe.ep_moe.layer import get_moe_impl_class
-from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
 from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
@@ -977,11 +976,12 @@ class Gemma4ForCausalLM(PreTrainedModel):
             ("gate_up_proj", "up_proj", 1),
         ]
 
-        expert_params_mapping = FusedMoE.make_expert_params_mapping_gemma4(
-            ckpt_gate_proj_name="gate_proj",
-            ckpt_down_proj_name="down_proj",
-            ckpt_up_proj_name="up_proj",
-        )
+        expert_params_mapping = [
+            # (param_name, ckpt_weight_name, shard_ids)
+            # gate_up_proj is fused [E, 2*I, H] — chunk into w1 (gate) + w3 (up)
+            ("experts.w13_weight", "experts.gate_up_proj", ("w1", "w3")),
+            ("experts.w2_weight", "experts.down_proj", ("w2",)),
+        ]
         num_experts = self.config.num_experts
 
         k_eq_v_layers = self._get_k_eq_v_layers()
@@ -1016,9 +1016,10 @@ class Gemma4ForCausalLM(PreTrainedModel):
                 and int(m.group(1)) in k_eq_v_layers
             )
 
-            # Try stacked (fused) params first
+            # MoE expert weights checked first (gate_up_proj contains "up_proj"
+            # which would false-match the stacked dense MLP mapping).
             orig_name = name
-            for param_name, weight_name, shard_id in stacked_params_mapping:
+            for param_name, weight_name, shard_ids in expert_params_mapping:
                 name = orig_name
                 if weight_name not in name:
                     continue
@@ -1027,12 +1028,13 @@ class Gemma4ForCausalLM(PreTrainedModel):
                     continue
                 param = params_dict[name]
                 weight_loader = param.weight_loader
-                weight_loader(param, loaded_weight, shard_id)
-                if should_dup_k_to_v:
-                    weight_loader(param, loaded_weight, "v")
+                for i in range(num_experts):
+                    chunks = loaded_weight[i].chunk(len(shard_ids), dim=0)
+                    for chunk, sid in zip(chunks, shard_ids):
+                        weight_loader(param, chunk, name, sid, i)
                 break
             else:
-                for param_name, weight_name, shard_id in expert_params_mapping:
+                for param_name, weight_name, shard_id in stacked_params_mapping:
                     name = orig_name
                     if weight_name not in name:
                         continue
@@ -1041,8 +1043,9 @@ class Gemma4ForCausalLM(PreTrainedModel):
                         continue
                     param = params_dict[name]
                     weight_loader = param.weight_loader
-                    for i in range(num_experts):
-                        weight_loader(param, loaded_weight[i].T, name, shard_id, i)
+                    weight_loader(param, loaded_weight, shard_id)
+                    if should_dup_k_to_v:
+                        weight_loader(param, loaded_weight, "v")
                     break
                 else:
                     name = orig_name
