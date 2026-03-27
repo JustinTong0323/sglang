@@ -461,7 +461,7 @@ class Gemma4VisionPooler(nn.Module):
     def __init__(self, config: Gemma4VisionConfig):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.default_output_length = config.default_output_length
+        self.default_output_length = config.image_seq_length
         self.root_hidden_size = self.hidden_size**0.5
 
     def _avg_pool_by_positions(
@@ -524,7 +524,7 @@ class Gemma4VisionEncoder(nn.Module):
         super().__init__()
         self.config = config
         self.patch_size = config.patch_size
-        self.default_output_length = config.default_output_length
+        self.default_output_length = config.image_seq_length
 
         self.patch_embedder = Gemma4VisionPatchEmbedder(config)
         self.encoder = Gemma4VisionTransformer(

@@ -44,7 +44,7 @@ class Gemma4SGLangProcessor(SGLangBaseProcessor):
 
         # Register new image-processor outputs so they are stored on
         # MultimodalDataItem via collect_mm_items_from_processor_output.
-        self.ATTR_NAME_TO_MODALITY["pixel_position_ids"] = Modality.IMAGE
+        self.ATTR_NAME_TO_MODALITY["image_position_ids"] = Modality.IMAGE
         self.ATTR_NAME_TO_MODALITY["vision_output_length"] = Modality.IMAGE
 
     def _get_audio_pad_multiple(self) -> int:

@@ -340,7 +340,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         for item in items:
             all_pixel_values = flatten_nested_list([item.feature])
             all_position_ids = flatten_nested_list(
-                [getattr(item, "pixel_position_ids", None)]
+                [getattr(item, "image_position_ids", None)]
             )
             vol = getattr(item, "vision_output_length", None)
             if isinstance(vol, torch.Tensor):
@@ -354,22 +354,22 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                     all_embeds.append(pv.to(self.language_model.device))
                     continue
 
-                pp = (
-                    all_position_ids[pv_idx]
-                    if pv_idx < len(all_position_ids)
-                    and all_position_ids[pv_idx] is not None
-                    else None
-                )
+                if pv_idx >= len(all_position_ids) or all_position_ids[pv_idx] is None:
+                    raise ValueError(
+                        f"pixel_values[{pv_idx}] has no matching image_position_ids. "
+                        "The HF image processor likely renamed this output — "
+                        "update ATTR_NAME_TO_MODALITY in the Gemma4 processor."
+                    )
+                pp = all_position_ids[pv_idx]
 
                 # Pre-patchified pixel_values: (num_images, num_patches, patch_pixels)
                 if pv.dim() == 2:
                     pv = pv.unsqueeze(0)
-                if pp is not None and pp.dim() == 2:
+                if pp.dim() == 2:
                     pp = pp.unsqueeze(0)
 
                 pv = pv.to(device=vt.device, dtype=self.language_model.dtype())
-                if pp is not None:
-                    pp = pp.to(device=vt.device)
+                pp = pp.to(device=vt.device)
 
                 pooled, pooler_mask = vt(pv, pp, output_length=vol)
 
