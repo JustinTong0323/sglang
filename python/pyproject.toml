@@ -35,6 +35,7 @@ dependencies = [
   "modelscope",
   "msgspec",
   "ninja",
+  "easydict",
   "numpy",
   "nvidia-cutlass-dsl>=4.4.1",
   "nvidia-ml-py",

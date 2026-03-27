@@ -31,6 +31,7 @@ dependencies = [
   "llguidance>=0.7.11,<0.8.0",
   "modelscope",
   "msgspec",
+  "easydict",
   "ninja",
   "numpy",
   "openai-harmony==0.0.4",

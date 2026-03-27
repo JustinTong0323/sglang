@@ -25,6 +25,7 @@ dependencies = [
   "datasets",
   "einops",
   "fastapi",
+  "easydict",
   "gguf",
   "interegular",
   "llguidance>=0.7.11,<0.8.0",
