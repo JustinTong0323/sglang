@@ -354,10 +354,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                     all_embeds.append(pv.to(self.language_model.device))
                     continue
 
-                if (
-                    pv_idx >= len(all_position_ids)
-                    or all_position_ids[pv_idx] is None
-                ):
+                if pv_idx >= len(all_position_ids) or all_position_ids[pv_idx] is None:
                     raise ValueError(
                         f"pixel_values[{pv_idx}] has no matching image_position_ids. "
                         "The HF image processor likely renamed this output — "
