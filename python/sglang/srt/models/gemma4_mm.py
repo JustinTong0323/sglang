@@ -340,7 +340,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         for item in items:
             all_pixel_values = flatten_nested_list([item.feature])
             all_position_ids = flatten_nested_list(
-                [getattr(item, "pixel_position_ids", None)]
+                [getattr(item, "image_position_ids", None)]
             )
             vol = getattr(item, "vision_output_length", None)
             if isinstance(vol, torch.Tensor):
