@@ -46,6 +46,32 @@ try:
 except ImportError:
     pass
 
+# Transformers v5.4 removed several symbols that remote model code (e.g.
+# DeepSeek-OCR) still imports. check_imports validates these at config load
+# time, so we must patch them before any from_pretrained call.
+try:
+    from transformers.models.llama import modeling_llama as _llama_mod
+
+    if not hasattr(_llama_mod, "LlamaFlashAttention2"):
+        if hasattr(_llama_mod, "LlamaAttention"):
+            _llama_mod.LlamaFlashAttention2 = _llama_mod.LlamaAttention
+    del _llama_mod
+except (ImportError, ModuleNotFoundError):
+    pass
+
+try:
+    import transformers.utils as _hf_utils
+
+    if not hasattr(_hf_utils, "is_flash_attn_greater_or_equal_2_10"):
+        if hasattr(_hf_utils, "is_flash_attn_greater_or_equal"):
+            _hf_utils.is_flash_attn_greater_or_equal_2_10 = lambda: (
+                _hf_utils.is_flash_attn_greater_or_equal("2.1.0")
+            )
+        else:
+            _hf_utils.is_flash_attn_greater_or_equal_2_10 = lambda: False
+except (ImportError, ModuleNotFoundError):
+    pass
+
 # Conditional import based on SGLANG_USE_MODELSCOPE environment variable
 if get_bool_env_var("SGLANG_USE_MODELSCOPE"):
     from modelscope import AutoConfig, GenerationConfig
