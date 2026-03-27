@@ -62,6 +62,30 @@ from transformers import (
 )
 from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
 
+# Transformers v5.4+ validates that rope_parameters contains rope_theta for
+# yarn/llama3/longrope types, but for unregistered model types the generic
+# PretrainedConfig lacks a `rope_parameters` field so the conversion that
+# injects rope_theta from the top-level config is skipped.  Patch from_dict
+# to ensure rope_theta is present in rope_scaling before __init__ validates.
+_original_from_dict = PretrainedConfig.from_dict.__func__
+
+
+@classmethod  # type: ignore[misc]
+def _patched_from_dict(cls, config_dict, **kwargs):
+    rope_scaling = config_dict.get("rope_scaling")
+    rope_theta = config_dict.get("rope_theta")
+    if (
+        isinstance(rope_scaling, dict)
+        and rope_theta is not None
+        and "rope_theta" not in rope_scaling
+    ):
+        config_dict = config_dict.copy()
+        config_dict["rope_scaling"] = {**rope_scaling, "rope_theta": rope_theta}
+    return _original_from_dict(cls, config_dict, **kwargs)
+
+
+PretrainedConfig.from_dict = _patched_from_dict
+
 from sglang.srt.configs import (
     AfmoeConfig,
     BailingHybridConfig,
