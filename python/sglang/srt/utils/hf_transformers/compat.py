@@ -136,7 +136,7 @@ def _patch_rope_parameters_validation():
     Fix: patch ``PretrainedConfig.from_dict`` to inject ``rope_theta`` into
     ``rope_scaling`` before ``__init__`` validates.
 
-    TODO(upstream): https://github.com/huggingface/transformers/issues/XXXXX
+    TODO(upstream): file issue for rope_parameters validation with unregistered model types
     """
     from transformers import PretrainedConfig
 
@@ -211,7 +211,7 @@ def _patch_removed_symbols():
         if not hasattr(_u, "is_flash_attn_greater_or_equal_2_10"):
             if hasattr(_u, "is_flash_attn_greater_or_equal"):
                 _u.is_flash_attn_greater_or_equal_2_10 = (
-                    lambda: _u.is_flash_attn_greater_or_equal("2.1.0")
+                    lambda: _u.is_flash_attn_greater_or_equal("2.10.0")
                 )
             else:
                 _u.is_flash_attn_greater_or_equal_2_10 = lambda: False

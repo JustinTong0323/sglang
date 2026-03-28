@@ -128,25 +128,33 @@ def get_tokenizer(
             raise e
 
     # Transformers v5 may silently fall back to a generic TokenizersBackend
-    # when the model requires a custom tokenizer. Retry with trust_remote_code
-    # and/or use_fast=False to load the correct tokenizer class.
-    if type(tokenizer).__name__ == "TokenizersBackend":
-        retry_kwargs = {**kwargs, "trust_remote_code": True}
+    # when the model requires a custom tokenizer. Retry with escalating
+    # overrides until we get the real tokenizer class.
+    _retry_overrides = [
+        {"trust_remote_code": True},
+        {"trust_remote_code": True, "use_fast": False},
+    ]
+    for overrides in _retry_overrides:
+        if type(tokenizer).__name__ != "TokenizersBackend":
+            break
+        logger.warning(
+            "Tokenizer loaded as generic TokenizersBackend for %s, "
+            "retrying with %s",
+            tokenizer_name,
+            overrides,
+        )
         tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_name,
             *args,
             tokenizer_revision=tokenizer_revision,
             clean_up_tokenization_spaces=False,
-            **retry_kwargs,
+            **{**kwargs, **overrides},
         )
     if type(tokenizer).__name__ == "TokenizersBackend":
-        retry_kwargs["use_fast"] = False
-        tokenizer = AutoTokenizer.from_pretrained(
+        logger.warning(
+            "Tokenizer for %s is still TokenizersBackend after retries. "
+            "Model-specific tokenizer attributes may be missing.",
             tokenizer_name,
-            *args,
-            tokenizer_revision=tokenizer_revision,
-            clean_up_tokenization_spaces=False,
-            **retry_kwargs,
         )
 
     _fix_v5_tokenizer_components(tokenizer, tokenizer_name, tokenizer_revision)

@@ -26,6 +26,7 @@ _apply_compat()
 # Re-export public API from submodules.
 from .compat import normalize_rope_scaling_compat  # noqa: E402
 from .common import (  # noqa: E402
+    AutoConfig,
     CONTEXT_LENGTH_KEYS,
     attach_additional_stop_token_ids,
     check_gguf_file,
@@ -39,10 +40,17 @@ from .common import (  # noqa: E402
 )
 from .config import get_config  # noqa: E402
 from .processor import get_processor  # noqa: E402
-from .tokenizer import get_tokenizer  # noqa: E402
+from .tokenizer import (  # noqa: E402
+    _fix_added_tokens_encoding,
+    _fix_v5_add_bos_eos_token,
+    get_tokenizer,
+)
 
 __all__ = [
+    "AutoConfig",
     "CONTEXT_LENGTH_KEYS",
+    "_fix_added_tokens_encoding",
+    "_fix_v5_add_bos_eos_token",
     "attach_additional_stop_token_ids",
     "check_gguf_file",
     "download_from_hf",
