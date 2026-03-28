@@ -52,7 +52,8 @@ from sglang.srt.configs import (
 )
 from sglang.srt.configs.deepseek_ocr import DeepseekVLV2Config
 from sglang.srt.configs.internvl import InternVLChatConfig
-from sglang.srt.utils import get_bool_env_var, logger, lru_cache_frozenset, mistral_utils
+from sglang.srt.utils import get_bool_env_var, logger, lru_cache_frozenset
+from sglang.srt.utils.hf_transformers import mistral_utils
 
 from .compat import normalize_rope_scaling_compat
 
