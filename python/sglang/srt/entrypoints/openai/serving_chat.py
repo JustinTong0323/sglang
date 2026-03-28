@@ -1293,11 +1293,23 @@ class OpenAIServingChat(OpenAIServingBase):
             is_required = request.tool_choice == "required" or isinstance(
                 request.tool_choice, ToolChoice
             )
-            # Use model-specific parser when available, even for required/named
-            # tool choice, to handle native tool call formats (kimi, deepseek, etc.).
-            # Fall back to JsonArrayParser only when no parser is configured.
-            if is_required and not self.tool_call_parser:
-                parser_dict[index] = JsonArrayParser()
+            # For required/named tool choice: use JsonArrayParser when the
+            # constrained output is plain JSON (detector doesn't support
+            # structural_tag or no parser configured). Use FunctionCallParser
+            # only when the detector supports structural_tag and will produce
+            # native format output.
+            if is_required:
+                use_native_parser = False
+                if self.tool_call_parser:
+                    probe = FunctionCallParser(
+                        tools=request.tools,
+                        tool_call_parser=self.tool_call_parser,
+                    )
+                    use_native_parser = probe.detector.supports_structural_tag()
+                if use_native_parser:
+                    parser_dict[index] = probe
+                else:
+                    parser_dict[index] = JsonArrayParser()
             else:
                 parser_dict[index] = FunctionCallParser(
                     tools=request.tools,
