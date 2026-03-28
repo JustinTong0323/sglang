@@ -28,76 +28,11 @@ from huggingface_hub import snapshot_download
 
 from sglang.srt.utils import get_bool_env_var
 
-# Compatibility shim: flash-attn-4 registers a bare ``flash_attn`` namespace
-# that makes ``is_flash_attn_2_available()`` return True, but lacks the v2 API
-# (``flash_attn_func``, etc.).  HuggingFace remote model code (e.g. Kimi-VL)
-# guarded by that check will crash with ImportError at module load time.
-# Force it to False when the real v2 API is absent.
-try:
-    import flash_attn as _flash_attn_mod
+# Apply transformers v5.4 compatibility patches before any from_pretrained call.
+# See transformers_v54_compat.py for details on each patch.
+from sglang.srt.utils.transformers_v54_compat import apply_all as _apply_tf_compat
 
-    if not hasattr(_flash_attn_mod, "flash_attn_func"):
-        import transformers.utils as _hf_utils
-        import transformers.utils.import_utils as _hf_import_utils
-
-        _hf_import_utils.is_flash_attn_2_available = lambda: False
-        _hf_utils.is_flash_attn_2_available = lambda: False
-    del _flash_attn_mod
-except ImportError:
-    pass
-
-# Transformers v5.4 removed several symbols that remote model code (e.g.
-# DeepSeek-OCR) still imports. check_imports validates these at config load
-# time, so we must patch them before any from_pretrained call.
-try:
-    from transformers.models.llama import modeling_llama as _llama_mod
-
-    if not hasattr(_llama_mod, "LlamaFlashAttention2"):
-        if hasattr(_llama_mod, "LlamaAttention"):
-            _llama_mod.LlamaFlashAttention2 = _llama_mod.LlamaAttention
-    del _llama_mod
-except (ImportError, ModuleNotFoundError):
-    pass
-
-try:
-    import transformers.utils as _hf_utils
-
-    if not hasattr(_hf_utils, "is_flash_attn_greater_or_equal_2_10"):
-        if hasattr(_hf_utils, "is_flash_attn_greater_or_equal"):
-            _hf_utils.is_flash_attn_greater_or_equal_2_10 = lambda: (
-                _hf_utils.is_flash_attn_greater_or_equal("2.1.0")
-            )
-        else:
-            _hf_utils.is_flash_attn_greater_or_equal_2_10 = lambda: False
-except (ImportError, ModuleNotFoundError):
-    pass
-
-# Transformers v5.4 passes new kwargs (e.g. `device`) to image processor
-# preprocess(). Remote model code that defines preprocess() without **kwargs
-# will crash with TypeError. Patch __call__ to strip unsupported kwargs.
-try:
-    import inspect as _inspect
-
-    from transformers.image_processing_utils import BaseImageProcessor as _BIP
-
-    _original_bip_call = _BIP.__call__
-
-    def _safe_bip_call(self, images, *args, **kwargs):
-        try:
-            return _original_bip_call(self, images, *args, **kwargs)
-        except TypeError as _e:
-            if "unexpected keyword argument" in str(_e):
-                sig = _inspect.signature(self.preprocess)
-                params = sig.parameters
-                if any(p.kind == _inspect.Parameter.VAR_KEYWORD for p in params.values()):
-                    raise
-                valid = {k: v for k, v in kwargs.items() if k in params}
-                return _original_bip_call(self, images, *args, **valid)
-            raise
-
-    _BIP.__call__ = _safe_bip_call
-except (ImportError, ModuleNotFoundError):
-    pass
+_apply_tf_compat()
 
 # Conditional import based on SGLANG_USE_MODELSCOPE environment variable
 if get_bool_env_var("SGLANG_USE_MODELSCOPE"):
@@ -114,30 +49,6 @@ from transformers import (
     PreTrainedTokenizerFast,
 )
 from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
-
-# Transformers v5.4+ validates that rope_parameters contains rope_theta for
-# yarn/llama3/longrope types, but for unregistered model types the generic
-# PretrainedConfig lacks a `rope_parameters` field so the conversion that
-# injects rope_theta from the top-level config is skipped.  Patch from_dict
-# to ensure rope_theta is present in rope_scaling before __init__ validates.
-_original_from_dict = PretrainedConfig.from_dict.__func__
-
-
-@classmethod  # type: ignore[misc]
-def _patched_from_dict(cls, config_dict, **kwargs):
-    rope_scaling = config_dict.get("rope_scaling")
-    rope_theta = config_dict.get("rope_theta")
-    if (
-        isinstance(rope_scaling, dict)
-        and rope_theta is not None
-        and "rope_theta" not in rope_scaling
-    ):
-        config_dict = config_dict.copy()
-        config_dict["rope_scaling"] = {**rope_scaling, "rope_theta": rope_theta}
-    return _original_from_dict(cls, config_dict, **kwargs)
-
-
-PretrainedConfig.from_dict = _patched_from_dict
 
 from sglang.srt.configs import (
     AfmoeConfig,
@@ -522,17 +433,6 @@ def normalize_rope_scaling_compat(config: "PretrainedConfig") -> None:
     _patch(config)
 
 
-def _ensure_llama_flash_attention2_compat() -> None:
-    """Ensure LlamaFlashAttention2 symbol exists for remote code compatibility."""
-    try:
-        from transformers.models.llama import modeling_llama
-    except (ImportError, ModuleNotFoundError):
-        return
-    if not hasattr(modeling_llama, "LlamaFlashAttention2"):
-        if hasattr(modeling_llama, "LlamaAttention"):
-            modeling_llama.LlamaFlashAttention2 = modeling_llama.LlamaAttention
-
-
 def _ensure_gguf_version():
     """Workaround for transformers v5 bug where is_gguf_available() fails
     when the gguf package lacks __version__ and metadata lookup also fails,
@@ -582,7 +482,6 @@ def get_config(
             model, trust_remote_code=trust_remote_code, revision=revision
         )
     else:
-        _ensure_llama_flash_attention2_compat()
         try:
             config = AutoConfig.from_pretrained(
                 model, trust_remote_code=trust_remote_code, revision=revision, **kwargs
@@ -1219,7 +1118,6 @@ def get_processor(
             revision=revision,
         )
     else:
-        _ensure_llama_flash_attention2_compat()
         config = AutoConfig.from_pretrained(
             tokenizer_name,
             trust_remote_code=trust_remote_code,
