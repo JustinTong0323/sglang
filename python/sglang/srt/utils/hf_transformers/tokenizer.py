@@ -29,12 +29,12 @@ from sglang.srt.connector import create_remote_connector
 from sglang.srt.utils import is_remote_url, logger
 from sglang.srt.utils.patch_tokenizer import patch_tokenizer
 
-from .compat import _ensure_gguf_version
 from .common import (
     _resolve_local_or_cached_file,
     attach_additional_stop_token_ids,
     check_gguf_file,
 )
+from .compat import _ensure_gguf_version
 
 # A fast LLaMA tokenizer with the pre-processed `tokenizer.json` file.
 _FAST_LLAMA_TOKENIZER = "hf-internal-testing/llama-tokenizer"
@@ -137,8 +137,7 @@ def get_tokenizer(
         if type(tokenizer).__name__ != "TokenizersBackend":
             break
         logger.warning(
-            "Tokenizer loaded as generic TokenizersBackend for %s, "
-            "retrying with %s",
+            "Tokenizer loaded as generic TokenizersBackend for %s, " "retrying with %s",
             tokenizer_name,
             overrides,
         )
@@ -332,11 +331,17 @@ def _fix_added_tokens_encoding(tokenizer):
     This function discovers such tokens by scanning tokenizer attributes, checks
     if they encode correctly, and re-registers any that don't.
     """
+
     # Discover special token strings from tokenizer attributes.
     # Model tokenizers (e.g. MiniCPMVTokenizerFast) store them as attributes
     # like im_start="<image>", slice_start="<slice>", etc.
     def _is_special_token_attr(val):
-        return isinstance(val, str) and val.startswith("<") and val.endswith(">") and len(val) <= 20
+        return (
+            isinstance(val, str)
+            and val.startswith("<")
+            and val.endswith(">")
+            and len(val) <= 20
+        )
 
     candidates = {}
     for attr in dir(tokenizer):

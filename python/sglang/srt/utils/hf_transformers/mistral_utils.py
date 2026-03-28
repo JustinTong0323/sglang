@@ -327,9 +327,7 @@ def is_mistral_model(name) -> bool:
     """Return True if *name* refers to a Mistral model needing the custom parser."""
     lower = str(name).lower()
     return (
-        "mistral-large-3" in lower
-        or "mistral-small-4" in lower
-        or "leanstral" in lower
+        "mistral-large-3" in lower or "mistral-small-4" in lower or "leanstral" in lower
     )
 
 
