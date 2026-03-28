@@ -23,11 +23,9 @@ from .compat import apply_all as _apply_compat
 
 _apply_compat()
 
-# Re-export public API from submodules.
-from .compat import normalize_rope_scaling_compat  # noqa: E402
 from .common import (  # noqa: E402
-    AutoConfig,
     CONTEXT_LENGTH_KEYS,
+    AutoConfig,
     attach_additional_stop_token_ids,
     check_gguf_file,
     download_from_hf,
@@ -38,6 +36,9 @@ from .common import (  # noqa: E402
     get_sparse_attention_config,
     get_tokenizer_from_processor,
 )
+
+# Re-export public API from submodules.
+from .compat import normalize_rope_scaling_compat  # noqa: E402
 from .config import get_config  # noqa: E402
 from .processor import get_processor  # noqa: E402
 from .tokenizer import (  # noqa: E402

@@ -113,7 +113,14 @@ def _ensure_gguf_version():
 
             try:
                 gguf.__version__ = importlib.metadata.version("gguf")
-            except Exception:
+            except importlib.metadata.PackageNotFoundError:
+                gguf.__version__ = "0.0.0"
+            except Exception as e:
+                logger.warning(
+                    "Failed to determine gguf package version: %s. "
+                    "Falling back to '0.0.0'.",
+                    e,
+                )
                 gguf.__version__ = "0.0.0"
     except ImportError:
         pass
@@ -136,7 +143,7 @@ def _patch_rope_parameters_validation():
     Fix: patch ``PretrainedConfig.from_dict`` to inject ``rope_theta`` into
     ``rope_scaling`` before ``__init__`` validates.
 
-    TODO(upstream): fixed in https://github.com/huggingface/transformers/pull/45049, remove once released
+    TODO(upstream): fixed in https://github.com/huggingface/transformers/pull/45049, remove once transformers >= 5.5.0
     """
     from transformers import PretrainedConfig
 
@@ -201,7 +208,7 @@ def _patch_removed_symbols():
         if not hasattr(modeling_llama, "LlamaFlashAttention2"):
             if hasattr(modeling_llama, "LlamaAttention"):
                 modeling_llama.LlamaFlashAttention2 = modeling_llama.LlamaAttention
-    except (ImportError, ModuleNotFoundError):
+    except ImportError:
         pass
 
     # is_flash_attn_greater_or_equal_2_10
@@ -215,7 +222,7 @@ def _patch_removed_symbols():
                 )
             else:
                 _u.is_flash_attn_greater_or_equal_2_10 = lambda: False
-    except (ImportError, ModuleNotFoundError):
+    except ImportError:
         pass
 
 
@@ -253,7 +260,7 @@ def _patch_image_processor_kwargs():
                 return original(self, images, *args, **valid)
 
         BaseImageProcessor.__call__ = safe_call
-    except (ImportError, ModuleNotFoundError):
+    except ImportError:
         pass
 
 
@@ -334,10 +341,12 @@ def patch_is_base_mistral_in_ci():
         return
 
     import transformers
+    from packaging.version import Version
 
-    if transformers.__version__ != "5.4.0":
+    tv = Version(transformers.__version__)
+    if tv < Version("5.4.0") or tv >= Version("5.5.0"):
         logger.warning(
-            "transformers version changed to %s (expected 5.4.0), "
+            "transformers version %s is outside expected range [5.4.0, 5.5.0), "
             "is_base_mistral patch skipped — may need update if 429 errors recur",
             transformers.__version__,
         )

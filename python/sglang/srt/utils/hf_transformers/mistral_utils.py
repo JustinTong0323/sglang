@@ -269,14 +269,10 @@ class MistralConfigParser:
     ):
         file_path = Path(model) / file_name
         if not file_path.is_file():
-            # TODO: Add logic to download from HF in case file is not locally found
             raise FileNotFoundError(f"File not found {model}, {file_name}")
 
-        if file_path is not None and file_path.is_file():
-            with open(file_path) as file:
-                return json.load(file)
-
-        return None
+        with open(file_path) as file:
+            return json.load(file)
 
     def _download_mistral_config_file(self, model, revision) -> dict:
         config_file_name = "params.json"

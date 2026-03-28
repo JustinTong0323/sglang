@@ -20,13 +20,12 @@ from transformers import PretrainedConfig
 from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
 
 from sglang.srt.connector import create_remote_connector
-from sglang.srt.utils import is_remote_url, lru_cache_frozenset
+from sglang.srt.utils import is_remote_url, logger, lru_cache_frozenset
 
-from .compat import _ensure_gguf_version
 from .common import (
+    _CONFIG_REGISTRY,
     AutoConfig,
     DeepseekVLV2Config,
-    _CONFIG_REGISTRY,
     _is_deepseek_ocr2_model,
     _is_deepseek_ocr_model,
     _is_mistral_model,
@@ -36,6 +35,7 @@ from .common import (
     check_gguf_file,
     get_hf_text_config,
 )
+from .compat import _ensure_gguf_version
 
 
 def _set_architectures(config, arch_name):
@@ -87,6 +87,12 @@ def get_config(
             elif isinstance(e, ValueError):
                 raise
             else:
+                logger.info(
+                    "AutoConfig.from_pretrained raised KeyError for %s: %s. "
+                    "Falling back to config registry lookup.",
+                    model,
+                    e,
+                )
                 config_dict, _ = PretrainedConfig.get_config_dict(
                     model,
                     trust_remote_code=trust_remote_code,

@@ -48,9 +48,9 @@ def _build_processor_manually(
 
     In transformers v5, AutoProcessor.from_pretrained calls
     AutoFeatureExtractor.from_pretrained which fails if
-    preprocessor_config.json lacks 'feature_extractor_type'. This loads the
-    processor class from the hub and constructs it with individually-loaded
-    components.
+    preprocessor_config.json lacks 'feature_extractor_type'. This resolves
+    the processor class via dynamic module resolution and constructs it with
+    individually-loaded components.
     """
     import transformers
     from transformers import AutoImageProcessor, AutoTokenizer
@@ -94,8 +94,13 @@ def _build_processor_manually(
             init_kwargs["image_processor"] = AutoImageProcessor.from_pretrained(
                 model_path, trust_remote_code=trust_remote_code, revision=revision
             )
-        except Exception as e:
-            logger.warning("Failed to load image_processor for %s: %s", model_path, e)
+        except (ImportError, OSError, ValueError) as e:
+            logger.error(
+                "Failed to load image_processor for %s: %s. "
+                "Multimodal features may not work correctly.",
+                model_path,
+                e,
+            )
 
     # Instantiate feature extractor from its declared class
     fe_class_name = getattr(proc_cls, "feature_extractor_class", None)
@@ -200,7 +205,8 @@ def get_processor(
         error_message = str(e)
         if "does not have a slow version" in error_message:
             logger.info(
-                f"Processor {tokenizer_name} does not have a slow version. Automatically use fast version"
+                "Processor %s does not have a slow version. Automatically use fast version",
+                tokenizer_name,
             )
             kwargs["use_fast"] = True
             processor = AutoProcessor.from_pretrained(
@@ -224,7 +230,7 @@ def get_processor(
                 **kwargs,
             )
         else:
-            raise e
+            raise
     if (
         isinstance(processor, PreTrainedTokenizerBase)
         and getattr(config, "model_type", None) == "pixtral"

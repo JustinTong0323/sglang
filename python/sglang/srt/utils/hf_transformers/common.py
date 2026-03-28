@@ -13,7 +13,6 @@
 # ==============================================================================
 """Shared helpers used by config, tokenizer, and processor modules."""
 
-import contextlib
 import json
 import os
 from pathlib import Path
@@ -100,8 +99,11 @@ _CONFIG_REGISTRY: Dict[str, Type[PretrainedConfig]] = {
 }
 
 for name, cls in _CONFIG_REGISTRY.items():
-    with contextlib.suppress(ValueError):
+    try:
         AutoConfig.register(name, cls)
+    except ValueError as e:
+        if "already registered" not in str(e).lower():
+            logger.warning("Failed to register config %s: %s", name, e)
 
 
 # ---------------------------------------------------------------------------
@@ -153,12 +155,16 @@ def check_gguf_file(model: Union[str, os.PathLike]) -> bool:
 
 
 def get_rope_config(config):
-    """Get (rope_theta, rope_scaling) from config, supporting both v4 and v5.
+    """Get (rope_theta, rope_params) from config, supporting both v4 and v5.
 
-    In transformers v5, rope_theta/rope_scaling are accessed via the computed
-    property config.rope_parameters. Trust-remote-code configs or parent configs
-    passed to sub-models may not have this property or may return None.
-    Falls back to the v4-style config.rope_theta / config.rope_scaling attributes.
+    Trust-remote-code configs or parent configs passed to sub-models may not
+    have the v5 ``rope_parameters`` property, so we fall back to the v4-style
+    ``config.rope_theta`` / ``config.rope_scaling`` attributes.
+
+    Returns:
+        (rope_theta, rope_params): In v5, rope_params is the full
+        rope_parameters dict (which subsumes rope_scaling and includes
+        rope_theta). In v4, rope_params is the rope_scaling dict or None.
     """
     rope_params = getattr(config, "rope_parameters", None)
     if rope_params is not None:
@@ -216,7 +222,10 @@ def get_hf_text_config(config: PretrainedConfig):
         _sub = getattr(config, _attr, None)
         if isinstance(_sub, dict):
             _converted = PretrainedConfig(**_sub)
-            if getattr(_converted, "torch_dtype", None) is None and parent_dtype is not None:
+            if (
+                getattr(_converted, "torch_dtype", None) is None
+                and parent_dtype is not None
+            ):
                 _converted.torch_dtype = parent_dtype
             setattr(config, _attr, _converted)
 
@@ -268,7 +277,7 @@ def _ensure_sub_configs(config: PretrainedConfig, *attr_names: str) -> None:
 
 
 def _is_deepseek_ocr_model(config: PretrainedConfig) -> bool:
-    # TODO: Remove this workaround related when AutoConfig correctly identifies deepseek-ocr.
+    # TODO: Remove this workaround once AutoConfig correctly identifies deepseek-ocr.
     # Hugging Face's AutoConfig currently misidentifies it as deepseekvl2.
     auto_map = getattr(config, "auto_map", None) or {}
     return auto_map.get("AutoModel") == "modeling_deepseekocr.DeepseekOCRForCausalLM"
@@ -329,9 +338,12 @@ def _load_deepseek_v32_model(
     )
 
 
-from .mistral_utils import is_mistral_model as _is_mistral_model
-from .mistral_utils import load_mistral_config as _load_mistral_config
-
+# Deferred imports to avoid circular dependency (mistral_utils imports from .common).
+# Re-exported here so config.py and processor.py can import from .common.
+from .mistral_utils import is_mistral_model as _is_mistral_model  # noqa: E402, F401
+from .mistral_utils import (  # noqa: E402, F401
+    load_mistral_config as _load_mistral_config,
+)
 
 # ---------------------------------------------------------------------------
 # Context length / generation config / sparse attention

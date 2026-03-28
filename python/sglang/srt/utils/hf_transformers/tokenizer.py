@@ -91,14 +91,16 @@ def get_tokenizer(
 
     patch_is_base_mistral_in_ci()
 
+    common_kwargs = dict(
+        trust_remote_code=trust_remote_code,
+        tokenizer_revision=tokenizer_revision,
+        clean_up_tokenization_spaces=False,
+        **kwargs,
+    )
+
     try:
         tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_name,
-            *args,
-            trust_remote_code=trust_remote_code,
-            tokenizer_revision=tokenizer_revision,
-            clean_up_tokenization_spaces=False,
-            **kwargs,
+            tokenizer_name, *args, **common_kwargs
         )
         logging.getLogger(tokenizer.__class__.__module__).addFilter(
             TokenizerWarningsFilter()
@@ -126,7 +128,7 @@ def get_tokenizer(
             )
             raise RuntimeError(err_msg) from e
         else:
-            raise e
+            raise
 
     # Transformers v5 may silently fall back to a generic TokenizersBackend
     # when the model requires a custom tokenizer. Retry with use_fast=False
@@ -137,25 +139,28 @@ def get_tokenizer(
             "retrying with use_fast=False",
             tokenizer_name,
         )
-        tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_name,
-            *args,
-            trust_remote_code=trust_remote_code,
-            tokenizer_revision=tokenizer_revision,
-            clean_up_tokenization_spaces=False,
-            **{**kwargs, "use_fast": False},
-        )
-    if type(tokenizer).__name__ == "TokenizersBackend":
-        if not trust_remote_code:
-            logger.warning(
-                "Tokenizer for %s is still TokenizersBackend. "
-                "Set --trust-remote-code to load the model-specific tokenizer.",
-                tokenizer_name,
+        common_kwargs["use_fast"] = False
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                tokenizer_name, *args, **common_kwargs
             )
-        else:
-            logger.warning(
-                "Tokenizer for %s is still TokenizersBackend after retries. "
-                "Model-specific tokenizer attributes may be missing.",
+        except Exception as e:
+            raise RuntimeError(
+                f"Retry with use_fast=False for {tokenizer_name} also failed "
+                f"(initial load returned TokenizersBackend): {e}"
+            ) from e
+        if type(tokenizer).__name__ == "TokenizersBackend":
+            if trust_remote_code:
+                raise RuntimeError(
+                    f"Tokenizer for {tokenizer_name} is still a generic "
+                    f"TokenizersBackend after retries with trust_remote_code=True. "
+                    f"The model-specific tokenizer could not be loaded."
+                )
+            logger.error(
+                "Tokenizer for %s loaded as generic TokenizersBackend. "
+                "The model-specific tokenizer could not be loaded and "
+                "tokenization may be incorrect. "
+                "Set --trust-remote-code to load the model-specific tokenizer.",
                 tokenizer_name,
             )
 
@@ -199,7 +204,7 @@ def _fix_v5_tokenizer_components(tokenizer, model_name_or_path, revision=None):
         raw = RawTokenizer.from_file(tok_file)
     except OSError:
         return
-    except Exception as e:
+    except (ValueError, RuntimeError) as e:
         logger.warning(
             "_fix_v5_tokenizer_components: unexpected error loading tokenizer.json "
             "for %s, v5 component fix will not be applied: %s",
@@ -264,7 +269,7 @@ def _fix_v5_add_bos_eos_token(tokenizer, model_name_or_path, revision=None):
             config = json.load(f)
     except OSError:
         return
-    except Exception as e:
+    except (json.JSONDecodeError, ValueError) as e:
         logger.warning(
             "_fix_v5_add_bos_eos_token: failed to read tokenizer_config.json "
             "for %s, BOS/EOS token restoration will not be applied: %s",
