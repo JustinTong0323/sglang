@@ -27,6 +27,7 @@ dependencies = [
   "blobfile==3.0.0",
   "build",
   "compressed-tensors",
+  "addict",
   "datasets",
   "easydict",
   "einops",
