@@ -130,39 +130,32 @@ def get_tokenizer(
     # when the model requires a custom tokenizer. Retry with use_fast=False
     # but only escalate trust_remote_code if the caller already opted in.
     if type(tokenizer).__name__ == "TokenizersBackend":
-        _retry_overrides = [{"use_fast": False}]
-        if trust_remote_code:
-            _retry_overrides.insert(0, {})  # already have trust_remote_code
-        for overrides in _retry_overrides:
-            if type(tokenizer).__name__ != "TokenizersBackend":
-                break
+        logger.warning(
+            "Tokenizer loaded as generic TokenizersBackend for %s, "
+            "retrying with use_fast=False",
+            tokenizer_name,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_name,
+            *args,
+            trust_remote_code=trust_remote_code,
+            tokenizer_revision=tokenizer_revision,
+            clean_up_tokenization_spaces=False,
+            **{**kwargs, "use_fast": False},
+        )
+    if type(tokenizer).__name__ == "TokenizersBackend":
+        if not trust_remote_code:
             logger.warning(
-                "Tokenizer loaded as generic TokenizersBackend for %s, "
-                "retrying with %s",
+                "Tokenizer for %s is still TokenizersBackend. "
+                "Set --trust-remote-code to load the model-specific tokenizer.",
                 tokenizer_name,
-                {**kwargs, **overrides},
             )
-            tokenizer = AutoTokenizer.from_pretrained(
+        else:
+            logger.warning(
+                "Tokenizer for %s is still TokenizersBackend after retries. "
+                "Model-specific tokenizer attributes may be missing.",
                 tokenizer_name,
-                *args,
-                trust_remote_code=trust_remote_code,
-                tokenizer_revision=tokenizer_revision,
-                clean_up_tokenization_spaces=False,
-                **{**kwargs, **overrides},
             )
-        if type(tokenizer).__name__ == "TokenizersBackend":
-            if not trust_remote_code:
-                logger.warning(
-                    "Tokenizer for %s is still TokenizersBackend. "
-                    "Set --trust-remote-code to load the model-specific tokenizer.",
-                    tokenizer_name,
-                )
-            else:
-                logger.warning(
-                    "Tokenizer for %s is still TokenizersBackend after retries. "
-                    "Model-specific tokenizer attributes may be missing.",
-                    tokenizer_name,
-                )
 
     _fix_v5_tokenizer_components(tokenizer, tokenizer_name, tokenizer_revision)
     _fix_v5_add_bos_eos_token(tokenizer, tokenizer_name, tokenizer_revision)
