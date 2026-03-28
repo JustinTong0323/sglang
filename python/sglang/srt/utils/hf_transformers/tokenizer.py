@@ -150,19 +150,19 @@ def get_tokenizer(
                 f"(initial load returned TokenizersBackend): {e}"
             ) from e
         if type(tokenizer).__name__ == "TokenizersBackend":
-            if trust_remote_code:
-                raise RuntimeError(
-                    f"Tokenizer for {tokenizer_name} is still a generic "
-                    f"TokenizersBackend after retries with trust_remote_code=True. "
-                    f"The model-specific tokenizer could not be loaded."
+            if not trust_remote_code:
+                logger.warning(
+                    "Tokenizer for %s loaded as generic TokenizersBackend. "
+                    "Set --trust-remote-code to load the model-specific tokenizer.",
+                    tokenizer_name,
                 )
-            logger.error(
-                "Tokenizer for %s loaded as generic TokenizersBackend. "
-                "The model-specific tokenizer could not be loaded and "
-                "tokenization may be incorrect. "
-                "Set --trust-remote-code to load the model-specific tokenizer.",
-                tokenizer_name,
-            )
+            else:
+                logger.warning(
+                    "Tokenizer for %s is still TokenizersBackend after retries "
+                    "with trust_remote_code=True. "
+                    "Model-specific tokenizer attributes may be missing.",
+                    tokenizer_name,
+                )
 
     _fix_v5_tokenizer_components(tokenizer, tokenizer_name, tokenizer_revision)
     _fix_v5_add_bos_eos_token(tokenizer, tokenizer_name, tokenizer_revision)
