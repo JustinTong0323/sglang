@@ -76,8 +76,9 @@ except (ImportError, ModuleNotFoundError):
 # preprocess(). Remote model code that defines preprocess() without **kwargs
 # will crash with TypeError. Patch __call__ to strip unsupported kwargs.
 try:
-    from transformers.image_processing_utils import BaseImageProcessor as _BIP
     import inspect as _inspect
+
+    from transformers.image_processing_utils import BaseImageProcessor as _BIP
 
     _original_bip_call = _BIP.__call__
 
@@ -875,7 +876,7 @@ def get_tokenizer(
     # Transformers v5 may silently fall back to a generic TokenizersBackend
     # when trust_remote_code=False and the model requires a custom tokenizer.
     # Detect this and auto-retry with trust_remote_code=True.
-    if not trust_remote_code and type(tokenizer).__name__ == "TokenizersBackend":
+    if type(tokenizer).__name__ == "TokenizersBackend":
         tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_name,
             *args,
