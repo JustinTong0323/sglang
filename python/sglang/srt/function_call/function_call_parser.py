@@ -199,16 +199,22 @@ class FunctionCallParser:
         """
         # NOTE: structural_tag only supports JSON-compatible content between the begin and end.
         # It cannot parse or validate function call Pythonic or XML-ish syntax.
-        if (
-            self.detector.supports_structural_tag()
-            and tool_choice == "auto"
-            and (
-                any(tool.function.strict for tool in self.tools)
-                or self.tool_strict_level >= ToolStrictLevel.FUNCTION
+        if self.detector.supports_structural_tag():
+            # For "required"/named: always use structural_tag to preserve the
+            # model's native tool call format (with empty schema if not strict).
+            # For "auto": only constrain when strict is enabled.
+            is_required = tool_choice == "required" or isinstance(
+                tool_choice, ToolChoice
             )
-        ):
-            tag = self.get_structure_tag()
-            return ("structural_tag", tag)
+            if is_required or (
+                tool_choice == "auto"
+                and (
+                    any(tool.function.strict for tool in self.tools)
+                    or self.tool_strict_level >= ToolStrictLevel.FUNCTION
+                )
+            ):
+                tag = self.get_structure_tag()
+                return ("structural_tag", tag)
         elif tool_choice == "required" or isinstance(tool_choice, ToolChoice):
             json_schema = get_json_schema_constraint(self.tools, tool_choice)
             return ("json_schema", json_schema)
