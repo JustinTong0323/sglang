@@ -888,7 +888,8 @@ class VisionAttention(nn.Module):
         Priority: server args override > constructor arg > platform default.
 
         Platform defaults:
-        - CUDA: "triton_attn"
+        - CUDA (Hopper SM90): "fa3"
+        - CUDA (other): "fa4"
         - Non-CUDA: "sdpa"
         """
         override_backend = get_global_server_args().mm_attention_backend
@@ -901,7 +902,7 @@ class VisionAttention(nn.Module):
             if major == 9:
                 backend = "fa3"
             else:
-                backend = "triton_attn"
+                backend = "fa4"
         elif _is_hip:
             if get_device_capability() >= (9, 4) and _use_aiter:
                 backend = "aiter_attn"
