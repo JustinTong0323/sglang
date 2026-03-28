@@ -14,7 +14,6 @@
 """Processor loading utilities."""
 
 import json
-import logging
 from pathlib import Path
 from typing import Optional
 
@@ -108,6 +107,33 @@ def _build_processor_manually(
     return proc_cls(**init_kwargs)
 
 
+def _wrap_as_pixtral(processor, config):
+    from transformers.models.pixtral.image_processing_pixtral import (
+        PixtralImageProcessor,
+    )
+    from transformers.models.pixtral.processing_pixtral import (
+        PixtralProcessor as HFPixtralProcessor,
+    )
+
+    vision_config = config.vision_config
+    patch_size = vision_config.patch_size
+    image_size = vision_config.image_size
+    spatial_merge_size = getattr(vision_config, "spatial_merge_size", 1)
+
+    effective_patch = patch_size * spatial_merge_size
+    image_processor = PixtralImageProcessor(
+        do_resize=True,
+        size={"longest_edge": image_size},
+        patch_size={"height": effective_patch, "width": effective_patch},
+    )
+    return HFPixtralProcessor(
+        image_processor=image_processor,
+        tokenizer=processor,
+        patch_size=patch_size,
+        spatial_merge_size=spatial_merge_size,
+    )
+
+
 def get_processor(
     tokenizer_name: str,
     *args,
@@ -131,13 +157,11 @@ def get_processor(
             revision=revision,
             **kwargs,
         )
-    if _is_deepseek_ocr_model(config):
+    if _is_deepseek_ocr_model(config) or _is_deepseek_ocr2_model(config):
         config.model_type = "deepseek-ocr"
         config.update({"architectures": ["DeepseekOCRForCausalLM"]})
-    elif _is_deepseek_ocr2_model(config):
-        config.model_type = "deepseek-ocr"
-        config.update({"architectures": ["DeepseekOCRForCausalLM"]})
-        _override_v_head_dim_if_zero(config)
+        if _is_deepseek_ocr2_model(config):
+            _override_v_head_dim_if_zero(config)
 
     if config.model_type in {"qwen2_vl", "sarashina2_vision"}:
         if "size" not in kwargs:
@@ -201,37 +225,11 @@ def get_processor(
             )
         else:
             raise e
-    # If processor is a bare tokenizer (e.g. Mistral-Small-4 has no processor_config.json)
-    # and the model is a vision model (pixtral), wrap it in a proper PixtralProcessor
-    # so that image data is actually processed through the image processor.
     if (
         isinstance(processor, PreTrainedTokenizerBase)
         and getattr(config, "model_type", None) == "pixtral"
     ):
-        from transformers.models.pixtral.image_processing_pixtral import (
-            PixtralImageProcessor,
-        )
-        from transformers.models.pixtral.processing_pixtral import (
-            PixtralProcessor as HFPixtralProcessor,
-        )
-
-        vision_config = config.vision_config
-        patch_size = vision_config.patch_size
-        image_size = vision_config.image_size
-        spatial_merge_size = getattr(vision_config, "spatial_merge_size", 1)
-
-        effective_patch = patch_size * spatial_merge_size
-        image_processor = PixtralImageProcessor(
-            do_resize=True,
-            size={"longest_edge": image_size},
-            patch_size={"height": effective_patch, "width": effective_patch},
-        )
-        processor = HFPixtralProcessor(
-            image_processor=image_processor,
-            tokenizer=processor,
-            patch_size=patch_size,
-            spatial_merge_size=spatial_merge_size,
-        )
+        processor = _wrap_as_pixtral(processor, config)
 
     tokenizer = get_tokenizer_from_processor(processor)
 

@@ -15,10 +15,9 @@
 
 import contextlib
 import json
-import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, Optional, Type, Union
 
 import torch
 from huggingface_hub import snapshot_download
@@ -67,38 +66,37 @@ from transformers import PretrainedConfig
 # Config registry
 # ---------------------------------------------------------------------------
 
-_CONFIG_REGISTRY: List[Type[PretrainedConfig]] = [
-    AfmoeConfig,
-    BailingHybridConfig,
-    ChatGLMConfig,
-    DbrxConfig,
-    ExaoneConfig,
-    DeepseekVL2Config,
-    MultiModalityConfig,
-    KimiVLConfig,
-    InternVLChatConfig,
-    Step3VLConfig,
-    LongcatFlashConfig,
-    Olmo3Config,
-    KimiLinearConfig,
-    Qwen3NextConfig,
-    FalconH1Config,
-    GraniteMoeHybridConfig,
-    DotsVLMConfig,
-    DotsOCRConfig,
-    NemotronH_Nano_VL_V2_Config,
-    NemotronHConfig,
-    DeepseekVLV2Config,
-    Qwen3_5Config,
-    Qwen3_5MoeConfig,
-    JetNemotronConfig,
-    JetVLMConfig,
-    KimiK25Config,
-    Step3p5Config,
-]
-
-_CONFIG_REGISTRY = {
-    config_cls.model_type: config_cls for config_cls in _CONFIG_REGISTRY
+_CONFIG_REGISTRY: Dict[str, Type[PretrainedConfig]] = {
+    cls.model_type: cls
+    for cls in [
+        AfmoeConfig,
+        BailingHybridConfig,
+        ChatGLMConfig,
+        DbrxConfig,
+        ExaoneConfig,
+        DeepseekVL2Config,
+        MultiModalityConfig,
+        KimiVLConfig,
+        InternVLChatConfig,
+        Step3VLConfig,
+        LongcatFlashConfig,
+        Olmo3Config,
+        KimiLinearConfig,
+        Qwen3NextConfig,
+        FalconH1Config,
+        GraniteMoeHybridConfig,
+        DotsVLMConfig,
+        DotsOCRConfig,
+        NemotronH_Nano_VL_V2_Config,
+        NemotronHConfig,
+        DeepseekVLV2Config,
+        Qwen3_5Config,
+        Qwen3_5MoeConfig,
+        JetNemotronConfig,
+        JetVLMConfig,
+        KimiK25Config,
+        Step3p5Config,
+    ]
 }
 
 for name, cls in _CONFIG_REGISTRY.items():
@@ -213,16 +211,13 @@ def get_hf_text_config(config: PretrainedConfig):
 
     # Some models (e.g. DeepSeek-OCR) store sub-configs as plain dicts.
     # Convert to PretrainedConfig early so hasattr() checks and asserts work.
+    parent_dtype = getattr(config, "torch_dtype", None)
     for _attr in ("text_config", "llm_config", "language_config", "thinker_config"):
         _sub = getattr(config, _attr, None)
         if isinstance(_sub, dict):
             _converted = PretrainedConfig(**_sub)
-            # Propagate torch_dtype from parent so weight loading uses correct precision.
-            if (
-                getattr(_converted, "torch_dtype", None) is None
-                and getattr(config, "torch_dtype", None) is not None
-            ):
-                _converted.torch_dtype = config.torch_dtype
+            if getattr(_converted, "torch_dtype", None) is None and parent_dtype is not None:
+                _converted.torch_dtype = parent_dtype
             setattr(config, _attr, _converted)
 
     # Priority: thinker_config > llm_config > language_config > text_config
@@ -284,32 +279,20 @@ def _is_deepseek_ocr2_model(config: PretrainedConfig) -> bool:
     return auto_map.get("AutoModel") == "modeling_deepseekocr2.DeepseekOCR2ForCausalLM"
 
 
-def _override_deepseek_ocr_v_head_dim(config: DeepseekVLV2Config) -> None:
-    # FIXME: deepseek-ocr's v_head_dim is set to 0 in its config file.
-    # https://huggingface.co/deepseek-ai/DeepSeek-OCR/blob/main/config.json#L116
-    if config.text_config.v_head_dim == 0:
-        V_HEAD_DIM_PATCH = 128
-        config.text_config.v_head_dim = V_HEAD_DIM_PATCH
-        # Also fix language_config so get_hf_text_config (which may prefer it
-        # over text_config) stays consistent.
-        lc = getattr(config, "language_config", None)
-        if isinstance(lc, dict):
-            lc["v_head_dim"] = V_HEAD_DIM_PATCH
-        elif hasattr(lc, "v_head_dim"):
-            lc.v_head_dim = V_HEAD_DIM_PATCH
-        logger.warning(
-            f"Overriding deepseek-ocr's v_head_dim from 0 to {V_HEAD_DIM_PATCH} to avoid potential issues."
-        )
-
-
 def _override_v_head_dim_if_zero(config: PretrainedConfig, patch: int = 128) -> None:
-    text_config = getattr(config, "text_config", None)
-    language_config = getattr(config, "language_config", None)
-    target = text_config or language_config
-    if target is None:
-        return
-    if getattr(target, "v_head_dim", None) == 0:
-        setattr(target, "v_head_dim", patch)
+    patched = False
+    for attr in ("text_config", "language_config"):
+        sub = getattr(config, attr, None)
+        if sub is None:
+            continue
+        if isinstance(sub, dict):
+            if sub.get("v_head_dim") == 0:
+                sub["v_head_dim"] = patch
+                patched = True
+        elif getattr(sub, "v_head_dim", None) == 0:
+            sub.v_head_dim = patch
+            patched = True
+    if patched:
         logger.warning(
             f"Overriding v_head_dim from 0 to {patch} to avoid potential issues."
         )

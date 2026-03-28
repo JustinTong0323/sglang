@@ -330,6 +330,9 @@ def _fix_added_tokens_encoding(tokenizer):
     # Discover special token strings from tokenizer attributes.
     # Model tokenizers (e.g. MiniCPMVTokenizerFast) store them as attributes
     # like im_start="<image>", slice_start="<slice>", etc.
+    def _is_special_token_attr(val):
+        return isinstance(val, str) and val.startswith("<") and val.endswith(">") and len(val) <= 20
+
     candidates = {}
     for attr in dir(tokenizer):
         if attr.startswith("_"):
@@ -338,12 +341,7 @@ def _fix_added_tokens_encoding(tokenizer):
             val = getattr(tokenizer, attr)
         except Exception:
             continue
-        if (
-            not isinstance(val, str)
-            or not val.startswith("<")
-            or not val.endswith(">")
-            or len(val) > 20
-        ):
+        if not _is_special_token_attr(val):
             continue
         token_id = tokenizer.convert_tokens_to_ids(val)
         if token_id is not None and token_id != tokenizer.unk_token_id:
@@ -352,15 +350,16 @@ def _fix_added_tokens_encoding(tokenizer):
     if not candidates:
         return
 
-    # Check which tokens fail to encode as single tokens.
-    broken = []
-    for token_str, expected_id in candidates.items():
+    def _encodes_correctly(token_str, expected_id):
         try:
             ids = tokenizer.encode(token_str, add_special_tokens=False)
-            if len(ids) != 1 or ids[0] != expected_id:
-                broken.append(token_str)
+            return len(ids) == 1 and ids[0] == expected_id
         except Exception:
-            broken.append(token_str)
+            return False
+
+    broken = [
+        tok for tok, eid in candidates.items() if not _encodes_correctly(tok, eid)
+    ]
 
     if not broken:
         return

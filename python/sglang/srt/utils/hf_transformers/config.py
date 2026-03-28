@@ -32,11 +32,20 @@ from .common import (
     _is_mistral_model,
     _load_deepseek_v32_model,
     _load_mistral_config,
-    _override_deepseek_ocr_v_head_dim,
     _override_v_head_dim_if_zero,
     check_gguf_file,
     get_hf_text_config,
 )
+
+
+def _set_architectures(config, arch_name):
+    config.update({"architectures": [arch_name]})
+
+
+def _apply_deepseek_ocr_overrides(config, model):
+    _override_v_head_dim_if_zero(config)
+    _set_architectures(config, "DeepseekOCRForCausalLM")
+    config._name_or_path = model
 
 
 @lru_cache_frozenset(maxsize=32)
@@ -54,9 +63,6 @@ def get_config(
         model = Path(model).parent
 
     if is_remote_url(model):
-        # BaseConnector implements __del__() to clean up the local dir.
-        # Since config files need to exist all the time, so we DO NOT use
-        # with statement to avoid closing the client.
         client = create_remote_connector(model)
         client.pull_files(ignore_pattern=["*.pt", "*.safetensors", "*.bin"])
         model = client.get_local_dir()
@@ -70,18 +76,7 @@ def get_config(
             config = AutoConfig.from_pretrained(
                 model, trust_remote_code=trust_remote_code, revision=revision, **kwargs
             )
-        except ValueError as e:
-            if not "deepseek_v32" in str(e):
-                raise e
-            config = _load_deepseek_v32_model(
-                model, trust_remote_code=trust_remote_code, revision=revision, **kwargs
-            )
-        except KeyError as e:
-            # Transformers v5 may register a built-in config class that
-            # conflicts with sglang's custom one (e.g. NemotronHConfig
-            # doesn't handle '-' in hybrid_override_pattern). Fall back
-            # to loading the raw config dict and using sglang's class.
-            # Also handle deepseek_v32 which v5 doesn't recognize.
+        except (ValueError, KeyError) as e:
             if "deepseek_v32" in str(e):
                 config = _load_deepseek_v32_model(
                     model,
@@ -89,6 +84,8 @@ def get_config(
                     revision=revision,
                     **kwargs,
                 )
+            elif isinstance(e, ValueError):
+                raise
             else:
                 config_dict, _ = PretrainedConfig.get_config_dict(
                     model,
@@ -107,22 +104,17 @@ def get_config(
         config.architectures is not None
         and config.architectures[0] == "Phi4MMForCausalLM"
     ):
-        # Phi4MMForCausalLM uses a hard-coded vision_config. See:
-        # https://github.com/vllm-project/vllm/blob/6071e989df1531b59ef35568f83f7351afb0b51e/vllm/model_executor/models/phi4mm.py#L71
-        # We set it here to support cases where num_attention_heads is not divisible by the TP size.
         from transformers import SiglipVisionConfig
 
-        vision_config = {
-            "hidden_size": 1152,
-            "image_size": 448,
-            "intermediate_size": 4304,
-            "model_type": "siglip_vision_model",
-            "num_attention_heads": 16,
-            "num_hidden_layers": 26,
-            # Model is originally 27-layer, we only need the first 26 layers for feature extraction.
-            "patch_size": 14,
-        }
-        config.vision_config = SiglipVisionConfig(**vision_config)
+        config.vision_config = SiglipVisionConfig(
+            hidden_size=1152,
+            image_size=448,
+            intermediate_size=4304,
+            model_type="siglip_vision_model",
+            num_attention_heads=16,
+            num_hidden_layers=26,
+            patch_size=14,
+        )
 
     if config.architectures in [
         ["LongcatCausalLM"],
@@ -146,28 +138,20 @@ def get_config(
     if _is_deepseek_ocr2_model(config):
         _override_v_head_dim_if_zero(config)
         config.model_type = "deepseek-ocr"
-        config.update({"architectures": ["DeepseekOCRForCausalLM"]})
+        _set_architectures(config, "DeepseekOCRForCausalLM")
         config = DeepseekVLV2Config.from_pretrained(model, revision=revision)
-        _override_v_head_dim_if_zero(config)
-        config.update({"architectures": ["DeepseekOCRForCausalLM"]})
-        setattr(config, "_name_or_path", model)
+        _apply_deepseek_ocr_overrides(config, model)
     elif config.model_type in _CONFIG_REGISTRY:
         model_type = config.model_type
         if model_type == "deepseek_vl_v2":
             if _is_deepseek_ocr_model(config) or _is_deepseek_ocr2_model(config):
                 model_type = "deepseek-ocr"
-        config_class = _CONFIG_REGISTRY[model_type]
-        config = config_class.from_pretrained(model, revision=revision)
+        config = _CONFIG_REGISTRY[model_type].from_pretrained(model, revision=revision)
 
-        if _is_deepseek_ocr_model(config):
-            _override_deepseek_ocr_v_head_dim(config)
-            config.update({"architectures": ["DeepseekOCRForCausalLM"]})
-        elif _is_deepseek_ocr2_model(config):
-            _override_v_head_dim_if_zero(config)
-            config.update({"architectures": ["DeepseekOCRForCausalLM"]})
-
-        # NOTE(HandH1998): Qwen2VL requires `_name_or_path` attribute in `config`.
-        setattr(config, "_name_or_path", model)
+        if _is_deepseek_ocr_model(config) or _is_deepseek_ocr2_model(config):
+            _apply_deepseek_ocr_overrides(config, model)
+        else:
+            config._name_or_path = model
 
     if isinstance(model, str) and config.model_type == "internvl_chat":
         for key, val in config.llm_config.__dict__.items():
@@ -175,19 +159,17 @@ def get_config(
                 setattr(config, key, val)
 
     if config.model_type == "multi_modality":
-        config.update({"architectures": ["MultiModalityCausalLM"]})
+        _set_architectures(config, "MultiModalityCausalLM")
 
     if config.model_type == "longcat_flash":
-        config.update({"architectures": ["LongcatFlashForCausalLM"]})
+        _set_architectures(config, "LongcatFlashForCausalLM")
 
     if model_override_args:
         config.update(model_override_args)
 
-    # Special architecture mapping check for GGUF models
     if is_gguf:
         if config.model_type not in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES:
             raise RuntimeError(f"Can't get gguf config for {config.model_type}.")
-        model_type = MODEL_FOR_CAUSAL_LM_MAPPING_NAMES[config.model_type]
-        config.update({"architectures": [model_type]})
+        _set_architectures(config, MODEL_FOR_CAUSAL_LM_MAPPING_NAMES[config.model_type])
 
     return config
