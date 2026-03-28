@@ -69,9 +69,7 @@ class TestStructuralTagRequired(CustomTestCase):
     def setUpClass(cls):
         import os
 
-        cls.base_url = os.environ.get(
-            "DEFAULT_URL_FOR_TEST", DEFAULT_URL_FOR_TEST
-        )
+        cls.base_url = os.environ.get("DEFAULT_URL_FOR_TEST", DEFAULT_URL_FOR_TEST)
         if not cls.base_url.endswith("/v1"):
             cls.base_url += "/v1"
         cls.api_key = "sk-123456"
@@ -84,9 +82,7 @@ class TestStructuralTagRequired(CustomTestCase):
         """Helper to make a tool call request."""
         response = self.client.chat.completions.create(
             model=self.model_name,
-            messages=[
-                {"role": "user", "content": "What is the weather in Tokyo?"}
-            ],
+            messages=[{"role": "user", "content": "What is the weather in Tokyo?"}],
             tools=get_simple_tools(strict=strict),
             tool_choice=tool_choice,
             stream=stream,
