@@ -273,6 +273,14 @@ def _load_deepseek_v32_model(
     )
 
 
+def _ensure_sub_configs(config: PretrainedConfig, *attr_names: str) -> None:
+    """Convert dict-valued sub-configs to proper AutoConfig objects in-place."""
+    for attr in attr_names:
+        sub = getattr(config, attr, None)
+        if sub is not None and isinstance(sub, dict):
+            setattr(config, attr, AutoConfig.for_model(**sub))
+
+
 # Temporary hack for Mistral Large
 @lru_cache(maxsize=2)
 def _load_mistral_large_3_for_causal_LM(
@@ -292,14 +300,7 @@ def _load_mistral_large_3_for_causal_LM(
         loaded_config = AutoConfig.from_pretrained(
             f.name, trust_remote_code=trust_remote_code, revision=revision
         )
-    text_config = getattr(loaded_config, "text_config", None)
-    if text_config is not None and isinstance(text_config, dict):
-        text_config = AutoConfig.for_model(**text_config)
-        setattr(loaded_config, "text_config", text_config)
-    vision_config = getattr(loaded_config, "vision_config", None)
-    if vision_config is not None and isinstance(vision_config, dict):
-        vision_config = AutoConfig.for_model(**vision_config)
-        setattr(loaded_config, "vision_config", vision_config)
+    _ensure_sub_configs(loaded_config, "text_config", "vision_config")
 
     return loaded_config
 
@@ -451,6 +452,12 @@ def _ensure_gguf_version():
         pass
 
 
+def _is_mistral_model(name) -> bool:
+    """Return True if *name* refers to a Mistral model needing the custom parser."""
+    lower = str(name).lower()
+    return "mistral-large-3" in lower or "mistral-small-4" in lower or "leanstral" in lower
+
+
 @lru_cache_frozenset(maxsize=32)
 def get_config(
     model: str,
@@ -473,11 +480,7 @@ def get_config(
         client.pull_files(ignore_pattern=["*.pt", "*.safetensors", "*.bin"])
         model = client.get_local_dir()
 
-    if (
-        "mistral-large-3" in str(model).lower()
-        or "mistral-small-4" in str(model).lower()
-        or "leanstral" in str(model).lower()
-    ):
+    if _is_mistral_model(model):
         config = _load_mistral_large_3_for_causal_LM(
             model, trust_remote_code=trust_remote_code, revision=revision
         )
@@ -1107,11 +1110,7 @@ def get_processor(
 ):
     # pop 'revision' from kwargs if present.
     revision = kwargs.pop("revision", tokenizer_revision)
-    if (
-        "mistral-large-3" in str(tokenizer_name).lower()
-        or "mistral-small-4" in str(tokenizer_name).lower()
-        or "leanstral" in str(tokenizer_name).lower()
-    ):
+    if _is_mistral_model(tokenizer_name):
         config = _load_mistral_large_3_for_causal_LM(
             tokenizer_name,
             trust_remote_code=trust_remote_code,
