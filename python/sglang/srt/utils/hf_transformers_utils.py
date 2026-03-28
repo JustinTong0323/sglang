@@ -89,10 +89,7 @@ try:
             if "unexpected keyword argument" in str(_e):
                 sig = _inspect.signature(self.preprocess)
                 params = sig.parameters
-                if any(
-                    p.kind == _inspect.Parameter.VAR_KEYWORD
-                    for p in params.values()
-                ):
+                if any(p.kind == _inspect.Parameter.VAR_KEYWORD for p in params.values()):
                     raise
                 valid = {k: v for k, v in kwargs.items() if k in params}
                 return _original_bip_call(self, images, *args, **valid)
@@ -874,16 +871,25 @@ def get_tokenizer(
             raise e
 
     # Transformers v5 may silently fall back to a generic TokenizersBackend
-    # when trust_remote_code=False and the model requires a custom tokenizer.
-    # Detect this and auto-retry with trust_remote_code=True.
+    # when the model requires a custom tokenizer. Retry with trust_remote_code
+    # and/or use_fast=False to load the correct tokenizer class.
     if type(tokenizer).__name__ == "TokenizersBackend":
+        retry_kwargs = {**kwargs, "trust_remote_code": True}
         tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_name,
             *args,
-            trust_remote_code=True,
             tokenizer_revision=tokenizer_revision,
             clean_up_tokenization_spaces=False,
-            **kwargs,
+            **retry_kwargs,
+        )
+    if type(tokenizer).__name__ == "TokenizersBackend":
+        retry_kwargs["use_fast"] = False
+        tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_name,
+            *args,
+            tokenizer_revision=tokenizer_revision,
+            clean_up_tokenization_spaces=False,
+            **retry_kwargs,
         )
 
     _fix_v5_tokenizer_components(tokenizer, tokenizer_name, tokenizer_revision)
