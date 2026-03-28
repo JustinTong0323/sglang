@@ -381,7 +381,15 @@ def get_generation_config(
         return GenerationConfig.from_pretrained(
             model, trust_remote_code=trust_remote_code, revision=revision, **kwargs
         )
+    except FileNotFoundError:
+        return None
     except OSError as e:
+        logger.warning(
+            "Failed to load generation config for %s: %s. "
+            "Proceeding without generation config.",
+            model,
+            e,
+        )
         return None
 
 

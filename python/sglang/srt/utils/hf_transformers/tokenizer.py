@@ -194,9 +194,12 @@ def _fix_v5_tokenizer_components(tokenizer, model_name_or_path, revision=None):
             model_name_or_path, "tokenizer.json", revision
         )
         raw = RawTokenizer.from_file(tok_file)
+    except OSError:
+        return
     except Exception as e:
-        logger.debug(
-            "_fix_v5_tokenizer_components: could not load tokenizer.json for %s: %s",
+        logger.warning(
+            "_fix_v5_tokenizer_components: unexpected error loading tokenizer.json "
+            "for %s, v5 component fix will not be applied: %s",
             model_name_or_path,
             e,
         )
@@ -256,10 +259,12 @@ def _fix_v5_add_bos_eos_token(tokenizer, model_name_or_path, revision=None):
         )
         with open(config_file) as f:
             config = json.load(f)
+    except OSError:
+        return
     except Exception as e:
-        logger.debug(
-            "_fix_v5_add_bos_eos_token: could not read tokenizer_config.json "
-            "for %s: %s",
+        logger.warning(
+            "_fix_v5_add_bos_eos_token: failed to read tokenizer_config.json "
+            "for %s, BOS/EOS token restoration will not be applied: %s",
             model_name_or_path,
             e,
         )

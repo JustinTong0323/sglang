@@ -51,7 +51,7 @@ def apply_all():
         return
     _applied = True
 
-    # v5.4 patches (from transformers_v54_compat.py)
+    # v5.4 patches
     _patch_flash_attn_availability()
     _patch_rope_parameters_validation()
     _patch_removed_symbols()
@@ -190,7 +190,7 @@ def _patch_removed_symbols():
     Removed symbols:
     - ``LlamaFlashAttention2`` -- replaced by unified ``LlamaAttention``
     - ``is_flash_attn_greater_or_equal_2_10`` -- replaced by
-      ``is_flash_attn_greater_or_equal("2.1.0")``
+      ``is_flash_attn_greater_or_equal("2.10.0")``
 
     TODO(upstream): DeepSeek-OCR / deepseek_vl_v2 remote code needs update.
     """
