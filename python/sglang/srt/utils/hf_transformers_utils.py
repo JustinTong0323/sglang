@@ -72,6 +72,35 @@ try:
 except (ImportError, ModuleNotFoundError):
     pass
 
+# Transformers v5.4 passes new kwargs (e.g. `device`) to image processor
+# preprocess(). Remote model code that defines preprocess() without **kwargs
+# will crash with TypeError. Patch __call__ to strip unsupported kwargs.
+try:
+    from transformers.image_processing_utils import BaseImageProcessor as _BIP
+    import inspect as _inspect
+
+    _original_bip_call = _BIP.__call__
+
+    def _safe_bip_call(self, images, *args, **kwargs):
+        try:
+            return _original_bip_call(self, images, *args, **kwargs)
+        except TypeError as _e:
+            if "unexpected keyword argument" in str(_e):
+                sig = _inspect.signature(self.preprocess)
+                params = sig.parameters
+                if any(
+                    p.kind == _inspect.Parameter.VAR_KEYWORD
+                    for p in params.values()
+                ):
+                    raise
+                valid = {k: v for k, v in kwargs.items() if k in params}
+                return _original_bip_call(self, images, *args, **valid)
+            raise
+
+    _BIP.__call__ = _safe_bip_call
+except (ImportError, ModuleNotFoundError):
+    pass
+
 # Conditional import based on SGLANG_USE_MODELSCOPE environment variable
 if get_bool_env_var("SGLANG_USE_MODELSCOPE"):
     from modelscope import AutoConfig, GenerationConfig
