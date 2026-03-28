@@ -53,7 +53,6 @@ from sglang.srt.configs import (
 from sglang.srt.configs.deepseek_ocr import DeepseekVLV2Config
 from sglang.srt.configs.internvl import InternVLChatConfig
 from sglang.srt.utils import get_bool_env_var, logger, lru_cache_frozenset
-from sglang.srt.utils.hf_transformers import mistral_utils
 
 from .compat import normalize_rope_scaling_compat
 
@@ -274,12 +273,6 @@ def _ensure_sub_configs(config: PretrainedConfig, *attr_names: str) -> None:
             setattr(config, attr, AutoConfig.for_model(**sub))
 
 
-def _is_mistral_model(name) -> bool:
-    """Return True if *name* refers to a Mistral model needing the custom parser."""
-    lower = str(name).lower()
-    return "mistral-large-3" in lower or "mistral-small-4" in lower or "leanstral" in lower
-
-
 def _is_deepseek_ocr_model(config: PretrainedConfig) -> bool:
     # TODO: Remove this workaround related when AutoConfig correctly identifies deepseek-ocr.
     # Hugging Face's AutoConfig currently misidentifies it as deepseekvl2.
@@ -357,33 +350,9 @@ def _load_deepseek_v32_model(
     )
 
 
-# Temporary hack for Mistral Large
-from functools import lru_cache
-
-
-@lru_cache(maxsize=2)
-def _load_mistral_large_3_for_causal_LM(
-    model_path: str,
-    trust_remote_code: bool = False,
-    revision: Optional[str] = None,
-):
-    import tempfile
-
-    # first get the local path
-    local_path = download_from_hf(model_path)
-    # then load the config file in json
-    parser = mistral_utils.MistralConfigParser()
-    config_dict, _ = parser.parse(local_path)
-
-    with tempfile.NamedTemporaryFile(mode="w+", suffix=".json") as f:
-        json.dump(config_dict, f)
-        f.flush()
-        loaded_config = AutoConfig.from_pretrained(
-            f.name, trust_remote_code=trust_remote_code, revision=revision
-        )
-    _ensure_sub_configs(loaded_config, "text_config", "vision_config")
-
-    return loaded_config
+# Re-export Mistral helpers from their canonical home for internal use.
+from .mistral_utils import is_mistral_model as _is_mistral_model
+from .mistral_utils import load_mistral_config as _load_mistral_config
 
 
 # ---------------------------------------------------------------------------

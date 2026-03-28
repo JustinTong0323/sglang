@@ -31,7 +31,7 @@ from .common import (
     _is_deepseek_ocr_model,
     _is_mistral_model,
     _load_deepseek_v32_model,
-    _load_mistral_large_3_for_causal_LM,
+    _load_mistral_config,
     _override_deepseek_ocr_v_head_dim,
     _override_v_head_dim_if_zero,
     check_gguf_file,
@@ -62,7 +62,7 @@ def get_config(
         model = client.get_local_dir()
 
     if _is_mistral_model(model):
-        config = _load_mistral_large_3_for_causal_LM(
+        config = _load_mistral_config(
             model, trust_remote_code=trust_remote_code, revision=revision
         )
     else:

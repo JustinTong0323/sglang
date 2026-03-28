@@ -1,10 +1,12 @@
 # Adapted from https://github.com/vllm-project/vllm/blob/main/vllm/transformers_utils/configs/mistral.py
 # SPDX-License-Identifier: Apache-2.0
 import json
+import tempfile
+from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
-from transformers import PretrainedConfig, WhisperConfig
+from transformers import AutoConfig, PretrainedConfig, WhisperConfig
 
 from sglang.srt.utils import logger
 
@@ -321,3 +323,48 @@ class MistralConfigParser:
             config.sliding_window = next(filter(None, sliding_window), None)
 
         return config_dict, config
+
+
+# ---------------------------------------------------------------------------
+# Detection and config loading helpers
+# ---------------------------------------------------------------------------
+
+
+def is_mistral_model(name) -> bool:
+    """Return True if *name* refers to a Mistral model needing the custom parser."""
+    lower = str(name).lower()
+    return (
+        "mistral-large-3" in lower
+        or "mistral-small-4" in lower
+        or "leanstral" in lower
+    )
+
+
+@lru_cache(maxsize=2)
+def load_mistral_config(
+    model_path: str,
+    trust_remote_code: bool = False,
+    revision: Optional[str] = None,
+):
+    """Load and parse a Mistral model config via the custom params.json format.
+
+    Returns a ``PretrainedConfig`` with dict sub-configs (text_config,
+    vision_config) converted to proper AutoConfig objects.
+    """
+    # Import from .common inside function to avoid circular import
+    # (common.py re-exports from this module at module level).
+    from .common import _ensure_sub_configs, download_from_hf
+
+    local_path = download_from_hf(model_path)
+    parser = MistralConfigParser()
+    config_dict, _ = parser.parse(local_path)
+
+    with tempfile.NamedTemporaryFile(mode="w+", suffix=".json") as f:
+        json.dump(config_dict, f)
+        f.flush()
+        loaded_config = AutoConfig.from_pretrained(
+            f.name, trust_remote_code=trust_remote_code, revision=revision
+        )
+    _ensure_sub_configs(loaded_config, "text_config", "vision_config")
+
+    return loaded_config

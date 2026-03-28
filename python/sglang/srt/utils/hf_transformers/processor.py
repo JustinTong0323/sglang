@@ -32,7 +32,7 @@ from .common import (
     _is_deepseek_ocr2_model,
     _is_deepseek_ocr_model,
     _is_mistral_model,
-    _load_mistral_large_3_for_causal_LM,
+    _load_mistral_config,
     _override_v_head_dim_if_zero,
     _resolve_local_or_cached_file,
     attach_additional_stop_token_ids,
@@ -120,7 +120,7 @@ def get_processor(
     # pop 'revision' from kwargs if present.
     revision = kwargs.pop("revision", tokenizer_revision)
     if _is_mistral_model(tokenizer_name):
-        config = _load_mistral_large_3_for_causal_LM(
+        config = _load_mistral_config(
             tokenizer_name,
             trust_remote_code=trust_remote_code,
             revision=revision,
