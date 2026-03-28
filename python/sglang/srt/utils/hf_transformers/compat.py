@@ -136,7 +136,7 @@ def _patch_rope_parameters_validation():
     Fix: patch ``PretrainedConfig.from_dict`` to inject ``rope_theta`` into
     ``rope_scaling`` before ``__init__`` validates.
 
-    TODO(upstream): file issue for rope_parameters validation with unregistered model types
+    TODO(upstream): fixed in https://github.com/huggingface/transformers/pull/45049, remove once released
     """
     from transformers import PretrainedConfig
 
