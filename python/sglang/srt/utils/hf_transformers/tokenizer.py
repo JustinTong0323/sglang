@@ -98,7 +98,6 @@ def get_tokenizer(
             clean_up_tokenization_spaces=False,
             **kwargs,
         )
-        # Filter tokenizer warnings
         logging.getLogger(tokenizer.__class__.__module__).addFilter(
             TokenizerWarningsFilter()
         )

@@ -145,7 +145,6 @@ def get_config(
 
     if _is_deepseek_ocr2_model(config):
         _override_v_head_dim_if_zero(config)
-        # Temporary hack for load deepseek-ocr2
         config.model_type = "deepseek-ocr"
         config.update({"architectures": ["DeepseekOCRForCausalLM"]})
         config = DeepseekVLV2Config.from_pretrained(model, revision=revision)

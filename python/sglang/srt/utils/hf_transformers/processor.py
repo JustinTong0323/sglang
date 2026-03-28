@@ -117,7 +117,6 @@ def get_processor(
     use_fast: Optional[bool] = True,
     **kwargs,
 ):
-    # pop 'revision' from kwargs if present.
     revision = kwargs.pop("revision", tokenizer_revision)
     if _is_mistral_model(tokenizer_name):
         config = _load_mistral_config(
@@ -133,16 +132,13 @@ def get_processor(
             **kwargs,
         )
     if _is_deepseek_ocr_model(config):
-        # Temporary hack for load deepseek-ocr
         config.model_type = "deepseek-ocr"
         config.update({"architectures": ["DeepseekOCRForCausalLM"]})
     elif _is_deepseek_ocr2_model(config):
-        # Temporary hack for load deepseek-ocr2
         config.model_type = "deepseek-ocr"
         config.update({"architectures": ["DeepseekOCRForCausalLM"]})
         _override_v_head_dim_if_zero(config)
 
-    # fix: for Qwen2-VL and Sarashina2Vision models, inject default 'size' if not provided.
     if config.model_type in {"qwen2_vl", "sarashina2_vision"}:
         if "size" not in kwargs:
             kwargs["size"] = {"shortest_edge": 3136, "longest_edge": 1003520}

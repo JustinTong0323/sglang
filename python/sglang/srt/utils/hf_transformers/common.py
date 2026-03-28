@@ -56,7 +56,6 @@ from sglang.srt.utils import get_bool_env_var, logger, lru_cache_frozenset
 
 from .compat import normalize_rope_scaling_compat
 
-# Conditional import based on SGLANG_USE_MODELSCOPE environment variable
 if get_bool_env_var("SGLANG_USE_MODELSCOPE"):
     from modelscope import AutoConfig, GenerationConfig
 else:
@@ -316,7 +315,6 @@ def _override_v_head_dim_if_zero(config: PretrainedConfig, patch: int = 128) -> 
         )
 
 
-# Temporary hack for DeepSeek-V3.2 model
 def _load_deepseek_v32_model(
     model_path: str,
     trust_remote_code: bool = False,
@@ -325,9 +323,7 @@ def _load_deepseek_v32_model(
 ):
     import tempfile
 
-    # first get the local path
     local_path = download_from_hf(model_path)
-    # then load the config file in json
     config_file = os.path.join(local_path, "config.json")
     if not os.path.exists(config_file):
         raise RuntimeError(f"Can't find config file in {local_path}.")
@@ -350,7 +346,6 @@ def _load_deepseek_v32_model(
     )
 
 
-# Re-export Mistral helpers from their canonical home for internal use.
 from .mistral_utils import is_mistral_model as _is_mistral_model
 from .mistral_utils import load_mistral_config as _load_mistral_config
 
@@ -414,14 +409,12 @@ def get_sparse_attention_config(
 ) -> Dict[str, Any]:
     is_local = os.path.isdir(model)
     if not is_local:
-        # Download the config files.
         model = download_from_hf(model, allow_patterns=["*.json"])
 
     config_file = os.path.join(model, sparse_attention_config_filename)
     if not os.path.exists(config_file):
         return {}
 
-    # Load the sparse attention config.
     with open(config_file) as f:
         config = json.load(f)
     return config
@@ -432,7 +425,7 @@ def get_sparse_attention_config(
 # ---------------------------------------------------------------------------
 
 
-# Some models doesn't have an available processor, e.g.: InternVL
+# Some models don't have an available processor, e.g.: InternVL
 def get_tokenizer_from_processor(processor):
     from transformers import PreTrainedTokenizerBase
 

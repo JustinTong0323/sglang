@@ -296,8 +296,6 @@ class MistralConfigParser:
         revision: str | None = None,
         **kwargs,
     ) -> tuple[dict, PretrainedConfig]:
-        # This function loads a params.json config which
-        # should be used when loading models in mistral format
         config_dict = self._download_mistral_config_file(model, revision)
         if config_dict.get("max_position_embeddings") is None:
             logger.warning(
@@ -323,11 +321,6 @@ class MistralConfigParser:
             config.sliding_window = next(filter(None, sliding_window), None)
 
         return config_dict, config
-
-
-# ---------------------------------------------------------------------------
-# Detection and config loading helpers
-# ---------------------------------------------------------------------------
 
 
 def is_mistral_model(name) -> bool:
