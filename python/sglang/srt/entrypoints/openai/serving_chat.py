@@ -1110,7 +1110,7 @@ class OpenAIServingChat(OpenAIServingBase):
         # Try model-specific parser first (handles kimi, deepseek, etc.)
         if self.tool_call_parser:
             parser = FunctionCallParser(tools, self.tool_call_parser)
-            if parser.has_tool_call(text) or is_required:
+            if parser.has_tool_call(text):
                 if finish_reason["type"] == "stop":
                     finish_reason["type"] = "tool_calls"
                     finish_reason["matched"] = None
