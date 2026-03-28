@@ -308,3 +308,46 @@ def _ensure_is_torch_fx_available_compat() -> None:
         return
 
     _import_utils.is_torch_fx_available = lambda: True
+
+
+# ---------------------------------------------------------------------------
+# CI-only patches
+# ---------------------------------------------------------------------------
+
+_is_base_mistral_patched = False
+
+
+def patch_is_base_mistral_in_ci():
+    """Patch transformers' is_base_mistral to avoid HF API calls in CI.
+
+    transformers calls model_info() inside _patch_mistral_regex -> is_base_mistral
+    for every tokenizer load, which hits HF API even with HF_HUB_OFFLINE=1.
+    In CI this exhausts the 3000 req/5min rate limit and causes 429 errors.
+    """
+    global _is_base_mistral_patched
+    if _is_base_mistral_patched:
+        return
+
+    from sglang.srt.environ import envs
+
+    if not envs.SGLANG_IS_IN_CI.get():
+        return
+
+    import transformers
+
+    if transformers.__version__ != "5.4.0":
+        logger.warning(
+            "transformers version changed to %s (expected 5.4.0), "
+            "is_base_mistral patch skipped — may need update if 429 errors recur",
+            transformers.__version__,
+        )
+        _is_base_mistral_patched = True
+        return
+
+    import transformers.tokenization_utils_tokenizers as tut
+
+    if hasattr(tut, "is_base_mistral"):
+        tut.is_base_mistral = lambda *a, **kw: False
+        logger.info("CI: patched is_base_mistral to skip HF API calls")
+
+    _is_base_mistral_patched = True

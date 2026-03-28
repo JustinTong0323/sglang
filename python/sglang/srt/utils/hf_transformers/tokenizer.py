@@ -34,7 +34,7 @@ from .common import (
     attach_additional_stop_token_ids,
     check_gguf_file,
 )
-from .compat import _ensure_gguf_version
+from .compat import _ensure_gguf_version, patch_is_base_mistral_in_ci
 
 # A fast LLaMA tokenizer with the pre-processed `tokenizer.json` file.
 _FAST_LLAMA_TOKENIZER = "hf-internal-testing/llama-tokenizer"
@@ -88,6 +88,8 @@ def get_tokenizer(
         client = create_remote_connector(tokenizer_name)
         client.pull_files(ignore_pattern=["*.pt", "*.safetensors", "*.bin"])
         tokenizer_name = client.get_local_dir()
+
+    patch_is_base_mistral_in_ci()
 
     try:
         tokenizer = AutoTokenizer.from_pretrained(
