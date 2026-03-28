@@ -478,6 +478,7 @@ class Gemma4VisionPooler(nn.Module):
         max_x = clamped_positions[..., 0].max(dim=-1, keepdim=True)[0] + 1
         kernel_idxs = torch.div(clamped_positions, k, rounding_mode="floor")
         kernel_idxs = kernel_idxs[..., 0] + (max_x // k) * kernel_idxs[..., 1]
+
         weights = F.one_hot(kernel_idxs.long(), length).float() / k_squared
         output = weights.transpose(1, 2).to(x.dtype) @ x
         mask = torch.logical_not((weights == 0).all(dim=1))
@@ -534,6 +535,16 @@ class Gemma4VisionEncoder(nn.Module):
         )
         self.pooler = Gemma4VisionPooler(config)
 
+        # Post-pooling standardization (normalizes vision tokens before projection)
+        self.standardize = getattr(config, "standardize", False)
+        if self.standardize:
+            self.register_buffer(
+                "std_bias", torch.zeros(config.hidden_size)
+            )
+            self.register_buffer(
+                "std_scale", torch.ones(config.hidden_size)
+            )
+
     @property
     def device(self) -> torch.device:
         return self.patch_embedder.input_proj.weight.device
@@ -576,4 +587,8 @@ class Gemma4VisionEncoder(nn.Module):
             padding_positions,
             output_length=output_length,
         )
+
+        if self.standardize:
+            pooled = (pooled - self.std_bias) * self.std_scale
+
         return pooled, pooler_mask
