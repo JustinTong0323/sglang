@@ -364,7 +364,8 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                     )
                 pp = all_position_ids[pv_idx]
 
-                # Pre-patchified pixel_values: (num_images, num_patches, patch_pixels)
+                # Vision tower expects 3-D (batch, num_patches, ...).
+                # A single image may arrive as 2-D; add the batch dim if needed.
                 if pv.dim() == 2:
                     pv = pv.unsqueeze(0)
                 if pp.dim() == 2:
@@ -424,12 +425,14 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                     )
                 pp = all_position_ids[pv_idx]
 
-                # pv: (num_frames, num_patches, patch_pixels)
-                # pp: (num_frames, num_patches, 2)
-                if pv.dim() == 2:
-                    pv = pv.unsqueeze(0)
-                if pp.dim() == 2:
-                    pp = pp.unsqueeze(0)
+                # HF processor returns 4-D tensors
+                # (num_videos, num_frames, num_patches, ...) — collapse to
+                # 3-D (num_frames, num_patches, ...) so each frame is a
+                # batch element for the vision tower.
+                if pv.dim() == 4:
+                    pv = pv.reshape(-1, pv.shape[-2], pv.shape[-1])
+                if pp.dim() == 4:
+                    pp = pp.reshape(-1, pp.shape[-2], pp.shape[-1])
 
                 pv = pv.to(device=vt.device, dtype=self.language_model.dtype())
                 pp = pp.to(device=vt.device)
