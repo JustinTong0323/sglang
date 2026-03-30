@@ -245,11 +245,11 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         input_ids: torch.Tensor,
         mask_dtype: torch.dtype,
     ):
-        """Prepare bidirectional attention masks for image/video tokens.
+        """Prepare bidirectional attention masks for image (NO video) tokens.
 
-        Gemma 4 uses bidirectional attention for image and video soft tokens
+        Gemma 4 uses bidirectional attention for image (NO video) soft tokens
         during prefill. Following the HF implementation, bidirectional attention
-        is only enabled within each individual image/video group (same-item
+        is only enabled within each individual image (NO video) group (same-item
         tokens), not across items.
         Currently only the TritonAttnBackend supports this.
 
@@ -283,11 +283,12 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             bidirectional_attn_mask.fill_(1)
             bidirectional_attn_mask = bidirectional_attn_mask.tril(diagonal=prefix_len)
 
-            # Enable bidirectional attention within each image group
+            # HF only enables bidirectional attention for image tokens,
+            # not video or audio (see create_causal_mask_mapping).
             mm_inputs = forward_batch.mm_inputs[i]
             if mm_inputs is not None:
                 for mm_item in mm_inputs.mm_items:
-                    if mm_item.is_image() or mm_item.is_video():
+                    if mm_item.is_image():
                         for im_begin, im_end in mm_item.offsets:
                             # Note(kpham-sgl): We only apply bidirectional attention when the image token span
                             # is fully contained in the extend window. Otherwise, we silently fall back to
@@ -542,10 +543,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         # Gemma 4 uses bidirectional attention for image/video soft tokens.
         # Only TritonAttnBackend supports this; incompatible with CUDA Graph and
         # chunked prefill.
-        if forward_batch.forward_mode == ForwardMode.EXTEND and (
-            forward_batch.contains_image_inputs()
-            or forward_batch.contains_video_inputs()
-        ):
+        if forward_batch.forward_mode == ForwardMode.EXTEND and forward_batch.contains_image_inputs():
             self.prepare_attn_masks(
                 forward_batch,
                 input_ids,
