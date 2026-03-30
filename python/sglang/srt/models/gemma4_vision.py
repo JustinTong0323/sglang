@@ -538,12 +538,8 @@ class Gemma4VisionEncoder(nn.Module):
         # Post-pooling standardization (normalizes vision tokens before projection)
         self.standardize = getattr(config, "standardize", False)
         if self.standardize:
-            self.register_buffer(
-                "std_bias", torch.zeros(config.hidden_size)
-            )
-            self.register_buffer(
-                "std_scale", torch.ones(config.hidden_size)
-            )
+            self.register_buffer("std_bias", torch.zeros(config.hidden_size))
+            self.register_buffer("std_scale", torch.ones(config.hidden_size))
 
     @property
     def device(self) -> torch.device:
