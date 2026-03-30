@@ -496,6 +496,11 @@ class Gemma4VisionPooler(nn.Module):
         """
         if output_length is None:
             raise ValueError("output_length is required for Gemma4VisionPooler")
+        if output_length > hidden_states.shape[1]:
+            raise ValueError(
+                f"Cannot output more soft tokens (requested {output_length}) than there are patches"
+                f" ({hidden_states.shape[1]}). Change the value of `num_soft_tokens` when processing."
+            )
         length = output_length
         if isinstance(length, (list, tuple)):
             length = length[0]

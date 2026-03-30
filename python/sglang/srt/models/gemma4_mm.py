@@ -534,9 +534,10 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         per_layer_inputs = None
         if input_ids is not None:
             ple_ids = input_ids.clone()
-            ple_ids[input_ids == self.config.image_token_id] = 0
-            ple_ids[input_ids == self.config.video_token_id] = 0
-            ple_ids[input_ids == self.config.audio_token_id] = 0
+            pad_id = self.config.text_config.pad_token_id
+            ple_ids[input_ids == self.config.image_token_id] = pad_id
+            ple_ids[input_ids == self.config.video_token_id] = pad_id
+            ple_ids[input_ids == self.config.audio_token_id] = pad_id
             per_layer_inputs = self.get_per_layer_inputs(ple_ids)
 
         # Prepare bidirectional attention masks for image/video tokens during prefill.
