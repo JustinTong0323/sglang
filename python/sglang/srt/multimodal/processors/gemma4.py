@@ -93,10 +93,11 @@ class Gemma4SGLangProcessor(SGLangBaseProcessor):
         *args,
         **kwargs,
     ):
-        """Process multimodal data including images and audio."""
+        """Process multimodal data including images, video, and audio."""
         base_output = self.load_mm_data(
             prompt=input_text,
             image_data=image_data,
+            video_data=request_obj.video_data if request_obj else None,
             audio_data=audio_data,
             multimodal_tokens=self.mm_tokens,
         )
@@ -109,5 +110,6 @@ class Gemma4SGLangProcessor(SGLangBaseProcessor):
             "input_ids": input_ids.tolist(),
             "mm_items": mm_items,
             "im_token_id": self.mm_tokens.image_token_id,
+            "video_token_id": self.mm_tokens.video_token_id,
             "audio_token_id": self.mm_tokens.audio_token_id,
         }
