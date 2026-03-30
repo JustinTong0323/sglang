@@ -101,8 +101,8 @@ class Gemma4MultimodalEmbedder(nn.Module):
             prefix=add_prefix("embedding_projection", prefix),
         )
 
-        self.embedding_post_projection_norm = Gemma4RMSNorm(
-            self.text_hidden_size,
+        self.embedding_pre_projection_norm = Gemma4RMSNorm(
+            embedding_dim,
             eps=self.eps,
             with_scale=False,
         )
@@ -112,8 +112,9 @@ class Gemma4MultimodalEmbedder(nn.Module):
         inputs_embeds: torch.Tensor,
     ) -> torch.Tensor:
         """Project soft tokens from a multimodal tower into LM space."""
-        embs_proj, _ = self.embedding_projection(inputs_embeds)
-        return self.embedding_post_projection_norm(embs_proj)
+        embs_normed = self.embedding_pre_projection_norm(inputs_embeds)
+        embs_proj, _ = self.embedding_projection(embs_normed)
+        return embs_proj
 
 
 class Gemma4ForConditionalGeneration(PreTrainedModel):

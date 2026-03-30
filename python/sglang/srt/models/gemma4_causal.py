@@ -28,7 +28,7 @@ from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
 )
 from sglang.srt.layers.gemma4_fused_ops import gemma_rmsnorm_residual_scalar
-from sglang.srt.layers.layernorm import Gemma4RMSNorm, GemmaRMSNorm, RMSNorm
+from sglang.srt.layers.layernorm import Gemma4RMSNorm, RMSNorm
 from sglang.srt.layers.linear import (
     QKVParallelLinear,
     ReplicatedLinear,
@@ -507,14 +507,14 @@ class Gemma4DecoderLayer(nn.Module):
             prefix=add_prefix("mlp", prefix),
         )
 
-        self.input_layernorm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = GemmaRMSNorm(
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
         )
-        self.pre_feedforward_layernorm = GemmaRMSNorm(
+        self.pre_feedforward_layernorm = RMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
         )
-        self.post_feedforward_layernorm = GemmaRMSNorm(
+        self.post_feedforward_layernorm = RMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
         )
 
@@ -562,13 +562,13 @@ class Gemma4DecoderLayer(nn.Module):
                 prefix=add_prefix("moe", prefix),
             )
 
-            self.post_feedforward_layernorm_1 = GemmaRMSNorm(
+            self.post_feedforward_layernorm_1 = RMSNorm(
                 config.hidden_size, eps=config.rms_norm_eps
             )
-            self.post_feedforward_layernorm_2 = GemmaRMSNorm(
+            self.post_feedforward_layernorm_2 = RMSNorm(
                 config.hidden_size, eps=config.rms_norm_eps
             )
-            self.pre_feedforward_layernorm_2 = GemmaRMSNorm(
+            self.pre_feedforward_layernorm_2 = RMSNorm(
                 config.hidden_size, eps=config.rms_norm_eps
             )
         else:
@@ -740,7 +740,7 @@ class Gemma4TextModel(PreTrainedModel):
             prefix=add_prefix("layers", prefix),
         )
 
-        self.norm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Embedding:

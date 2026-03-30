@@ -651,16 +651,15 @@ class Gemma4RMSNorm(MultiPlatformOp):
         self,
         dim: int,
         eps: float = 1e-6,
-        scale_shift: float = 1.0,
+        scale_shift: float = 0.0,
         with_scale: bool = True,
     ):
         super().__init__()
         self.with_scale = with_scale
 
         if self.with_scale:
-            self.weight = nn.Parameter(torch.zeros(dim))
+            self.weight = nn.Parameter(torch.ones(dim))
         else:
-            # Ones buffer: rmsnorm(x, ones) = norm(x) * 1 = norm(x)
             self.register_buffer("weight", torch.ones(dim), persistent=False)
 
         self.eps = eps

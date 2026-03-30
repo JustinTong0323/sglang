@@ -1,7 +1,7 @@
 """Fused triton kernels for Gemma4 decoder layer operations.
 
-Fuses post-norm + residual-add (+ optional scalar multiply) into a single
-kernel pass to reduce kernel launch overhead.
+Fuses standard RMSNorm + residual-add (+ optional scalar multiply) into
+a single kernel pass to reduce kernel launch overhead.
 """
 
 import torch
@@ -24,7 +24,7 @@ def _gemma_rmsnorm_residual_kernel(
     HAS_SCALAR: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    """Fused kernel: out = gemma_rmsnorm(x, w) + residual [* scalar]
+    """Fused kernel: out = rmsnorm(x, w) + residual [* scalar]
 
     When HAS_SCALAR is True, also multiplies by a scalar loaded from Scalar_ptr.
     """
@@ -40,7 +40,7 @@ def _gemma_rmsnorm_residual_kernel(
 
     var = tl.sum(x * x, axis=0) / N
     rrms = tl.rsqrt(var + eps)
-    out = x * rrms * (1.0 + w) + r
+    out = x * rrms * w + r
 
     if HAS_SCALAR:
         scalar = tl.load(Scalar_ptr).to(tl.float32)
@@ -55,7 +55,7 @@ def gemma_rmsnorm_residual(
     residual: torch.Tensor,
     eps: float = 1e-6,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Fused gemma_rmsnorm(x) + residual.
+    """Fused rmsnorm(x) + residual.
 
     Returns (output, new_residual) where new_residual = output.
     """
@@ -88,7 +88,7 @@ def gemma_rmsnorm_residual_scalar(
     scalar: torch.Tensor,
     eps: float = 1e-6,
 ) -> torch.Tensor:
-    """Fused (gemma_rmsnorm(x) + residual) * scalar."""
+    """Fused (rmsnorm(x) + residual) * scalar."""
     assert x.dim() == 2 and x.stride(-1) == 1, "Expected contiguous 2D input"
     M, N = x.shape
     BLOCK_SIZE = triton.next_power_of_2(N)
