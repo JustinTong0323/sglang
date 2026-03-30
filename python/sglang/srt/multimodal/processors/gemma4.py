@@ -15,6 +15,7 @@
 from typing import Dict, List, Optional, Union
 
 import numpy as np
+import torch
 
 from sglang.srt.managers.multimodal_processor import (
     BaseMultimodalProcessor as SGLangBaseProcessor,
@@ -22,6 +23,7 @@ from sglang.srt.managers.multimodal_processor import (
 from sglang.srt.managers.schedule_batch import Modality
 from sglang.srt.models.gemma4_mm import Gemma4ForConditionalGeneration
 from sglang.srt.multimodal.processors.base_processor import MultimodalSpecialTokens
+from sglang.srt.utils.video_decoder import VideoDecoderWrapper
 
 
 class Gemma4SGLangProcessor(SGLangBaseProcessor):
@@ -66,6 +68,28 @@ class Gemma4SGLangProcessor(SGLangBaseProcessor):
         first_stride = ac.sscp_conv_stride_size[0][0] if ac is not None else 2
         return hop * first_stride
 
+    def _video_decoder_to_tensor(self, vdw: VideoDecoderWrapper) -> torch.Tensor:
+        """Convert a VideoDecoderWrapper to a (sampled_frames, C, H, W) uint8 tensor.
+
+        SGLang's load_video returns VideoDecoderWrapper which the HF
+        Gemma4VideoProcessor does not recognise (expects torch.Tensor or
+        np.ndarray).  We replicate HF's uniform frame sampling here to
+        avoid materialising the entire video in memory, then delegate the
+        rest (resize, patchify, position IDs) to the HF video processor.
+        """
+        total = len(vdw)
+        num_frames = getattr(
+            getattr(self._processor, "video_processor", None),
+            "num_frames",
+            32,
+        )
+        if total <= num_frames:
+            indices = list(range(total))
+        else:
+            indices = torch.arange(0, total, total / num_frames).int().tolist()
+        frames_np = vdw.get_frames_at(indices)  # (N, H, W, C)
+        return torch.from_numpy(frames_np).permute(0, 3, 1, 2).contiguous()
+
     def process_mm_data(
         self, input_text, images=None, videos=None, audios=None, **kwargs
     ):
@@ -79,6 +103,14 @@ class Gemma4SGLangProcessor(SGLangBaseProcessor):
                     a = np.pad(a, (0, pad_multiple - remainder), mode="constant")
                 padded.append(a)
             audios = padded
+        if videos:
+            videos = [
+                self._video_decoder_to_tensor(v)
+                if isinstance(v, VideoDecoderWrapper)
+                else v
+                for v in videos
+            ]
+            kwargs.setdefault("do_sample_frames", False)
         return super().process_mm_data(
             input_text, images=images, videos=videos, audios=audios, **kwargs
         )
