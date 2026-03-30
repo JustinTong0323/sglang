@@ -245,11 +245,12 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         input_ids: torch.Tensor,
         mask_dtype: torch.dtype,
     ):
-        """Prepare bidirectional attention masks for image tokens.
+        """Prepare bidirectional attention masks for image/video tokens.
 
-        Gemma 4 uses bidirectional attention for image soft tokens during prefill.
-        Following the HF implementation, bidirectional attention is only enabled
-        within each individual image group (same-image tokens), not across images.
+        Gemma 4 uses bidirectional attention for image and video soft tokens
+        during prefill. Following the HF implementation, bidirectional attention
+        is only enabled within each individual image/video group (same-item
+        tokens), not across items.
         Currently only the TritonAttnBackend supports this.
 
         TODO(kpham-sgl): Guard appropriately for gemma3_mm.py:prepare_attn_masks()
@@ -286,7 +287,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             mm_inputs = forward_batch.mm_inputs[i]
             if mm_inputs is not None:
                 for mm_item in mm_inputs.mm_items:
-                    if mm_item.is_image():
+                    if mm_item.is_image() or mm_item.is_video():
                         for im_begin, im_end in mm_item.offsets:
                             # Note(kpham-sgl): We only apply bidirectional attention when the image token span
                             # is fully contained in the extend window. Otherwise, we silently fall back to
@@ -392,6 +393,68 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 dtype=self.language_model.dtype(),
             )
 
+    def get_video_feature(self, items: List[MultimodalDataItem]) -> torch.Tensor:
+        """Encode video frames through the vision tower with video-specific pooling.
+
+        Each video is (num_frames, num_patches, patch_pixels) with matching
+        position_ids (num_frames, num_patches, 2).  Frames are flattened into
+        the batch dimension so each frame is encoded independently, then pooled
+        to video_seq_length tokens per frame (vs image_seq_length for images).
+        """
+        vt = self.vision_tower
+        video_seq_length = self.config.vision_config.video_seq_length
+
+        all_embeds = []
+        for item in items:
+            all_pixel_values = flatten_nested_list([item.feature])
+            all_position_ids = flatten_nested_list(
+                [getattr(item, "video_position_ids", None)]
+            )
+
+            for pv_idx, pv in enumerate(all_pixel_values):
+                if (
+                    pv.dim() in (2, 3)
+                    and pv.shape[-1] == self.config.text_config.hidden_size
+                ):
+                    all_embeds.append(pv.to(self.language_model.device))
+                    continue
+
+                if pv_idx >= len(all_position_ids) or all_position_ids[pv_idx] is None:
+                    raise ValueError(
+                        f"pixel_values_videos[{pv_idx}] has no matching video_position_ids."
+                    )
+                pp = all_position_ids[pv_idx]
+
+                # pv: (num_frames, num_patches, patch_pixels)
+                # pp: (num_frames, num_patches, 2)
+                if pv.dim() == 2:
+                    pv = pv.unsqueeze(0)
+                if pp.dim() == 2:
+                    pp = pp.unsqueeze(0)
+
+                pv = pv.to(device=vt.device, dtype=self.language_model.dtype())
+                pp = pp.to(device=vt.device)
+
+                pooled, pooler_mask = vt(pv, pp, output_length=video_seq_length)
+
+                for hs, mask in zip(pooled, pooler_mask):
+                    real_tokens = hs[mask]
+                    all_embeds.append(
+                        self.embed_vision(
+                            inputs_embeds=real_tokens.unsqueeze(0)
+                        ).squeeze(0)
+                    )
+
+        if all_embeds:
+            return torch.cat(all_embeds, dim=0)
+        else:
+            return torch.empty(
+                0,
+                self.language_model.config.hidden_size,
+                device=next(self.parameters()).device,
+                dtype=self.language_model.dtype(),
+            )
+
     def get_audio_feature(self, items: List[MultimodalDataItem]) -> torch.Tensor:
         if self.audio_tower is None:
             raise ValueError(
@@ -472,16 +535,17 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         if input_ids is not None:
             ple_ids = input_ids.clone()
             ple_ids[input_ids == self.config.image_token_id] = 0
+            ple_ids[input_ids == self.config.video_token_id] = 0
             ple_ids[input_ids == self.config.audio_token_id] = 0
             per_layer_inputs = self.get_per_layer_inputs(ple_ids)
 
-        # Prepare bidirectional attention masks for image tokens during prefill.
-        # Gemma 4 uses bidirectional attention for image soft tokens.
+        # Prepare bidirectional attention masks for image/video tokens during prefill.
+        # Gemma 4 uses bidirectional attention for image/video soft tokens.
         # Only TritonAttnBackend supports this; incompatible with CUDA Graph and
         # chunked prefill.
-        if (
-            forward_batch.forward_mode == ForwardMode.EXTEND
-            and forward_batch.contains_image_inputs()
+        if forward_batch.forward_mode == ForwardMode.EXTEND and (
+            forward_batch.contains_image_inputs()
+            or forward_batch.contains_video_inputs()
         ):
             self.prepare_attn_masks(
                 forward_batch,
@@ -496,6 +560,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             language_model=self.language_model,
             data_embedding_funcs={
                 Modality.IMAGE: self.get_image_feature,
+                Modality.VIDEO: self.get_video_feature,
                 Modality.AUDIO: self.get_audio_feature,
             },
             positions=positions,

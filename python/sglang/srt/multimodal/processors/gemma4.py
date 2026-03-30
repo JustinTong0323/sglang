@@ -25,7 +25,7 @@ from sglang.srt.multimodal.processors.base_processor import MultimodalSpecialTok
 
 
 class Gemma4SGLangProcessor(SGLangBaseProcessor):
-    """Multimodal processor for Gemma4 supporting image and audio inputs."""
+    """Multimodal processor for Gemma4 supporting image, video, and audio inputs."""
 
     models = [Gemma4ForConditionalGeneration]
 
@@ -39,13 +39,18 @@ class Gemma4SGLangProcessor(SGLangBaseProcessor):
         self.AUDIO_END_TOKEN_ID = hf_config.eoa_token_id
         self.mm_tokens = MultimodalSpecialTokens(
             image_token_id=hf_config.image_token_id,
+            video_token_id=hf_config.video_token_id,
             audio_token_id=hf_config.audio_token_id,
         ).build(_processor)
 
-        # Register new image-processor outputs so they are stored on
+        # Register image-processor outputs so they are stored on
         # MultimodalDataItem via collect_mm_items_from_processor_output.
         self.ATTR_NAME_TO_MODALITY["image_position_ids"] = Modality.IMAGE
         self.ATTR_NAME_TO_MODALITY["vision_output_length"] = Modality.IMAGE
+
+        # Register video-processor outputs so they are stored on
+        # MultimodalDataItem via collect_mm_items_from_processor_output.
+        self.ATTR_NAME_TO_MODALITY["video_position_ids"] = Modality.VIDEO
 
     def _get_audio_pad_multiple(self) -> int:
         """Derive the waveform padding alignment from processor config.
