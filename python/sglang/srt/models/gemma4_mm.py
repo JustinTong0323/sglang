@@ -344,9 +344,6 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             all_position_ids = flatten_nested_list(
                 [getattr(item, "image_position_ids", None)]
             )
-            vol = getattr(item, "vision_output_length", None)
-            if isinstance(vol, torch.Tensor):
-                vol = vol.item()
 
             for pv_idx, pv in enumerate(all_pixel_values):
                 if (
@@ -374,7 +371,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 pv = pv.to(device=vt.device, dtype=self.language_model.dtype())
                 pp = pp.to(device=vt.device)
 
-                pooled, pooler_mask = vt(pv, pp, output_length=vol)
+                pooled, pooler_mask = vt(pv, pp)
 
                 for hs, mask in zip(pooled, pooler_mask):
                     real_tokens = hs[mask]

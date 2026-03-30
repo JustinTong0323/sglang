@@ -550,7 +550,6 @@ class Gemma4VisionEncoder(nn.Module):
         self,
         pixel_values: torch.Tensor,
         pixel_position_ids: torch.Tensor,
-        output_length: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Encode pre-patchified pixel_values into soft tokens.
 
@@ -559,16 +558,13 @@ class Gemma4VisionEncoder(nn.Module):
                           by the image processor.
             pixel_position_ids: [batch, num_patches, 2] — (x, y) positions,
                                 -1 for padding patches.
-            output_length: target number of output soft tokens. If None,
-                           computed as num_patches // pooling_kernel_size^2.
 
         Returns:
             (hidden_states, pooler_mask) — hidden_states [batch, output_len, hidden],
             pooler_mask [batch, output_len] True = valid.
         """
-        if output_length is None:
-            k2 = self.pooling_kernel_size * self.pooling_kernel_size
-            output_length = pixel_values.shape[-2] // k2
+        k2 = self.pooling_kernel_size * self.pooling_kernel_size
+        output_length = pixel_values.shape[-2] // k2
 
         padding_positions = (pixel_position_ids == -1).all(dim=-1)
 
