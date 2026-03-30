@@ -461,7 +461,6 @@ class Gemma4VisionPooler(nn.Module):
     def __init__(self, config: Gemma4VisionConfig):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.default_output_length = config.image_seq_length
         self.root_hidden_size = self.hidden_size**0.5
 
     def _avg_pool_by_positions(
@@ -495,7 +494,9 @@ class Gemma4VisionPooler(nn.Module):
         Returns:
             (pooled_hidden_states, mask) where mask is True for valid tokens.
         """
-        length = self.default_output_length if output_length is None else output_length
+        if output_length is None:
+            raise ValueError("output_length is required for Gemma4VisionPooler")
+        length = output_length
         if isinstance(length, (list, tuple)):
             length = length[0]
         if hidden_states.shape[1] == length:
@@ -525,7 +526,7 @@ class Gemma4VisionEncoder(nn.Module):
         super().__init__()
         self.config = config
         self.patch_size = config.patch_size
-        self.default_output_length = config.image_seq_length
+        self.pooling_kernel_size = config.pooling_kernel_size
 
         self.patch_embedder = Gemma4VisionPatchEmbedder(config)
         self.encoder = Gemma4VisionTransformer(
@@ -558,13 +559,17 @@ class Gemma4VisionEncoder(nn.Module):
                           by the image processor.
             pixel_position_ids: [batch, num_patches, 2] — (x, y) positions,
                                 -1 for padding patches.
-            output_length: target number of output soft tokens (optional,
-                           defaults to config.default_output_length).
+            output_length: target number of output soft tokens. If None,
+                           computed as num_patches // pooling_kernel_size^2.
 
         Returns:
             (hidden_states, pooler_mask) — hidden_states [batch, output_len, hidden],
             pooler_mask [batch, output_len] True = valid.
         """
+        if output_length is None:
+            k2 = self.pooling_kernel_size * self.pooling_kernel_size
+            output_length = pixel_values.shape[-2] // k2
+
         padding_positions = (pixel_position_ids == -1).all(dim=-1)
 
         inputs_embeds = self.patch_embedder(

@@ -399,10 +399,9 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         Each video is (num_frames, num_patches, patch_pixels) with matching
         position_ids (num_frames, num_patches, 2).  Frames are flattened into
         the batch dimension so each frame is encoded independently, then pooled
-        to video_seq_length tokens per frame (vs image_seq_length for images).
+        dynamically based on the input patch count and pooling_kernel_size.
         """
         vt = self.vision_tower
-        video_seq_length = self.config.vision_config.video_seq_length
 
         all_embeds = []
         for item in items:
@@ -435,7 +434,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 pv = pv.to(device=vt.device, dtype=self.language_model.dtype())
                 pp = pp.to(device=vt.device)
 
-                pooled, pooler_mask = vt(pv, pp, output_length=video_seq_length)
+                pooled, pooler_mask = vt(pv, pp)
 
                 for hs, mask in zip(pooled, pooler_mask):
                     real_tokens = hs[mask]
