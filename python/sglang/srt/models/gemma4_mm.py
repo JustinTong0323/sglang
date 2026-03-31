@@ -544,7 +544,10 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         # Gemma 4 uses bidirectional attention for image/video soft tokens.
         # Only TritonAttnBackend supports this; incompatible with CUDA Graph and
         # chunked prefill.
-        if forward_batch.forward_mode == ForwardMode.EXTEND and forward_batch.contains_image_inputs():
+        if (
+            forward_batch.forward_mode == ForwardMode.EXTEND
+            and forward_batch.contains_image_inputs()
+        ):
             self.prepare_attn_masks(
                 forward_batch,
                 input_ids,

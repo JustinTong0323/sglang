@@ -105,9 +105,11 @@ class Gemma4SGLangProcessor(SGLangBaseProcessor):
             audios = padded
         if videos:
             videos = [
-                self._video_decoder_to_tensor(v)
-                if isinstance(v, VideoDecoderWrapper)
-                else v
+                (
+                    self._video_decoder_to_tensor(v)
+                    if isinstance(v, VideoDecoderWrapper)
+                    else v
+                )
                 for v in videos
             ]
             kwargs.setdefault("do_sample_frames", False)
