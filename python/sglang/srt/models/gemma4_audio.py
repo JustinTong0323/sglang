@@ -53,7 +53,6 @@ from sglang.srt.utils import add_prefix, make_layers, set_weight_attrs
 _SSCP_INPUT_FEAT_SIZE = 128
 _SSCP_CONV_KERNEL_SIZES = ((3, 3), (3, 3))
 _SSCP_CONV_STRIDE_SIZES = ((2, 2), (2, 2))
-_SSCP_CONV_EPS = 0.001
 
 # ---------------------------------------------------------------------------
 # Relative Position Embedding
@@ -240,7 +239,6 @@ class Gemma4AudioAttention(nn.Module):
             prefix=add_prefix("relative_position_embedding", prefix),
         )
         self.per_dim_scale = nn.Parameter(torch.zeros((self.head_dim,)))
-        self.per_dim_key_scale = nn.Parameter(torch.ones((self.head_dim,)))
 
         self.qkv = ClippableQKVParallelLinear(
             hidden_size=self.hidden_size,
@@ -252,10 +250,8 @@ class Gemma4AudioAttention(nn.Module):
             prefix=prefix,
         )
 
-        # softplus(0) = log(2); pre-fold into scale factors
-        r_softplus_0 = 1.0 / math.log(2)
-        self.q_scale = (self.head_dim**-0.5) * r_softplus_0
-        self.k_scale = r_softplus_0
+        self.q_scale = (self.head_dim**-0.5) / math.log(2)
+        self.k_scale = math.log(1 + math.e) / math.log(2)
 
         self.register_buffer(
             "softcap",
@@ -315,10 +311,7 @@ class Gemma4AudioAttention(nn.Module):
             query_states * self.q_scale * per_dim_scale_sp.view(broadcast_shape)
         )
 
-        per_dim_key_scale_sp = F.softplus(self.per_dim_key_scale)
-        key_states = (
-            key_states * self.k_scale * per_dim_key_scale_sp.view(broadcast_shape)
-        )
+        key_states = key_states * self.k_scale
 
         batch_size, q_time = query_states.shape[:2]
 
@@ -437,7 +430,7 @@ class Gemma4AudioSSCPConvBlock(nn.Module):
 
         self.norm = nn.LayerNorm(
             [out_channels],
-            eps=_SSCP_CONV_EPS,
+            eps=config.rms_norm_eps,
             elementwise_affine=True,
             bias=False,
         )
