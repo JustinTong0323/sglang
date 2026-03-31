@@ -245,11 +245,11 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         input_ids: torch.Tensor,
         mask_dtype: torch.dtype,
     ):
-        """Prepare bidirectional attention masks for image (NO video) tokens.
+        """Prepare bidirectional attention masks for image tokens.
 
-        Gemma 4 uses bidirectional attention for image (NO video) soft tokens
+        Gemma 4 uses bidirectional attention for image soft tokens
         during prefill. Following the HF implementation, bidirectional attention
-        is only enabled within each individual image (NO video) group (same-item
+        is only enabled within each individual image group (same-item
         tokens), not across items.
         Currently only the TritonAttnBackend supports this.
 
@@ -540,8 +540,8 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             ple_ids[input_ids == self.config.audio_token_id] = pad_id
             per_layer_inputs = self.get_per_layer_inputs(ple_ids)
 
-        # Prepare bidirectional attention masks for image/video tokens during prefill.
-        # Gemma 4 uses bidirectional attention for image/video soft tokens.
+        # Prepare bidirectional attention masks for image tokens during prefill.
+        # Gemma 4 uses bidirectional attention for image soft tokens.
         # Only TritonAttnBackend supports this; incompatible with CUDA Graph and
         # chunked prefill.
         if (
