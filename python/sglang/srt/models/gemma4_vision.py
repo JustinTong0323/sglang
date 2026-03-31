@@ -55,8 +55,7 @@ class Gemma4VisionRotaryEmbedding(nn.Module):
     def __init__(self, config: Gemma4VisionConfig):
         super().__init__()
         self.head_dim = config.head_dim
-        rope_params = config.rope_parameters.get("full_attention", {})
-        self.rope_theta: float = rope_params.get("rope_theta", 100.0)
+        self.rope_theta: float = config.rope_parameters["rope_theta"]
 
     @torch.no_grad()
     def forward(
