@@ -458,36 +458,48 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, MultiPlatformOp):
             # Skip aiter fused_moe when using non-auto MoE backend (e.g., triton, triton_kernels)
             # because aiter CK kernels don't support all GEMM dimensions
             _should_use_aiter_moe = _use_aiter and get_moe_runner_backend().is_auto()
+            _aiter_moe_succeeded = False
             if _should_use_aiter_moe:
-                assert not moe_runner_config.no_combine, "unsupported"
-                topk_weights, topk_ids, _ = topk_output
-                if moe_runner_config.apply_router_weight_on_input:
-                    assert (
-                        topk_weights.dim() == 2
-                    ), "`topk_weights` should be in shape (num_tokens, topk)"
-                    _, topk = topk_weights.shape
-                    assert (
-                        topk == 1
-                    ), "Only support topk=1 when `apply_router_weight_on_input` is True"
-                    x = x * topk_weights.to(x.dtype)
-                    topk_weights = torch.ones_like(
-                        topk_weights, dtype=torch.float32
-                    )  # topk_weights must be FP32 (float32)
-                output = fused_moe(
-                    x,
-                    layer.w13_weight,
-                    layer.w2_weight,
-                    topk_weights,
-                    topk_ids,
-                    activation=(
-                        ActivationType.Silu
-                        if moe_runner_config.activation == "silu"
-                        else ActivationType.Gelu
-                    ),
-                    expert_mask=layer.expert_mask_gpu,
-                )
-                return StandardCombineInput(hidden_states=output)
-            else:
+                try:
+                    assert not moe_runner_config.no_combine, "unsupported"
+                    topk_weights, topk_ids, _ = topk_output
+                    if moe_runner_config.apply_router_weight_on_input:
+                        assert (
+                            topk_weights.dim() == 2
+                        ), "`topk_weights` should be in shape (num_tokens, topk)"
+                        _, topk = topk_weights.shape
+                        assert (
+                            topk == 1
+                        ), "Only support topk=1 when `apply_router_weight_on_input` is True"
+                        x = x * topk_weights.to(x.dtype)
+                        topk_weights = torch.ones_like(
+                            topk_weights, dtype=torch.float32
+                        )  # topk_weights must be FP32 (float32)
+                    output = fused_moe(
+                        x,
+                        layer.w13_weight,
+                        layer.w2_weight,
+                        topk_weights,
+                        topk_ids,
+                        activation=(
+                            ActivationType.Silu
+                            if moe_runner_config.activation == "silu"
+                            else ActivationType.Gelu
+                        ),
+                        expert_mask=layer.expert_mask_gpu,
+                    )
+                    _aiter_moe_succeeded = True
+                    return StandardCombineInput(hidden_states=output)
+                except RuntimeError as e:
+                    # AITER CK fused_moe may not support all GEMM dimensions
+                    # (e.g. Gemma4 MoE with 128 experts × 704 intermediate size).
+                    # Fall through to Triton MoE runner below.
+                    import logging
+                    logging.getLogger(__name__).warning_once(
+                        f"AITER CK fused_moe failed ({e}), "
+                        "falling back to Triton MoE runner."
+                    )
+            if not _aiter_moe_succeeded:
                 quant_info = TritonMoeQuantInfo(
                     w13_weight=layer.w13_weight,
                     w2_weight=layer.w2_weight,
