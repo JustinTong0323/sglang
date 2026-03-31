@@ -61,8 +61,7 @@ class Gemma4SGLangProcessor(SGLangBaseProcessor):
         """
         fe = getattr(self._processor, "feature_extractor", None)
         hop = getattr(fe, "hop_length", 160)
-        ac = getattr(self.hf_config, "audio_config", None)
-        first_stride = ac.sscp_conv_stride_size[0][0] if ac is not None else 2
+        first_stride = 2  # SSCP first conv stride (constant, not in config)
         return hop * first_stride
 
     def _video_decoder_to_tensor(self, vdw: VideoDecoderWrapper) -> torch.Tensor:

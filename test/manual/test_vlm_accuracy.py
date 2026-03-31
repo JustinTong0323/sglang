@@ -366,7 +366,7 @@ class TestGemma4EncoderAccuracy(unittest.TestCase):
             cls.hf_audio_tower = hf_full.model.audio_tower.eval().to(cls.device)
             cls.hf_embed_audio = hf_full.model.embed_audio.eval().to(cls.device)
             config = AutoConfig.from_pretrained(cls.MODEL_PATH)
-            cls.mel_bins = config.audio_config.input_feat_size
+            cls.mel_bins = 128
 
         del hf_full
         torch.cuda.empty_cache()
@@ -570,7 +570,7 @@ class TestGemma4EncoderAccuracyTP2(unittest.TestCase):
 
         cls.device = torch.device("cuda:0")
         config = AutoConfig.from_pretrained(cls.MODEL_PATH)
-        cls.mel_bins = config.audio_config.input_feat_size
+        cls.mel_bins = 128
 
         # -- HF reference (run on GPU 0, then free) ----------------------------
         from transformers import (
