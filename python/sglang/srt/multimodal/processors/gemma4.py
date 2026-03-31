@@ -21,6 +21,7 @@ from sglang.srt.managers.multimodal_processor import (
     BaseMultimodalProcessor as SGLangBaseProcessor,
 )
 from sglang.srt.managers.schedule_batch import Modality
+from sglang.srt.models.gemma4_audio import _SSCP_CONV_STRIDE_SIZES
 from sglang.srt.models.gemma4_mm import Gemma4ForConditionalGeneration
 from sglang.srt.multimodal.processors.base_processor import MultimodalSpecialTokens
 from sglang.srt.utils.video_decoder import VideoDecoderWrapper
@@ -61,8 +62,7 @@ class Gemma4SGLangProcessor(SGLangBaseProcessor):
         """
         fe = getattr(self._processor, "feature_extractor", None)
         hop = getattr(fe, "hop_length", 160)
-        ac = getattr(self.hf_config, "audio_config", None)
-        first_stride = ac.sscp_conv_stride_size[0][0] if ac is not None else 2
+        first_stride = _SSCP_CONV_STRIDE_SIZES[0][0]
         return hop * first_stride
 
     def _video_decoder_to_tensor(self, vdw: VideoDecoderWrapper) -> torch.Tensor:

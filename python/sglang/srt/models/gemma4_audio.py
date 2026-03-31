@@ -49,6 +49,11 @@ from sglang.srt.layers.linear import (
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.utils import add_prefix, make_layers, set_weight_attrs
 
+# SSCP convolution constants (no longer in config.json, never varied across models)
+_SSCP_INPUT_FEAT_SIZE = 128
+_SSCP_CONV_KERNEL_SIZES = ((3, 3), (3, 3))
+_SSCP_CONV_STRIDE_SIZES = ((2, 2), (2, 2))
+
 # ---------------------------------------------------------------------------
 # Relative Position Embedding
 # ---------------------------------------------------------------------------
@@ -65,12 +70,12 @@ class Gemma4AudioRelativePositionEmbedding(nn.Module):
         self.config = config
 
         tp_size = get_attention_tp_size()
-        total_num_heads = config.conf_num_attention_heads
+        total_num_heads = config.num_attention_heads
         self.channels = config.hidden_size
         self.head_dim = self.channels // total_num_heads
         self.num_heads = total_num_heads // tp_size
-        self.max_backward = max(0, config.conf_attention_context_left - 1)
-        self.max_forward = config.conf_attention_context_right
+        self.max_backward = max(0, config.attention_context_left - 1)
+        self.max_forward = config.attention_context_right
 
         self.pos_proj = ColumnParallelLinear(
             self.channels,
@@ -215,15 +220,15 @@ class Gemma4AudioAttention(nn.Module):
         self.config = config
 
         tp_size = get_attention_tp_size()
-        total_num_heads = config.conf_num_attention_heads
+        total_num_heads = config.num_attention_heads
         self.hidden_size = config.hidden_size
         self.head_dim = self.hidden_size // total_num_heads
         self.num_heads = total_num_heads // tp_size
 
-        self.chunk_size = config.conf_attention_chunk_size
-        self.max_future_horizon = config.conf_attention_context_right
-        self.max_past_horizon = max(0, config.conf_attention_context_left - 1)
-        self.attention_logits_soft_cap = config.conf_attention_logit_cap
+        self.chunk_size = config.attention_chunk_size
+        self.max_future_horizon = config.attention_context_right
+        self.max_past_horizon = max(0, config.attention_context_left - 1)
+        self.attention_logits_soft_cap = config.attention_logit_cap
         self.context_size = (
             self.chunk_size + self.max_past_horizon + self.max_future_horizon
         )
@@ -234,7 +239,6 @@ class Gemma4AudioAttention(nn.Module):
             prefix=add_prefix("relative_position_embedding", prefix),
         )
         self.per_dim_scale = nn.Parameter(torch.zeros((self.head_dim,)))
-        self.per_dim_key_scale = nn.Parameter(torch.ones((self.head_dim,)))
 
         self.qkv = ClippableQKVParallelLinear(
             hidden_size=self.hidden_size,
@@ -246,10 +250,8 @@ class Gemma4AudioAttention(nn.Module):
             prefix=prefix,
         )
 
-        # softplus(0) = log(2); pre-fold into scale factors
-        r_softplus_0 = 1.0 / math.log(2)
-        self.q_scale = (self.head_dim**-0.5) * r_softplus_0
-        self.k_scale = r_softplus_0
+        self.q_scale = (self.head_dim**-0.5) / math.log(2)
+        self.k_scale = math.log(1 + math.e) / math.log(2)
 
         self.register_buffer(
             "softcap",
@@ -309,10 +311,7 @@ class Gemma4AudioAttention(nn.Module):
             query_states * self.q_scale * per_dim_scale_sp.view(broadcast_shape)
         )
 
-        per_dim_key_scale_sp = F.softplus(self.per_dim_key_scale)
-        key_states = (
-            key_states * self.k_scale * per_dim_key_scale_sp.view(broadcast_shape)
-        )
+        key_states = key_states * self.k_scale
 
         batch_size, q_time = query_states.shape[:2]
 
@@ -358,7 +357,7 @@ class Gemma4AudioAttention(nn.Module):
         logits = torch.where(
             final_condition_for_where,
             logits,
-            self.config.conf_attention_invalid_logits_value,
+            self.config.attention_invalid_logits_value,
         )
 
         probabilities = F.softmax(logits, dim=-1, dtype=torch.float32).to(
@@ -401,24 +400,16 @@ class Gemma4AudioSSCPConvBlock(nn.Module):
         super().__init__()
         self.config = config
 
-        in_channels = 1 if idx == 0 else config.sscp_conv_channel_size[idx - 1]
-        out_channels = config.sscp_conv_channel_size[idx]
-        kernel_t, kernel_f = config.sscp_conv_kernel_size[idx]
-        stride_t, stride_f = config.sscp_conv_stride_size[idx]
+        conv_channels = config.subsampling_conv_channels
+        in_channels = 1 if idx == 0 else conv_channels[idx - 1]
+        out_channels = conv_channels[idx]
+        kernel_t, kernel_f = _SSCP_CONV_KERNEL_SIZES[idx]
+        stride_t, stride_f = _SSCP_CONV_STRIDE_SIZES[idx]
         self.time_stride = stride_t
 
-        if (
-            config.sscp_conv_time_pad_top is not None
-            and config.sscp_conv_time_pad_bottom is not None
-        ):
-            pad_t_top = config.sscp_conv_time_pad_top
-            pad_t_bottom = config.sscp_conv_time_pad_bottom
-        elif config.sscp_conv_padding_type == "semicausal":
-            pad_t_top = kernel_t // 2
-            pad_t_bottom = 0 if config.streaming else kernel_t // 2
-        else:
-            pad_t_top = 0
-            pad_t_bottom = 0 if config.streaming else kernel_t - 1
+        # Semicausal padding (hardcoded — streaming is not supported)
+        pad_t_top = kernel_t // 2
+        pad_t_bottom = kernel_t // 2
 
         pad_f_left = 1
         pad_f_right = 1
@@ -439,7 +430,7 @@ class Gemma4AudioSSCPConvBlock(nn.Module):
 
         self.norm = nn.LayerNorm(
             [out_channels],
-            eps=config.sscp_conv_eps,
+            eps=config.rms_norm_eps,
             elementwise_affine=True,
             bias=False,
         )
@@ -476,12 +467,14 @@ class Gemma4AudioSubSampleConvProjection(nn.Module):
         super().__init__()
         self.config = config
 
-        current_f = config.input_feat_size
+        conv_channels = config.subsampling_conv_channels
+
+        current_f = _SSCP_INPUT_FEAT_SIZE
         calculated_f_out_dims = []
 
         for i in range(2):
-            kernel_h, kernel_w = config.sscp_conv_kernel_size[i]
-            stride_h, stride_w = config.sscp_conv_stride_size[i]
+            kernel_h, kernel_w = _SSCP_CONV_KERNEL_SIZES[i]
+            stride_h, stride_w = _SSCP_CONV_STRIDE_SIZES[i]
 
             pad_f_left = 1
             pad_f_right = 1
@@ -492,7 +485,7 @@ class Gemma4AudioSubSampleConvProjection(nn.Module):
 
         self.conv_0 = Gemma4AudioSSCPConvBlock(
             idx=0,
-            input_freq_dim=config.input_feat_size,
+            input_freq_dim=_SSCP_INPUT_FEAT_SIZE,
             config=config,
         )
         self.conv_1 = Gemma4AudioSSCPConvBlock(
@@ -501,7 +494,7 @@ class Gemma4AudioSubSampleConvProjection(nn.Module):
             config=config,
         )
 
-        final_c_out = config.sscp_conv_channel_size[-1]
+        final_c_out = conv_channels[-1]
         final_f_out = calculated_f_out_dims[-1]
         self.input_proj_in_features = final_c_out * final_f_out
 
@@ -621,7 +614,7 @@ class Gemma4AudioConformerFeedForward(nn.Module):
             prefix=add_prefix("ffw_layer_2", prefix),
         )
         self.post_layer_norm = Gemma4RMSNorm(config.hidden_size, scale_shift=0.0)
-        self.post_layer_scale = config.conf_residual_weight
+        self.post_layer_scale = config.residual_weight
 
     def forward(self, audio_encodings: torch.Tensor) -> torch.Tensor:
         residual = audio_encodings
@@ -648,7 +641,7 @@ class Gemma4AudioConformerLightConv1d(nn.Module):
     ):
         super().__init__()
         self.config = config
-        self.causal_padding = config.conf_conv_kernel_size - 1
+        self.causal_padding = config.conv_kernel_size - 1
         tp_size = get_attention_tp_size()
         hidden_per_tp = config.hidden_size // tp_size
 
@@ -671,7 +664,7 @@ class Gemma4AudioConformerLightConv1d(nn.Module):
         self.depthwise_conv1d = nn.Conv1d(
             in_channels=hidden_per_tp,
             out_channels=hidden_per_tp,
-            kernel_size=config.conf_conv_kernel_size,
+            kernel_size=config.conv_kernel_size,
             stride=1,
             padding=0,
             groups=hidden_per_tp,
@@ -794,7 +787,7 @@ class Gemma4AudioEncoder(nn.Module):
             config, quant_config, prefix=add_prefix("subsample_conv_projection", prefix)
         )
         self.conformer = make_layers(
-            config.conf_num_hidden_layers,
+            config.num_hidden_layers,
             lambda idx, prefix: Gemma4AudioConformerBlock(
                 config=config,
                 quant_config=quant_config,
@@ -837,9 +830,9 @@ class Gemma4AudioEncoder(nn.Module):
         )
 
         with torch.no_grad():
-            chunk_size = self.config.conf_attention_chunk_size
-            max_future_horizon = self.config.conf_attention_context_right
-            max_past_horizon = max(0, self.config.conf_attention_context_left - 1)
+            chunk_size = self.config.attention_chunk_size
+            max_future_horizon = self.config.attention_context_right
+            max_past_horizon = max(0, self.config.attention_context_left - 1)
             upper_diagonal = max_past_horizon + max_future_horizon
             context_size = chunk_size + max_past_horizon + max_future_horizon
 
@@ -860,10 +853,6 @@ class Gemma4AudioEncoder(nn.Module):
 
         for block in self.conformer:
             audio_encodings = block(audio_encodings, current_mask, causal_valid_mask)
-
-        if self.config.conf_reduction_factor > 1:
-            audio_encodings = audio_encodings[:, :: self.config.conf_reduction_factor]
-            current_mask = current_mask[:, :: self.config.conf_reduction_factor]
 
         if self.output_proj is not None:
             audio_encodings, _ = self.output_proj(audio_encodings)

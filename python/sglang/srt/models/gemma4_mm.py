@@ -596,6 +596,56 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
     # Regex for fused GateUp in the vision tower MLP.
     _RE_TOWER_GATE_UP = re.compile(r"(.+\.mlp)\.(gate_proj|up_proj)\.(.*)")
 
+    _RE_AUDIO_LAYER = re.compile(r"(audio_tower)\.layers\.(\d+)\.(.*)")
+
+    @staticmethod
+    def _remap_audio_tower_name(name: str) -> str:
+        """Remap audio tower checkpoint names to our module tree.
+
+        Checkpoint naming (``layers``, ``self_attn``, ``feed_forward1/2``, etc.)
+        differs from our module tree (``conformer``, ``attention.attn``,
+        ``ffw_layer_start/end``, etc.).  Applied before ``_remap_tower_name``.
+        """
+        if "audio_tower." not in name:
+            return name
+
+        # SSCP conv block: layer0/layer1 → conv_0/conv_1
+        name = name.replace(
+            "subsample_conv_projection.layer0.",
+            "subsample_conv_projection.conv_0.",
+        )
+        name = name.replace(
+            "subsample_conv_projection.layer1.",
+            "subsample_conv_projection.conv_1.",
+        )
+
+        # Conformer layers: audio_tower.layers.{i} → audio_tower.conformer.{i}
+        m = Gemma4ForConditionalGeneration._RE_AUDIO_LAYER.match(name)
+        if m:
+            tower, layer_idx, suffix = m.groups()
+
+            # Order matters: more specific patterns first.
+            # relative_k_proj → relative_position_embedding.pos_proj
+            suffix = suffix.replace(
+                "self_attn.relative_k_proj.",
+                "attention.attn.relative_position_embedding.pos_proj.",
+            )
+            # self_attn.post → attention.post (the output projection)
+            suffix = suffix.replace("self_attn.post.", "attention.post.")
+            # general self_attn → attention.attn
+            suffix = suffix.replace("self_attn.", "attention.attn.")
+            # norms
+            suffix = suffix.replace("norm_pre_attn.", "attention.pre_attn_norm.")
+            suffix = suffix.replace("norm_post_attn.", "attention.post_norm.")
+            suffix = suffix.replace("norm_out.", "norm.")
+            # feed-forward blocks
+            suffix = suffix.replace("feed_forward1.", "ffw_layer_start.")
+            suffix = suffix.replace("feed_forward2.", "ffw_layer_end.")
+
+            name = f"{tower}.conformer.{layer_idx}.{suffix}"
+
+        return name
+
     @staticmethod
     def _remap_tower_name(name: str, params_dict: dict) -> str:
         """Remap a vision/audio tower checkpoint name to our module tree.
@@ -698,6 +748,10 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 and "per_expert_scale" not in name
             ):
                 name = name.replace(".moe.", ".moe.experts.")
+
+            # Remap audio tower checkpoint names to our module tree
+            if "audio_tower." in name:
+                name = self._remap_audio_tower_name(name)
 
             # Remap vision / audio tower names (fused QKV/GateUp, clippable wrappers)
             if "vision_tower." in name or "audio_tower." in name:
