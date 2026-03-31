@@ -55,8 +55,7 @@ class Gemma4VisionRotaryEmbedding(nn.Module):
     def __init__(self, config: Gemma4VisionConfig):
         super().__init__()
         self.head_dim = config.head_dim
-        rope_params = config.rope_parameters.get("full_attention", {})
-        self.rope_theta: float = rope_params.get("rope_theta", 100.0)
+        self.rope_theta: float = config.rope_parameters["rope_theta"]
 
     @torch.no_grad()
     def forward(
@@ -461,7 +460,6 @@ class Gemma4VisionPooler(nn.Module):
     def __init__(self, config: Gemma4VisionConfig):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.default_output_length = config.image_seq_length
         self.root_hidden_size = self.hidden_size**0.5
 
     def _avg_pool_by_positions(
@@ -495,7 +493,14 @@ class Gemma4VisionPooler(nn.Module):
         Returns:
             (pooled_hidden_states, mask) where mask is True for valid tokens.
         """
-        length = self.default_output_length if output_length is None else output_length
+        if output_length is None:
+            raise ValueError("output_length is required for Gemma4VisionPooler")
+        if output_length > hidden_states.shape[1]:
+            raise ValueError(
+                f"Cannot output more soft tokens (requested {output_length}) than there are patches"
+                f" ({hidden_states.shape[1]}). Change the value of `num_soft_tokens` when processing."
+            )
+        length = output_length
         if isinstance(length, (list, tuple)):
             length = length[0]
         if hidden_states.shape[1] == length:
@@ -525,7 +530,7 @@ class Gemma4VisionEncoder(nn.Module):
         super().__init__()
         self.config = config
         self.patch_size = config.patch_size
-        self.default_output_length = config.image_seq_length
+        self.pooling_kernel_size = config.pooling_kernel_size
 
         self.patch_embedder = Gemma4VisionPatchEmbedder(config)
         self.encoder = Gemma4VisionTransformer(
@@ -549,7 +554,6 @@ class Gemma4VisionEncoder(nn.Module):
         self,
         pixel_values: torch.Tensor,
         pixel_position_ids: torch.Tensor,
-        output_length: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Encode pre-patchified pixel_values into soft tokens.
 
@@ -558,13 +562,14 @@ class Gemma4VisionEncoder(nn.Module):
                           by the image processor.
             pixel_position_ids: [batch, num_patches, 2] — (x, y) positions,
                                 -1 for padding patches.
-            output_length: target number of output soft tokens (optional,
-                           defaults to config.default_output_length).
 
         Returns:
             (hidden_states, pooler_mask) — hidden_states [batch, output_len, hidden],
             pooler_mask [batch, output_len] True = valid.
         """
+        k2 = self.pooling_kernel_size * self.pooling_kernel_size
+        output_length = pixel_values.shape[-2] // k2
+
         padding_positions = (pixel_position_ids == -1).all(dim=-1)
 
         inputs_embeds = self.patch_embedder(

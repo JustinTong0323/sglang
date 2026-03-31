@@ -247,9 +247,10 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
     ):
         """Prepare bidirectional attention masks for image tokens.
 
-        Gemma 4 uses bidirectional attention for image soft tokens during prefill.
-        Following the HF implementation, bidirectional attention is only enabled
-        within each individual image group (same-image tokens), not across images.
+        Gemma 4 uses bidirectional attention for image soft tokens
+        during prefill. Following the HF implementation, bidirectional attention
+        is only enabled within each individual image group (same-item
+        tokens), not across items.
         Currently only the TritonAttnBackend supports this.
 
         TODO(kpham-sgl): Guard appropriately for gemma3_mm.py:prepare_attn_masks()
@@ -282,7 +283,8 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             bidirectional_attn_mask.fill_(1)
             bidirectional_attn_mask = bidirectional_attn_mask.tril(diagonal=prefix_len)
 
-            # Enable bidirectional attention within each image group
+            # HF only enables bidirectional attention for image tokens,
+            # not video or audio (see create_causal_mask_mapping).
             mm_inputs = forward_batch.mm_inputs[i]
             if mm_inputs is not None:
                 for mm_item in mm_inputs.mm_items:
@@ -343,9 +345,6 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             all_position_ids = flatten_nested_list(
                 [getattr(item, "image_position_ids", None)]
             )
-            vol = getattr(item, "vision_output_length", None)
-            if isinstance(vol, torch.Tensor):
-                vol = vol.item()
 
             for pv_idx, pv in enumerate(all_pixel_values):
                 if (
@@ -363,7 +362,8 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                     )
                 pp = all_position_ids[pv_idx]
 
-                # Pre-patchified pixel_values: (num_images, num_patches, patch_pixels)
+                # Vision tower expects 3-D (batch, num_patches, ...).
+                # A single image may arrive as 2-D; add the batch dim if needed.
                 if pv.dim() == 2:
                     pv = pv.unsqueeze(0)
                 if pp.dim() == 2:
@@ -372,7 +372,70 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
                 pv = pv.to(device=vt.device, dtype=self.language_model.dtype())
                 pp = pp.to(device=vt.device)
 
-                pooled, pooler_mask = vt(pv, pp, output_length=vol)
+                pooled, pooler_mask = vt(pv, pp)
+
+                for hs, mask in zip(pooled, pooler_mask):
+                    real_tokens = hs[mask]
+                    all_embeds.append(
+                        self.embed_vision(
+                            inputs_embeds=real_tokens.unsqueeze(0)
+                        ).squeeze(0)
+                    )
+
+        if all_embeds:
+            return torch.cat(all_embeds, dim=0)
+        else:
+            return torch.empty(
+                0,
+                self.language_model.config.hidden_size,
+                device=next(self.parameters()).device,
+                dtype=self.language_model.dtype(),
+            )
+
+    def get_video_feature(self, items: List[MultimodalDataItem]) -> torch.Tensor:
+        """Encode video frames through the vision tower with video-specific pooling.
+
+        Each video is (num_frames, num_patches, patch_pixels) with matching
+        position_ids (num_frames, num_patches, 2).  Frames are flattened into
+        the batch dimension so each frame is encoded independently, then pooled
+        dynamically based on the input patch count and pooling_kernel_size.
+        """
+        vt = self.vision_tower
+
+        all_embeds = []
+        for item in items:
+            all_pixel_values = flatten_nested_list([item.feature])
+            all_position_ids = flatten_nested_list(
+                [getattr(item, "video_position_ids", None)]
+            )
+
+            for pv_idx, pv in enumerate(all_pixel_values):
+                if (
+                    pv.dim() in (2, 3)
+                    and pv.shape[-1] == self.config.text_config.hidden_size
+                ):
+                    all_embeds.append(pv.to(self.language_model.device))
+                    continue
+
+                if pv_idx >= len(all_position_ids) or all_position_ids[pv_idx] is None:
+                    raise ValueError(
+                        f"pixel_values_videos[{pv_idx}] has no matching video_position_ids."
+                    )
+                pp = all_position_ids[pv_idx]
+
+                # HF processor returns 4-D tensors
+                # (num_videos, num_frames, num_patches, ...) — collapse to
+                # 3-D (num_frames, num_patches, ...) so each frame is a
+                # batch element for the vision tower.
+                if pv.dim() == 4:
+                    pv = pv.reshape(-1, pv.shape[-2], pv.shape[-1])
+                if pp.dim() == 4:
+                    pp = pp.reshape(-1, pp.shape[-2], pp.shape[-1])
+
+                pv = pv.to(device=vt.device, dtype=self.language_model.dtype())
+                pp = pp.to(device=vt.device)
+
+                pooled, pooler_mask = vt(pv, pp)
 
                 for hs, mask in zip(pooled, pooler_mask):
                     real_tokens = hs[mask]
@@ -471,8 +534,10 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
         per_layer_inputs = None
         if input_ids is not None:
             ple_ids = input_ids.clone()
-            ple_ids[input_ids == self.config.image_token_id] = 0
-            ple_ids[input_ids == self.config.audio_token_id] = 0
+            pad_id = self.config.text_config.pad_token_id
+            ple_ids[input_ids == self.config.image_token_id] = pad_id
+            ple_ids[input_ids == self.config.video_token_id] = pad_id
+            ple_ids[input_ids == self.config.audio_token_id] = pad_id
             per_layer_inputs = self.get_per_layer_inputs(ple_ids)
 
         # Prepare bidirectional attention masks for image tokens during prefill.
@@ -496,6 +561,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             language_model=self.language_model,
             data_embedding_funcs={
                 Modality.IMAGE: self.get_image_feature,
+                Modality.VIDEO: self.get_video_feature,
                 Modality.AUDIO: self.get_audio_feature,
             },
             positions=positions,

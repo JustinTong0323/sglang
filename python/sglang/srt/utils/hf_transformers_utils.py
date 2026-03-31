@@ -644,6 +644,7 @@ def get_config(
         if not hasattr(text_config, "swa_v_head_dim"):
             text_config.swa_v_head_dim = text_config.swa_head_dim
 
+
     if config.model_type == "longcat_flash":
         config.update({"architectures": ["LongcatFlashForCausalLM"]})
 
