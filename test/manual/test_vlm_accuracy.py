@@ -329,6 +329,28 @@ class TestMiniCPMV4Logits(VisionLLMLogitsBase):
 # ---------------------------------------------------------------------------
 
 
+def _make_patchified_vision_inputs(
+    device: torch.device,
+    dtype: torch.dtype = torch.bfloat16,
+    side_patches: int = 48,
+    patch_size: int = 16,
+) -> tuple:
+    """Create synthetic patchified vision inputs matching the HF image-processor format.
+
+    Returns (pixel_values, pixel_position_ids) with no padding.
+    """
+    num_patches = side_patches * side_patches
+    patch_pixels = 3 * patch_size**2
+    pixel_values = torch.randn(1, num_patches, patch_pixels, device=device, dtype=dtype)
+    ys, xs = torch.meshgrid(
+        torch.arange(side_patches), torch.arange(side_patches), indexing="ij"
+    )
+    pixel_position_ids = (
+        torch.stack([xs.flatten(), ys.flatten()], dim=-1).unsqueeze(0).to(device)
+    )
+    return pixel_values, pixel_position_ids
+
+
 class TestGemma4EncoderAccuracy(unittest.TestCase):
     """Compare Gemma 4 vision and audio encoder outputs between HF and SGLang.
 
@@ -410,19 +432,19 @@ class TestGemma4EncoderAccuracy(unittest.TestCase):
     # -- vision ---------------------------------------------------------------
 
     def test_vision_encoder(self):
-        """Vision tower + embed_vision should match HF on random pixels."""
-        pixel_values = torch.randn(
-            1, 3, 768, 768, device=self.device, dtype=torch.bfloat16
-        )
+        """Vision tower + embed_vision should match HF on patchified pixels."""
+        pixel_values, pixel_position_ids = _make_patchified_vision_inputs(self.device)
 
         with torch.no_grad():
-            # HF: last_hidden_state is [1, num_real_tokens, hidden] (padding stripped)
-            hf_out = self.hf_vision_tower(pixel_values)
-            hf_tokens = hf_out.last_hidden_state.squeeze(0)
+            # HF: last_hidden_state contains only valid (non-padding) tokens
+            hf_out = self.hf_vision_tower(pixel_values, pixel_position_ids)
+            hf_tokens = hf_out.last_hidden_state
             hf_projected = self.hf_embed_vision(hf_tokens.unsqueeze(0)).squeeze(0)
 
             # SGLang: returns (pooled, pooler_mask) with mask True = valid
-            sg_pooled, sg_mask = self.sg_model.vision_tower(pixel_values)
+            sg_pooled, sg_mask = self.sg_model.vision_tower(
+                pixel_values, pixel_position_ids
+            )
             sg_tokens = torch.cat([hs[m] for hs, m in zip(sg_pooled, sg_mask)])
             sg_projected = self.sg_model.embed_vision(sg_tokens.unsqueeze(0)).squeeze(0)
 
@@ -524,7 +546,7 @@ def _tp2_encoder_worker(
         1, num_frames, mel_bins, device=device, dtype=torch.bfloat16
     )
     audio_mel_mask = torch.zeros(1, num_frames, device=device, dtype=torch.bool)
-    pixel_values = torch.randn(1, 3, 768, 768, device=device, dtype=torch.bfloat16)
+    pixel_values, pixel_position_ids = _make_patchified_vision_inputs(device)
 
     with torch.no_grad():
         # Audio
@@ -536,7 +558,9 @@ def _tp2_encoder_worker(
         sg_audio_proj = sg_model.embed_audio(sg_audio_valid.unsqueeze(0)).squeeze(0)
 
         # Vision
-        sg_vis_pooled, sg_vis_mask = sg_model.vision_tower(pixel_values)
+        sg_vis_pooled, sg_vis_mask = sg_model.vision_tower(
+            pixel_values, pixel_position_ids
+        )
         sg_vis_tokens = torch.cat([hs[m] for hs, m in zip(sg_vis_pooled, sg_vis_mask)])
         sg_vis_proj = sg_model.embed_vision(sg_vis_tokens.unsqueeze(0)).squeeze(0)
 
@@ -597,9 +621,7 @@ class TestGemma4EncoderAccuracyTP2(unittest.TestCase):
         audio_mel_mask = torch.zeros(
             1, cls.NUM_FRAMES, device=cls.device, dtype=torch.bool
         )
-        pixel_values = torch.randn(
-            1, 3, 768, 768, device=cls.device, dtype=torch.bfloat16
-        )
+        pixel_values, pixel_position_ids = _make_patchified_vision_inputs(cls.device)
 
         with torch.no_grad():
             # HF attention_mask: True=valid; SGLang audio_mel_mask: True=padding
@@ -618,8 +640,8 @@ class TestGemma4EncoderAccuracyTP2(unittest.TestCase):
                 .cpu()
             )
 
-            hf_vis_out = hf_vision_tower(pixel_values)
-            cls.hf_vis_tokens = hf_vis_out.last_hidden_state.squeeze(0).cpu()
+            hf_vis_out = hf_vision_tower(pixel_values, pixel_position_ids)
+            cls.hf_vis_tokens = hf_vis_out.last_hidden_state.cpu()
             cls.hf_vis_proj = (
                 hf_embed_vision(cls.hf_vis_tokens.unsqueeze(0).to(cls.device))
                 .squeeze(0)
