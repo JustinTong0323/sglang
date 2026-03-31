@@ -341,9 +341,7 @@ def _make_patchified_vision_inputs(
     """
     num_patches = side_patches * side_patches
     patch_pixels = 3 * patch_size**2
-    pixel_values = torch.randn(
-        1, num_patches, patch_pixels, device=device, dtype=dtype
-    )
+    pixel_values = torch.randn(1, num_patches, patch_pixels, device=device, dtype=dtype)
     ys, xs = torch.meshgrid(
         torch.arange(side_patches), torch.arange(side_patches), indexing="ij"
     )
@@ -435,9 +433,7 @@ class TestGemma4EncoderAccuracy(unittest.TestCase):
 
     def test_vision_encoder(self):
         """Vision tower + embed_vision should match HF on patchified pixels."""
-        pixel_values, pixel_position_ids = _make_patchified_vision_inputs(
-            self.device
-        )
+        pixel_values, pixel_position_ids = _make_patchified_vision_inputs(self.device)
 
         with torch.no_grad():
             # HF: last_hidden_state contains only valid (non-padding) tokens
