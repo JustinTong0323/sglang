@@ -239,6 +239,27 @@ def get_processor(
 
     tokenizer = get_tokenizer_from_processor(processor)
 
+    # AutoProcessor may internally create a TokenizersBackend tokenizer
+    # (same issue as get_tokenizer). Replace it with a properly loaded one.
+    if type(tokenizer).__name__ == "TokenizersBackend":
+        from .tokenizer import get_tokenizer
+
+        logger.warning(
+            "Processor tokenizer for %s is TokenizersBackend, "
+            "reloading via get_tokenizer",
+            tokenizer_name,
+        )
+        tokenizer = get_tokenizer(
+            tokenizer_name,
+            tokenizer_mode=tokenizer_mode,
+            trust_remote_code=trust_remote_code,
+            tokenizer_revision=revision,
+        )
+        if isinstance(processor, PreTrainedTokenizerBase):
+            processor = tokenizer
+        else:
+            processor.tokenizer = tokenizer
+
     if tokenizer.chat_template is None:
         local_path = download_from_hf(
             tokenizer_name, allow_patterns=["*.json", "*.jinja", "*.model"]
