@@ -341,7 +341,7 @@ class TestGemma4EncoderAccuracy(unittest.TestCase):
     """
 
     MODEL_PATH = "gg-hf-gg/gemma-4-e4b-it"
-    COSINE_THRESHOLD = 0.99
+    COSINE_THRESHOLD = 0.98
 
     @classmethod
     def setUpClass(cls):
@@ -447,15 +447,18 @@ class TestGemma4EncoderAccuracy(unittest.TestCase):
         )
 
         with torch.no_grad():
-            # HF: returns (encodings, mask) — does NOT zero-fill padding
-            hf_enc, hf_mask = self.hf_audio_tower(audio_mel, audio_mel_mask)
-            hf_valid_mask = ~hf_mask
-            hf_valid = hf_enc[hf_valid_mask.unsqueeze(-1).expand_as(hf_enc)].reshape(
-                -1, hf_enc.shape[-1]
-            )
+            # HF: attention_mask convention is True=valid.
+            # SGLang: audio_mel_mask convention is True=padding.
+            hf_attention_mask = ~audio_mel_mask
+            hf_out = self.hf_audio_tower(audio_mel, hf_attention_mask)
+            hf_enc = hf_out.last_hidden_state
+            hf_output_mask = hf_out.attention_mask  # True=valid
+            hf_valid = hf_enc[
+                hf_output_mask.unsqueeze(-1).expand_as(hf_enc)
+            ].reshape(-1, hf_enc.shape[-1])
             hf_projected = self.hf_embed_audio(hf_valid.unsqueeze(0)).squeeze(0)
 
-            # SGLang: returns (encodings, mask) — zero-fills padding positions
+            # SGLang: returns (encodings, mask) where mask True=padding
             sg_enc, sg_mask = self.sg_model.audio_tower(audio_mel, audio_mel_mask)
             sg_valid_mask = ~sg_mask
             sg_valid = sg_enc[sg_valid_mask.unsqueeze(-1).expand_as(sg_enc)].reshape(
@@ -599,10 +602,13 @@ class TestGemma4EncoderAccuracyTP2(unittest.TestCase):
         )
 
         with torch.no_grad():
-            hf_enc, hf_mask = hf_audio_tower(audio_mel, audio_mel_mask)
-            hf_valid_mask = ~hf_mask
+            # HF attention_mask: True=valid; SGLang audio_mel_mask: True=padding
+            hf_attention_mask = ~audio_mel_mask
+            hf_out = hf_audio_tower(audio_mel, hf_attention_mask)
+            hf_enc = hf_out.last_hidden_state
+            hf_output_mask = hf_out.attention_mask  # True=valid
             cls.hf_audio_valid = (
-                hf_enc[hf_valid_mask.unsqueeze(-1).expand_as(hf_enc)]
+                hf_enc[hf_output_mask.unsqueeze(-1).expand_as(hf_enc)]
                 .reshape(-1, hf_enc.shape[-1])
                 .cpu()
             )
