@@ -644,12 +644,6 @@ def get_config(
         if not hasattr(text_config, "swa_v_head_dim"):
             text_config.swa_v_head_dim = text_config.swa_head_dim
 
-        # TODO(kpham-sgl): config.video_token_id is 262144 (== vocab_size,
-        # out of range) while tokenizer["<|video|>"] is 258884.  Hardcode
-        # the correct value until the upstream HF config is fixed, then
-        # remove this override.
-        if getattr(config, "video_token_id", None) == 262144:
-            config.video_token_id = 258884
 
     if config.model_type == "longcat_flash":
         config.update({"architectures": ["LongcatFlashForCausalLM"]})
