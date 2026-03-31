@@ -453,9 +453,9 @@ class TestGemma4EncoderAccuracy(unittest.TestCase):
             hf_out = self.hf_audio_tower(audio_mel, hf_attention_mask)
             hf_enc = hf_out.last_hidden_state
             hf_output_mask = hf_out.attention_mask  # True=valid
-            hf_valid = hf_enc[
-                hf_output_mask.unsqueeze(-1).expand_as(hf_enc)
-            ].reshape(-1, hf_enc.shape[-1])
+            hf_valid = hf_enc[hf_output_mask.unsqueeze(-1).expand_as(hf_enc)].reshape(
+                -1, hf_enc.shape[-1]
+            )
             hf_projected = self.hf_embed_audio(hf_valid.unsqueeze(0)).squeeze(0)
 
             # SGLang: returns (encodings, mask) where mask True=padding
