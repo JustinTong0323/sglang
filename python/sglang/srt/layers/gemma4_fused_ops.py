@@ -40,7 +40,7 @@ def _gemma_rmsnorm_residual_kernel(
 
     var = tl.sum(x * x, axis=0) / N
     rrms = tl.rsqrt(var + eps)
-    out = x * rrms * (w + 1.0) + r
+    out = x * rrms * w + r
 
     if HAS_SCALAR:
         scalar = tl.load(Scalar_ptr).to(tl.float32)
