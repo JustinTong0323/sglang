@@ -40,10 +40,7 @@ from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
 from sglang.srt.layers.rotary_embedding import get_rope
-from sglang.srt.layers.vocab_parallel_embedding import (
-    ParallelLMHead,
-    VocabParallelEmbedding,
-)
+from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import (
     default_weight_loader,
@@ -64,84 +61,6 @@ def get_attention_sliding_window_size(config):
 
 Gemma4MLP = Gemma3MLP
 Gemma4TextScaledWordEmbedding = Gemma3TextScaledWordEmbedding
-
-
-class Gemma4PerLayerEmbedding(nn.Module):
-    """Per-Layer Embedding (PLE) system for Gemma 4.
-
-    Gemma 4 uses a secondary embedding stream that provides layer-specific
-    token embeddings. These are combined with the main hidden states via
-    a gating mechanism in each decoder layer.
-
-    The PLE embedding stores embeddings for all layers packed together:
-    (vocab_size, hidden_size_per_layer_input * num_hidden_layers)
-    """
-
-    def __init__(
-        self,
-        vocab_size_per_layer_input: int,
-        hidden_size_per_layer_input: int,
-        hidden_size: int,
-        num_hidden_layers: int,
-        rms_norm_eps: float,
-        quant_config: QuantizationConfig | None = None,
-        prefix: str = "",
-    ) -> None:
-        super().__init__()
-        self.vocab_size = vocab_size_per_layer_input
-        self.hidden_size_per_layer = hidden_size_per_layer_input
-        self.hidden_size = hidden_size
-        self.num_layers = num_hidden_layers
-
-        # Packed embedding: (vocab_size, hidden_size_per_layer * num_layers)
-        # We store embeddings for ALL layers together
-        total_embed_dim = hidden_size_per_layer_input * num_hidden_layers
-        self.embed_tokens_per_layer = VocabParallelEmbedding(
-            vocab_size_per_layer_input,
-            total_embed_dim,
-            quant_config=quant_config,
-            prefix=f"{prefix}.embed_tokens_per_layer",
-        )
-
-        # Projection from PLE space to hidden space
-        # (hidden_size_per_layer * num_layers, hidden_size)
-        self.per_layer_model_projection = nn.Linear(
-            total_embed_dim,
-            hidden_size,
-            bias=False,
-        )
-
-        # Normalization for PLE output
-        # JAX uses scale_plus_one=False for this norm (x * scale, not x * (1+scale))
-        self.per_layer_projection_norm = RMSNorm(
-            self.hidden_size_per_layer,
-            eps=rms_norm_eps,
-        )
-
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        """Compute per-layer embeddings and project to hidden size.
-
-        Args:
-            input_ids: Token IDs (batch_size, seq_len)
-
-        Returns:
-            Per-layer input tensor (batch_size, seq_len, hidden_size)
-        """
-        # Get packed per-layer embeddings
-        per_layer_embeds = self.embed_tokens_per_layer(input_ids)
-
-        # Apply normalization (reshape to apply per-layer, then reshape back)
-        # Original shape: (batch, seq, hidden_size_per_layer * num_layers)
-        batch_size, seq_len, _ = per_layer_embeds.shape
-        per_layer_embeds = per_layer_embeds.view(
-            batch_size, seq_len, self.num_layers, self.hidden_size_per_layer
-        )
-        per_layer_embeds = self.per_layer_projection_norm(per_layer_embeds)
-        per_layer_embeds = per_layer_embeds.view(batch_size, seq_len, -1)
-
-        # Project to hidden size
-        per_layer_input = self.per_layer_model_projection(per_layer_embeds)
-        return per_layer_input
 
 
 class Gemma4Router(nn.Module):
@@ -261,7 +180,7 @@ class Gemma4MoE(nn.Module):
             num_experts=config.num_experts
             + get_global_server_args().ep_num_redundant_experts,
             hidden_size=config.hidden_size,
-            intermediate_size=config.expert_intermediate_size,
+            intermediate_size=getattr(config, "expert_intermediate_size", config.moe_intermediate_size),
             layer_id=layer_id,
             top_k=config.top_k_experts,
             quant_config=quant_config,
@@ -375,6 +294,12 @@ class Gemma4Attention(nn.Module):
         if num_kv_shared_layers > 0 and self.layer_id >= first_kv_shared_layer_idx:
             prev_layers = config.layer_types[:first_kv_shared_layer_idx]
             current_layer_type = config.layer_types[self.layer_id]
+            if current_layer_type not in prev_layers:
+                raise ValueError(
+                    f"KV sharing layer {self.layer_id} has type '{current_layer_type}' "
+                    f"but no matching type found in layers 0..{first_kv_shared_layer_idx - 1}. "
+                    f"Available types: {set(prev_layers)}"
+                )
             self.kv_shared_layer_index = (
                 len(prev_layers) - 1 - prev_layers[::-1].index(current_layer_type)
             )

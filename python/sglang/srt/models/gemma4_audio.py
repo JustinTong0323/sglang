@@ -395,7 +395,6 @@ class Gemma4AudioSSCPConvBlock(nn.Module):
         config: Gemma4AudioConfig,
         idx: int,
         input_freq_dim: int,
-        manual_padding: Tuple[int, int, int, int] = (0, 0, 0, 0),
     ):
         super().__init__()
         self.config = config

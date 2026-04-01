@@ -40,45 +40,13 @@ def _gemma_rmsnorm_residual_kernel(
 
     var = tl.sum(x * x, axis=0) / N
     rrms = tl.rsqrt(var + eps)
-    out = x * rrms * w + r
+    out = x * rrms * (w + 1.0) + r
 
     if HAS_SCALAR:
         scalar = tl.load(Scalar_ptr).to(tl.float32)
         out = out * scalar
 
     tl.store(Out_ptr + row * stride_o + cols, out.to(x.dtype), mask=mask)
-
-
-def gemma_rmsnorm_residual(
-    x: torch.Tensor,
-    weight: torch.Tensor,
-    residual: torch.Tensor,
-    eps: float = 1e-6,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Fused rmsnorm(x) + residual.
-
-    Returns (output, new_residual) where new_residual = output.
-    """
-    assert x.dim() == 2 and x.stride(-1) == 1, "Expected contiguous 2D input"
-    M, N = x.shape
-    BLOCK_SIZE = triton.next_power_of_2(N)
-    out = torch.empty_like(x)
-
-    _gemma_rmsnorm_residual_kernel[(M,)](
-        x,
-        weight,
-        residual,
-        None,  # no scalar
-        out,
-        x.stride(0),
-        residual.stride(0),
-        out.stride(0),
-        N,
-        eps,
-        HAS_SCALAR=False,
-        BLOCK_SIZE=BLOCK_SIZE,
-    )
-    return out, out.clone()
 
 
 def gemma_rmsnorm_residual_scalar(
