@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, List, Optional
+
+logger = logging.getLogger(__name__)
 
 import torch
 import torch.nn.functional as F
@@ -492,8 +495,7 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, MultiPlatformOp):
                     # AITER CK fused_moe may not support all GEMM dimensions
                     # (e.g. Gemma4 MoE with 128 experts × 704 intermediate size).
                     # Fall through to Triton MoE runner below.
-                    import logging
-                    logging.getLogger(__name__).warning_once(
+                    logger.warning_once(
                         f"AITER CK fused_moe failed ({e}), "
                         "falling back to Triton MoE runner."
                     )
