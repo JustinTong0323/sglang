@@ -40,6 +40,49 @@ from .compat import _ensure_gguf_version, patch_is_base_mistral_in_ci
 _FAST_LLAMA_TOKENIZER = "hf-internal-testing/llama-tokenizer"
 
 
+def _load_tokenizer_by_declared_class(tokenizer_name, *args, **kwargs):
+    """Load tokenizer by the class declared in tokenizer_config.json.
+
+    AutoTokenizer resolves to TokenizersBackend when the model's config
+    model_type has no tokenizer class mapping (e.g. deepseek_vl_v2), even
+    though tokenizer_config.json declares a standard class like
+    LlamaTokenizerFast.  Returns None if it cannot improve on AutoTokenizer.
+    """
+    import transformers
+
+    try:
+        config_file = _resolve_local_or_cached_file(
+            tokenizer_name, "tokenizer_config.json", kwargs.get("revision")
+        )
+        with open(config_file) as f:
+            tok_class_name = json.load(f).get("tokenizer_class")
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if not tok_class_name:
+        return None
+
+    tok_cls = getattr(transformers, tok_class_name, None)
+    if tok_cls is None:
+        return None
+
+    logger.info(
+        "Loading tokenizer for %s directly as %s (bypassing AutoTokenizer)",
+        tokenizer_name,
+        tok_class_name,
+    )
+    try:
+        return tok_cls.from_pretrained(tokenizer_name, *args, **kwargs)
+    except Exception as e:
+        logger.warning(
+            "Direct load as %s failed for %s: %s",
+            tok_class_name,
+            tokenizer_name,
+            e,
+        )
+        return None
+
+
 # Filter warnings like: https://github.com/sgl-project/sglang/issues/8082
 class TokenizerWarningsFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
@@ -150,6 +193,13 @@ def get_tokenizer(
                 f"(initial load returned TokenizersBackend): {e}"
             ) from e
         if type(tokenizer).__name__ == "TokenizersBackend":
+            tokenizer = (
+                _load_tokenizer_by_declared_class(
+                    tokenizer_name, *args, **common_kwargs
+                )
+                or tokenizer
+            )
+        if type(tokenizer).__name__ == "TokenizersBackend":
             if not trust_remote_code:
                 logger.warning(
                     "Tokenizer for %s loaded as generic TokenizersBackend. "
@@ -158,8 +208,7 @@ def get_tokenizer(
                 )
             else:
                 logger.warning(
-                    "Tokenizer for %s is still TokenizersBackend after retries "
-                    "with trust_remote_code=True. "
+                    "Tokenizer for %s is still TokenizersBackend after retries. "
                     "Model-specific tokenizer attributes may be missing.",
                     tokenizer_name,
                 )
