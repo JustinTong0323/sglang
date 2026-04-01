@@ -137,7 +137,7 @@ def get_model_config(
     elif architecture == "Gemma4ForConditionalGeneration":
         E = config.num_experts // ep_size
         topk = config.top_k_experts
-        intermediate_size = config.expert_intermediate_size
+        intermediate_size = config.moe_intermediate_size
     else:
         # Default: Mixtral
         E = config.num_local_experts // ep_size

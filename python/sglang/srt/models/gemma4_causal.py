@@ -180,7 +180,7 @@ class Gemma4MoE(nn.Module):
             num_experts=config.num_experts
             + get_global_server_args().ep_num_redundant_experts,
             hidden_size=config.hidden_size,
-            intermediate_size=getattr(config, "expert_intermediate_size", config.moe_intermediate_size),
+            intermediate_size=config.moe_intermediate_size,
             layer_id=layer_id,
             top_k=config.top_k_experts,
             quant_config=quant_config,
@@ -274,13 +274,10 @@ class Gemma4Attention(nn.Module):
 
         if layer_type in config.rope_parameters:
             rope_parameters = dict(config.rope_parameters[layer_type])
-            if layer_type == "full_attention":
-                global_prf = getattr(config, "global_partial_rotary_factor", 0.25)
-                rope_parameters["partial_rotary_factor"] = global_prf
         else:
             rope_parameters = dict(
                 rope_type="default",
-                rope_theta=getattr(config, "rope_theta", 10000.0),
+                rope_theta=10000.0,
             )
 
         # KV sharing logic
@@ -470,9 +467,7 @@ class Gemma4DecoderLayer(nn.Module):
             self.post_per_layer_input_norm = None
 
         # Parallel MoE
-        self.enable_moe_block = getattr(config, "enable_moe_block", False) or getattr(
-            config, "use_second_mlp_block", False
-        )
+        self.enable_moe_block = getattr(config, "enable_moe_block", False)
         if self.enable_moe_block:
             self.router = Gemma4Router(
                 config,
@@ -923,12 +918,11 @@ class Gemma4ForCausalLM(PreTrainedModel):
         for name, loaded_weight in weights:
             name = name.replace("model.language_model.", "model.")
 
-            if (
-                ".moe." in name
-                and "experts" not in name
-                and "per_expert_scale" not in name
-            ):
-                name = name.replace(".moe.", ".moe.experts.")
+            # HF has router.per_expert_scale and experts.* on the decoder layer;
+            # remap into our moe.* subtree since Gemma4MoE owns both.
+            name = name.replace(".router.per_expert_scale", ".moe.per_expert_scale")
+            if ".experts." in name and ".moe.experts." not in name:
+                name = name.replace(".experts.", ".moe.experts.")
 
             # attention_k_eq_v: full-attention layers have no v_proj in the
             # checkpoint (K and V share weights).  When we see a k_proj weight
