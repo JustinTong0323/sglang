@@ -37,14 +37,7 @@ def get_model_config(
     topk_ids_dir: str = None,
 ) -> Dict:
     config = get_config(model_name, trust_remote_code=True)
-
-    # Replace config with text_config for encoder-decoder models after getting block_shape and architecture
-    if hasattr(config, "text_config"):
-        architecture = config.architectures[0]
-        config = config.get_text_config()
-    else:
-        architecture = config.architectures[0]
-
+    architecture = config.architectures[0]
     block_shape = None
     if (
         hasattr(config, "quantization_config")
@@ -64,6 +57,9 @@ def get_model_config(
         group_size = weights_config.get("group_size")
         block_shape = [0, group_size]
         assert len(block_shape) == 2
+    # Replace config with text_config for encoder-decoder models after getting block_shape and architecture
+    if hasattr(config, "text_config"):
+        config = config.get_text_config()
 
     hidden_size = config.hidden_size
     if architecture == "DbrxForCausalLM":
