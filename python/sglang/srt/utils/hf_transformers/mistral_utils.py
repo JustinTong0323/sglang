@@ -75,18 +75,6 @@ def adapt_config_dict(
     if bool(config_dict.get("yarn")):
         config_dict = _remap_mistral_yarn_args(config_dict)
 
-    if bool(config_dict.get("llama_4_scaling")):
-        llama_4_scaling_config_keys = ["original_max_position_embeddings", "beta"]
-        assert all(
-            [
-                key in config_dict["llama_4_scaling"]
-                for key in llama_4_scaling_config_keys
-            ]
-        ), (
-            "llama_4_scaling config should define the keys: "
-            f"{','.join(llama_4_scaling_config_keys)}"
-        )
-
     is_vision = bool(
         (config_dict.get("multimodal") or {}).get("vision_encoder_args")
         or config_dict.get("vision_encoder")

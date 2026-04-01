@@ -20,7 +20,6 @@ path ``sglang.srt.utils.hf_transformers_utils`` is preserved by a
 separate shim module.
 """
 
-# Apply compatibility patches first (before any from_pretrained call).
 from .compat import apply_all as _apply_compat
 
 _apply_compat()
@@ -39,7 +38,6 @@ from .common import (  # noqa: E402
     get_tokenizer_from_processor,
 )
 
-# Re-export public API from submodules.
 from .compat import normalize_rope_scaling_compat  # noqa: E402
 from .config import get_config  # noqa: E402
 from .processor import get_processor  # noqa: E402

@@ -29,9 +29,8 @@ Patches fall into two categories:
 """
 
 import inspect
-import logging
 
-logger = logging.getLogger(__name__)
+from sglang.srt.utils import logger
 
 _applied = False
 

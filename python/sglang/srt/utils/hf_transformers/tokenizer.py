@@ -39,6 +39,9 @@ from .compat import _ensure_gguf_version, patch_is_base_mistral_in_ci
 # A fast LLaMA tokenizer with the pre-processed `tokenizer.json` file.
 _FAST_LLAMA_TOKENIZER = "hf-internal-testing/llama-tokenizer"
 
+# Class name used by transformers v5 when no tokenizer mapping exists for a model_type.
+_TOKENIZERS_BACKEND = "TokenizersBackend"
+
 
 def _load_tokenizer_by_declared_class(tokenizer_name, *args, **kwargs):
     """Load tokenizer by the class declared in tokenizer_config.json.
@@ -177,7 +180,7 @@ def get_tokenizer(
     # Transformers v5 may silently fall back to a generic TokenizersBackend
     # when the model requires a custom tokenizer. Retry with use_fast=False
     # but only escalate trust_remote_code if the caller already opted in.
-    if type(tokenizer).__name__ == "TokenizersBackend":
+    if type(tokenizer).__name__ == _TOKENIZERS_BACKEND:
         logger.warning(
             "Tokenizer loaded as generic TokenizersBackend for %s, "
             "retrying with use_fast=False",
@@ -193,14 +196,14 @@ def get_tokenizer(
                 f"Retry with use_fast=False for {tokenizer_name} also failed "
                 f"(initial load returned TokenizersBackend): {e}"
             ) from e
-        if type(tokenizer).__name__ == "TokenizersBackend":
+        if type(tokenizer).__name__ == _TOKENIZERS_BACKEND:
             tokenizer = (
                 _load_tokenizer_by_declared_class(
                     tokenizer_name, *args, **common_kwargs
                 )
                 or tokenizer
             )
-        if type(tokenizer).__name__ == "TokenizersBackend":
+        if type(tokenizer).__name__ == _TOKENIZERS_BACKEND:
             if trust_remote_code:
                 raise RuntimeError(
                     f"Tokenizer for {tokenizer_name} could not be loaded as its "

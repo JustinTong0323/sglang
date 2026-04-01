@@ -141,7 +141,10 @@ def get_config(
             if not hasattr(config, key) and val is not None:
                 setattr(config, key, val)
 
-    if _is_deepseek_ocr2_model(config):
+    is_ocr = _is_deepseek_ocr_model(config)
+    is_ocr2 = _is_deepseek_ocr2_model(config)
+
+    if is_ocr2:
         _override_v_head_dim_if_zero(config)
         config.model_type = "deepseek-ocr"
         _set_architectures(config, "DeepseekOCRForCausalLM")
@@ -149,11 +152,11 @@ def get_config(
         _apply_deepseek_ocr_overrides(config, model)
     elif config.model_type in _CONFIG_REGISTRY:
         model_type = config.model_type
-        if model_type == "deepseek_vl_v2":
-            if _is_deepseek_ocr_model(config) or _is_deepseek_ocr2_model(config):
-                model_type = "deepseek-ocr"
+        if model_type == "deepseek_vl_v2" and (is_ocr or is_ocr2):
+            model_type = "deepseek-ocr"
         config = _CONFIG_REGISTRY[model_type].from_pretrained(model, revision=revision)
 
+        # Re-check after reloading config from registry
         if _is_deepseek_ocr_model(config) or _is_deepseek_ocr2_model(config):
             _apply_deepseek_ocr_overrides(config, model)
         else:

@@ -38,7 +38,11 @@ from .common import (
     download_from_hf,
     get_tokenizer_from_processor,
 )
-from .tokenizer import _fix_added_tokens_encoding, _fix_special_tokens_pattern
+from .tokenizer import (
+    _TOKENIZERS_BACKEND,
+    _fix_added_tokens_encoding,
+    _fix_special_tokens_pattern,
+)
 
 
 def _build_processor_manually(
@@ -176,10 +180,11 @@ def get_processor(
             revision=revision,
             **kwargs,
         )
-    if _is_deepseek_ocr_model(config) or _is_deepseek_ocr2_model(config):
+    is_ocr2 = _is_deepseek_ocr2_model(config)
+    if _is_deepseek_ocr_model(config) or is_ocr2:
         config.model_type = "deepseek-ocr"
         config.update({"architectures": ["DeepseekOCRForCausalLM"]})
-        if _is_deepseek_ocr2_model(config):
+        if is_ocr2:
             _override_v_head_dim_if_zero(config)
 
     if config.model_type in {"qwen2_vl", "sarashina2_vision"}:
@@ -255,7 +260,7 @@ def get_processor(
 
     # AutoProcessor may internally create a TokenizersBackend tokenizer
     # (same issue as get_tokenizer). Replace it with a properly loaded one.
-    if type(tokenizer).__name__ == "TokenizersBackend":
+    if type(tokenizer).__name__ == _TOKENIZERS_BACKEND:
         from .tokenizer import get_tokenizer
 
         logger.warning(
