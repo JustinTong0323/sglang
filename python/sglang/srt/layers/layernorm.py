@@ -702,6 +702,11 @@ class Gemma4RMSNorm(MultiPlatformOp):
             out = out.reshape(original_shape)
         return out
 
+    def forward_hip(self, x: torch.Tensor) -> torch.Tensor:
+        # sgl_kernel's gemma_rmsnorm is not available on ROCm;
+        # delegate to the pure-PyTorch implementation.
+        return self.forward_native(x)
+
 
 class RMSNormWithoutScale(MultiPlatformOp):
     def __init__(self, hidden_size: int, eps=1e-6):
