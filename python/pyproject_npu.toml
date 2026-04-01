@@ -27,6 +27,8 @@ dependencies = [
   "fastapi",
   "easydict",
   "gguf",
+  "hf_transfer",
+  "huggingface_hub",
   "interegular",
   "llguidance>=0.7.11,<0.8.0",
   "modelscope",
