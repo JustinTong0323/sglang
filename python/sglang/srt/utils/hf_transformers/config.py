@@ -28,14 +28,13 @@ from .common import (
     DeepseekVLV2Config,
     _is_deepseek_ocr2_model,
     _is_deepseek_ocr_model,
-    _is_mistral_model,
     _load_deepseek_v32_model,
-    _load_mistral_config,
     _override_v_head_dim_if_zero,
     check_gguf_file,
     get_hf_text_config,
 )
 from .compat import _ensure_gguf_version
+from .mistral_utils import is_mistral_model, load_mistral_config
 
 
 def _set_architectures(config, arch_name):
@@ -67,8 +66,8 @@ def get_config(
         client.pull_files(ignore_pattern=["*.pt", "*.safetensors", "*.bin"])
         model = client.get_local_dir()
 
-    if _is_mistral_model(model):
-        config = _load_mistral_config(
+    if is_mistral_model(model):
+        config = load_mistral_config(
             model, trust_remote_code=trust_remote_code, revision=revision
         )
     else:

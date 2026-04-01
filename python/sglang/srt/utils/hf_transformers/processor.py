@@ -30,14 +30,13 @@ from .common import (
     AutoConfig,
     _is_deepseek_ocr2_model,
     _is_deepseek_ocr_model,
-    _is_mistral_model,
-    _load_mistral_config,
     _override_v_head_dim_if_zero,
     _resolve_local_or_cached_file,
     attach_additional_stop_token_ids,
     download_from_hf,
     get_tokenizer_from_processor,
 )
+from .mistral_utils import is_mistral_model, load_mistral_config, wrap_as_pixtral
 from .tokenizer import (
     _TOKENIZERS_BACKEND,
     _fix_added_tokens_encoding,
@@ -130,33 +129,6 @@ def _build_processor_manually(
     return proc_cls(**init_kwargs)
 
 
-def _wrap_as_pixtral(processor, config):
-    from transformers.models.pixtral.image_processing_pixtral import (
-        PixtralImageProcessor,
-    )
-    from transformers.models.pixtral.processing_pixtral import (
-        PixtralProcessor as HFPixtralProcessor,
-    )
-
-    vision_config = config.vision_config
-    patch_size = vision_config.patch_size
-    image_size = vision_config.image_size
-    spatial_merge_size = getattr(vision_config, "spatial_merge_size", 1)
-
-    effective_patch = patch_size * spatial_merge_size
-    image_processor = PixtralImageProcessor(
-        do_resize=True,
-        size={"longest_edge": image_size},
-        patch_size={"height": effective_patch, "width": effective_patch},
-    )
-    return HFPixtralProcessor(
-        image_processor=image_processor,
-        tokenizer=processor,
-        patch_size=patch_size,
-        spatial_merge_size=spatial_merge_size,
-    )
-
-
 def get_processor(
     tokenizer_name: str,
     *args,
@@ -167,8 +139,8 @@ def get_processor(
     **kwargs,
 ):
     revision = kwargs.pop("revision", tokenizer_revision)
-    if _is_mistral_model(tokenizer_name):
-        config = _load_mistral_config(
+    if is_mistral_model(tokenizer_name):
+        config = load_mistral_config(
             tokenizer_name,
             trust_remote_code=trust_remote_code,
             revision=revision,
@@ -254,7 +226,7 @@ def get_processor(
         isinstance(processor, PreTrainedTokenizerBase)
         and getattr(config, "model_type", None) == "pixtral"
     ):
-        processor = _wrap_as_pixtral(processor, config)
+        processor = wrap_as_pixtral(processor, config)
 
     tokenizer = get_tokenizer_from_processor(processor)
 

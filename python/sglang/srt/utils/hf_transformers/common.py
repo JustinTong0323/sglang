@@ -337,13 +337,6 @@ def _load_deepseek_v32_model(
     )
 
 
-# Deferred imports to avoid circular dependency (mistral_utils imports from .common).
-# Re-exported here so config.py and processor.py can import from .common.
-from .mistral_utils import is_mistral_model as _is_mistral_model  # noqa: E402, F401
-from .mistral_utils import (  # noqa: E402, F401
-    load_mistral_config as _load_mistral_config,
-)
-
 # ---------------------------------------------------------------------------
 # Context length / generation config / sparse attention
 # ---------------------------------------------------------------------------

@@ -10,6 +10,8 @@ from transformers import AutoConfig, PretrainedConfig, WhisperConfig
 
 from sglang.srt.utils import logger
 
+from .common import _ensure_sub_configs, download_from_hf
+
 
 def adapt_config_dict(
     config_dict: dict[str, Any], model: str, **kwargs
@@ -326,10 +328,6 @@ def load_mistral_config(
     Returns a ``PretrainedConfig`` with dict sub-configs (text_config,
     vision_config) converted to proper AutoConfig objects.
     """
-    # Import from .common inside function to avoid circular import
-    # (common.py re-exports from this module at module level).
-    from .common import _ensure_sub_configs, download_from_hf
-
     local_path = download_from_hf(model_path)
     parser = MistralConfigParser()
     config_dict, _ = parser.parse(local_path)
@@ -343,3 +341,31 @@ def load_mistral_config(
     _ensure_sub_configs(loaded_config, "text_config", "vision_config")
 
     return loaded_config
+
+
+def wrap_as_pixtral(processor, config):
+    """Wrap a tokenizer as a PixtralProcessor for Mistral vision models."""
+    from transformers.models.pixtral.image_processing_pixtral import (
+        PixtralImageProcessor,
+    )
+    from transformers.models.pixtral.processing_pixtral import (
+        PixtralProcessor as HFPixtralProcessor,
+    )
+
+    vision_config = config.vision_config
+    patch_size = vision_config.patch_size
+    image_size = vision_config.image_size
+    spatial_merge_size = getattr(vision_config, "spatial_merge_size", 1)
+
+    effective_patch = patch_size * spatial_merge_size
+    image_processor = PixtralImageProcessor(
+        do_resize=True,
+        size={"longest_edge": image_size},
+        patch_size={"height": effective_patch, "width": effective_patch},
+    )
+    return HFPixtralProcessor(
+        image_processor=image_processor,
+        tokenizer=processor,
+        patch_size=patch_size,
+        spatial_merge_size=spatial_merge_size,
+    )
