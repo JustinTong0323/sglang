@@ -143,7 +143,7 @@ def _patch_rope_parameters_validation():
     Fix: patch ``PretrainedConfig.from_dict`` to inject ``rope_theta`` into
     ``rope_scaling`` before ``__init__`` validates.
 
-    TODO(upstream): fixed in https://github.com/huggingface/transformers/pull/45049, remove once transformers >= 5.5.0
+    TODO(upstream): fixed in https://github.com/huggingface/transformers/pull/45049, remove once the pinned transformers version includes this fix (expected >= 5.5.0)
     """
     from transformers import PretrainedConfig
 
@@ -209,7 +209,10 @@ def _patch_removed_symbols():
             if hasattr(modeling_llama, "LlamaAttention"):
                 modeling_llama.LlamaFlashAttention2 = modeling_llama.LlamaAttention
     except ImportError:
-        pass
+        logger.warning(
+            "Could not import transformers.models.llama.modeling_llama; "
+            "LlamaFlashAttention2 compat patch not applied."
+        )
 
     # is_flash_attn_greater_or_equal_2_10
     try:
@@ -223,7 +226,10 @@ def _patch_removed_symbols():
             else:
                 _u.is_flash_attn_greater_or_equal_2_10 = lambda: False
     except ImportError:
-        pass
+        logger.warning(
+            "Could not import transformers.utils; "
+            "is_flash_attn_greater_or_equal_2_10 compat patch not applied."
+        )
 
 
 def _patch_image_processor_kwargs():
@@ -256,6 +262,15 @@ def _patch_image_processor_kwargs():
                     p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
                 ):
                     raise
+                dropped = {k for k in kwargs if k not in params}
+                if dropped:
+                    logger.warning(
+                        "Image processor %s.preprocess() does not accept %s; "
+                        "retrying without them. Update the model's image processor "
+                        "to accept **kwargs.",
+                        type(self).__name__,
+                        dropped,
+                    )
                 valid = {k: v for k, v in kwargs.items() if k in params}
                 return original(self, images, *args, **valid)
 

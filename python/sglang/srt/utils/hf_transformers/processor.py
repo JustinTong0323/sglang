@@ -69,8 +69,8 @@ def _build_processor_manually(
             with open(pp_file) as f:
                 pp_auto_map = json.load(f).get("auto_map", {})
             proc_ref = pp_auto_map.get("AutoProcessor")
-        except Exception as e:
-            logger.debug(
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            logger.warning(
                 "_build_processor_manually: could not read preprocessor_config.json "
                 "for %s: %s",
                 model_path,
@@ -95,19 +95,33 @@ def _build_processor_manually(
                 model_path, trust_remote_code=trust_remote_code, revision=revision
             )
         except (ImportError, OSError, ValueError) as e:
-            logger.error(
-                "Failed to load image_processor for %s: %s. "
-                "Multimodal features may not work correctly.",
-                model_path,
-                e,
-            )
+            raise RuntimeError(
+                f"Failed to load image_processor for {model_path}: {e}. "
+                f"This model requires an image processor for multimodal features. "
+                f"Check that the model files are complete and accessible."
+            ) from e
 
     # Instantiate feature extractor from its declared class
     fe_class_name = getattr(proc_cls, "feature_extractor_class", None)
     if fe_class_name:
         fe_class = getattr(transformers, fe_class_name, None)
         if fe_class is not None:
-            init_kwargs["feature_extractor"] = fe_class()
+            try:
+                init_kwargs["feature_extractor"] = fe_class()
+            except TypeError as e:
+                logger.warning(
+                    "Cannot instantiate feature extractor %s with no arguments "
+                    "for %s: %s",
+                    fe_class_name,
+                    model_path,
+                    e,
+                )
+        else:
+            logger.warning(
+                "Feature extractor class %s not found in transformers for %s",
+                fe_class_name,
+                model_path,
+            )
 
     return proc_cls(**init_kwargs)
 

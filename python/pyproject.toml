@@ -35,7 +35,7 @@ dependencies = [
   "modelscope",
   "msgspec",
   "ninja",
-  "easydict",
+  "easydict",  # Required by remote model code (e.g. DeepSeek-OCR) loaded via trust_remote_code; validated by transformers 5.4+ check_imports
   "numpy",
   "nvidia-cutlass-dsl>=4.4.1",
   "nvidia-ml-py",

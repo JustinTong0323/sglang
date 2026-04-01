@@ -87,7 +87,7 @@ def get_config(
             elif isinstance(e, ValueError):
                 raise
             else:
-                logger.info(
+                logger.warning(
                     "AutoConfig.from_pretrained raised KeyError for %s: %s. "
                     "Falling back to config registry lookup.",
                     model,

@@ -11,11 +11,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Utilities for Huggingface Transformers.
+"""Hugging Face Transformers utilities.
 
-This package re-exports all public symbols so that existing imports like
-``from sglang.srt.utils.hf_transformers_utils import X`` continue to work
-after the module was split into a subpackage.
+This package provides HF Transformers helpers, split into submodules
+(common, compat, config, tokenizer, processor, mistral_utils).
+All public symbols are re-exported here for convenience.  The old import
+path ``sglang.srt.utils.hf_transformers_utils`` is preserved by a
+separate shim module.
 """
 
 # Apply compatibility patches first (before any from_pretrained call).

@@ -73,9 +73,10 @@ def _load_tokenizer_by_declared_class(tokenizer_name, *args, **kwargs):
     )
     try:
         return tok_cls.from_pretrained(tokenizer_name, *args, **kwargs)
-    except Exception as e:
+    except (OSError, ValueError, TypeError, ImportError) as e:
         logger.warning(
-            "Direct load as %s failed for %s: %s",
+            "Direct load as %s failed for %s: %s. "
+            "Falling back to AutoTokenizer result.",
             tok_class_name,
             tokenizer_name,
             e,
@@ -200,16 +201,18 @@ def get_tokenizer(
                 or tokenizer
             )
         if type(tokenizer).__name__ == "TokenizersBackend":
-            if not trust_remote_code:
-                logger.warning(
-                    "Tokenizer for %s loaded as generic TokenizersBackend. "
-                    "Set --trust-remote-code to load the model-specific tokenizer.",
-                    tokenizer_name,
+            if trust_remote_code:
+                raise RuntimeError(
+                    f"Tokenizer for {tokenizer_name} could not be loaded as its "
+                    f"declared class after multiple retries (still TokenizersBackend). "
+                    f"This model requires a custom tokenizer via --trust-remote-code "
+                    f"but the custom class could not be instantiated. Check that all "
+                    f"model dependencies are installed."
                 )
             else:
                 logger.warning(
-                    "Tokenizer for %s is still TokenizersBackend after retries. "
-                    "Model-specific tokenizer attributes may be missing.",
+                    "Tokenizer for %s loaded as generic TokenizersBackend. "
+                    "Set --trust-remote-code to load the model-specific tokenizer.",
                     tokenizer_name,
                 )
 
@@ -357,6 +360,9 @@ def _fix_v5_add_bos_eos_token(tokenizer, model_name_or_path, revision=None):
                 model_name_or_path,
                 current_val,
             )
+            # Set the private backing attribute (not the property) because
+            # transformers tokenizers expose add_bos/eos_token as properties
+            # that read from the underscore-prefixed attribute.
             setattr(tokenizer, f"_{attr}", config_val)
             changed = True
 
@@ -422,7 +428,8 @@ def _fix_added_tokens_encoding(tokenizer):
         try:
             ids = tokenizer.encode(token_str, add_special_tokens=False)
             return len(ids) == 1 and ids[0] == expected_id
-        except Exception:
+        except (ValueError, OverflowError, RuntimeError) as e:
+            logger.debug("Token %s encode check failed: %s", token_str, e)
             return False
 
     broken = [
