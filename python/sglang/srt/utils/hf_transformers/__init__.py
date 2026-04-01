@@ -37,7 +37,6 @@ from .common import (  # noqa: E402
     get_sparse_attention_config,
     get_tokenizer_from_processor,
 )
-
 from .compat import normalize_rope_scaling_compat  # noqa: E402
 from .config import get_config  # noqa: E402
 from .processor import get_processor  # noqa: E402
