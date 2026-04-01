@@ -205,12 +205,11 @@ def get_tokenizer(
             )
         if type(tokenizer).__name__ == _TOKENIZERS_BACKEND:
             if trust_remote_code:
-                raise RuntimeError(
-                    f"Tokenizer for {tokenizer_name} could not be loaded as its "
-                    f"declared class after multiple retries (still TokenizersBackend). "
-                    f"This model requires a custom tokenizer via --trust-remote-code "
-                    f"but the custom class could not be instantiated. Check that all "
-                    f"model dependencies are installed."
+                logger.warning(
+                    "Tokenizer for %s is still TokenizersBackend after retries "
+                    "with --trust-remote-code. Model-specific tokenizer attributes "
+                    "may be missing.",
+                    tokenizer_name,
                 )
             else:
                 logger.warning(
