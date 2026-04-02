@@ -319,8 +319,8 @@ def prepare_inputs_for_correctness_test(bench_args, tokenizer, custom_prompts):
         if custom_prompts
         else [
             "The capital of France is",
-            # "The capital of the United Kindom is",
-            # "Today is a sunny day and I like",
+            "The capital of the United Kindom is",
+            "Today is a sunny day and I like",
         ]
     )
     input_ids = [tokenizer.encode(p) for p in prompts]
