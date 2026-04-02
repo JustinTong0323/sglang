@@ -3901,23 +3901,17 @@ class TestGemma4Detector(unittest.TestCase):
         self.assertAlmostEqual(result["ratio"], 3.14)
 
     def test_parse_gemma4_args_string_with_colon(self):
-        result = _parse_gemma4_args(
-            'url:<|"|>http://example.com<|"|>'
-        )
+        result = _parse_gemma4_args('url:<|"|>http://example.com<|"|>')
         self.assertEqual(result["url"], "http://example.com")
 
     def test_parse_gemma4_args_nested_object(self):
-        result = _parse_gemma4_args(
-            'outer:{inner:<|"|>val<|"|>,num:5}'
-        )
+        result = _parse_gemma4_args('outer:{inner:<|"|>val<|"|>,num:5}')
         self.assertIsInstance(result["outer"], dict)
         self.assertEqual(result["outer"]["inner"], "val")
         self.assertEqual(result["outer"]["num"], 5)
 
     def test_parse_gemma4_array_mixed_types(self):
-        result = _parse_gemma4_array(
-            '<|"|>hello<|"|>, 42, true, {key:<|"|>val<|"|>}'
-        )
+        result = _parse_gemma4_array('<|"|>hello<|"|>, 42, true, {key:<|"|>val<|"|>}')
         self.assertEqual(result[0], "hello")
         self.assertEqual(result[1], 42)
         self.assertIs(result[2], True)

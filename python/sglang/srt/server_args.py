@@ -1857,7 +1857,6 @@ class ServerArgs:
             "Gemma3ForConditionalGeneration",
             "Gemma3nForCausalLM",
             "Gemma3nForConditionalGeneration",
-            "Gemma4ForConditionalGeneration",
         ]:
             # FIXME: https://github.com/sgl-project/sglang/pull/7367 is not compatible with gemma2 model.
             # It failed at this test: https://github.com/sgl-project/sglang/actions/runs/16255155597/job/45890331952#step:4:736
@@ -1865,10 +1864,10 @@ class ServerArgs:
                 f"Disable hybrid SWA memory for {model_arch} as it is not yet supported."
             )
             self.disable_hybrid_swa_memory = True
-            if model_arch == "Gemma4ForConditionalGeneration":
-                if self.is_attention_backend_not_set():
-                    self.attention_backend = "triton"
-                    logger.info("Use triton as default attention backend for Gemma4")
+        elif model_arch == "Gemma4ForConditionalGeneration":
+            if self.is_attention_backend_not_set():
+                self.attention_backend = "triton"
+                logger.info("Use triton as default attention backend for Gemma4")
         elif model_arch in ["Exaone4ForCausalLM", "ExaoneMoEForCausalLM"]:
             if hf_config.sliding_window_pattern is not None:
                 logger.warning(

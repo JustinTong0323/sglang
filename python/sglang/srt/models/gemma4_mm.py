@@ -741,13 +741,11 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
 
             name = re.sub(r"^model\.", "", name)
 
-            # moe experts
-            if (
-                ".moe." in name
-                and "experts" not in name
-                and "per_expert_scale" not in name
-            ):
-                name = name.replace(".moe.", ".moe.experts.")
+            # HF has router.per_expert_scale and experts.* on the decoder layer;
+            # remap into our moe.* subtree since Gemma4MoE owns both.
+            name = name.replace(".router.per_expert_scale", ".moe.per_expert_scale")
+            if ".experts." in name and ".moe.experts." not in name:
+                name = name.replace(".experts.", ".moe.experts.")
 
             # Remap audio tower checkpoint names to our module tree
             if "audio_tower." in name:
