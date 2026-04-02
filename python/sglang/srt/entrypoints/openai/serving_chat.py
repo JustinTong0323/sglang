@@ -1282,9 +1282,9 @@ class OpenAIServingChat(OpenAIServingBase):
                 and request.chat_template_kwargs.get("thinking") is True
             )
         if self.reasoning_parser == "gemma4":
-            return request.chat_template_kwargs is not None and (
-                request.chat_template_kwargs.get("thinking") is True
-                or request.chat_template_kwargs.get("enable_thinking") is True
+            return (
+                request.chat_template_kwargs is not None
+                and request.chat_template_kwargs.get("enable_thinking") is True
             )
         if self.reasoning_parser in ["kimi_k2"]:
             # Models that thinking by default, and can be disabled by setting thinking=False
