@@ -55,6 +55,8 @@ def apply_all():
     _patch_rope_parameters_validation()
     _patch_removed_symbols()
     _patch_image_processor_kwargs()
+    _patch_image_process_cuda_tensor()
+    _patch_nemotron_h_pattern()
 
     # v5 general patches
     _ensure_clean_up_tokenization_compat()
@@ -274,6 +276,68 @@ def _patch_image_processor_kwargs():
                 return original(self, images, *args, **valid)
 
         BaseImageProcessor.__call__ = safe_call
+    except ImportError:
+        pass
+
+
+def _patch_image_process_cuda_tensor():
+    """Fix ``process_image()`` crashing on CUDA tensors.
+
+    Transformers v5.4's PIL image processing backend calls
+    ``image.numpy()`` on torch tensors, which fails for CUDA tensors.
+    Patch to call ``.cpu().numpy()`` instead.
+
+    TODO(upstream): report to HF transformers.
+    """
+    try:
+        import transformers.image_processing_backends as ipb
+
+        for cls_name in ("PilBackend", "PilImageProcessingMixin"):
+            cls = getattr(ipb, cls_name, None)
+            if cls is None or not hasattr(cls, "process_image"):
+                continue
+            original = cls.process_image
+
+            def patched_process_image(self, image, *args, _orig=original, **kwargs):
+                import torch
+
+                if isinstance(image, torch.Tensor) and image.is_cuda:
+                    image = image.cpu()
+                return _orig(self, image, *args, **kwargs)
+
+            cls.process_image = patched_process_image
+    except ImportError:
+        pass
+
+
+def _patch_nemotron_h_pattern():
+    """Fix ``_pattern_to_list()`` not handling ``-`` separators.
+
+    Nemotron-H models (e.g. NVIDIA-Nemotron-Nano-9B-v2) use patterns like
+    ``M-M-M-MM-M-*-...`` where ``-`` is a separator.  Transformers v5.4's
+    ``NemotronHConfig._pattern_to_list`` only maps ``M``, ``E``, ``*``
+    and crashes with ``KeyError: '-'``.
+
+    TODO(upstream): report to HF transformers.
+    """
+    try:
+        from transformers.models.nemotron_h.configuration_nemotron_h import (
+            NemotronHConfig,
+        )
+
+        @staticmethod
+        def _pattern_to_list(pattern: str) -> list:
+            pattern_mapping = {
+                "M": "mamba",
+                "E": "moe",
+                "*": "attention",
+                "-": "mlp",
+            }
+            return [
+                pattern_mapping[char] for char in pattern if char in pattern_mapping
+            ]
+
+        NemotronHConfig._pattern_to_list = _pattern_to_list
     except ImportError:
         pass
 
