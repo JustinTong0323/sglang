@@ -114,8 +114,10 @@ class BaseReasoningFormatDetector:
         self._buffer += new_text
         current_text = self._buffer
 
+        think_start_text = self.think_start_token + self.think_start_self_label
+
         # If the current text is a prefix of the think token, keep buffering
-        tokens_to_check = [self.think_start_token, self.think_end_token]
+        tokens_to_check = [think_start_text, self.think_end_token]
         if self.tool_start_token:
             tokens_to_check.append(self.tool_start_token)
         if any(
@@ -124,11 +126,9 @@ class BaseReasoningFormatDetector:
         ):
             return StreamingParseResult()
 
-        think_start_text = self.think_start_token + self.think_start_self_label
-
         # Strip `<think>` token if present
         if not self.stripped_think_start and think_start_text in current_text:
-            current_text = current_text.replace(self.think_start_token, "")
+            current_text = current_text.replace(think_start_text, "", 1)
             self.stripped_think_start = True
             self._in_reasoning = True
 
