@@ -290,6 +290,7 @@ def _patch_image_process_cuda_tensor():
     TODO(upstream): report to HF transformers.
     """
     try:
+        import torch
         import transformers.image_processing_backends as ipb
 
         for cls_name in ("PilBackend", "PilImageProcessingMixin"):
@@ -298,10 +299,10 @@ def _patch_image_process_cuda_tensor():
                 continue
             original = cls.process_image
 
-            def patched_process_image(self, image, *args, _orig=original, **kwargs):
-                import torch
-
-                if isinstance(image, torch.Tensor) and image.is_cuda:
+            def patched_process_image(
+                self, image, *args, _orig=original, _Tensor=torch.Tensor, **kwargs
+            ):
+                if isinstance(image, _Tensor) and image.is_cuda:
                     image = image.cpu()
                 return _orig(self, image, *args, **kwargs)
 
@@ -311,12 +312,12 @@ def _patch_image_process_cuda_tensor():
 
 
 def _patch_nemotron_h_pattern():
-    """Fix ``_pattern_to_list()`` not handling ``-`` separators.
+    """Fix ``_pattern_to_list()`` not handling ``-`` (mlp) layer type.
 
     Nemotron-H models (e.g. NVIDIA-Nemotron-Nano-9B-v2) use patterns like
-    ``M-M-M-MM-M-*-...`` where ``-`` is a separator.  Transformers v5.4's
-    ``NemotronHConfig._pattern_to_list`` only maps ``M``, ``E``, ``*``
-    and crashes with ``KeyError: '-'``.
+    ``M-M-M-MM-M-*-...`` where ``-`` denotes an MLP layer.  Transformers
+    v5.4's ``NemotronHConfig._pattern_to_list`` only maps ``M``, ``E``,
+    ``*`` and crashes with ``KeyError: '-'``.
 
     TODO(upstream): report to HF transformers.
     """

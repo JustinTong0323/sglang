@@ -58,7 +58,8 @@ def _load_tokenizer_by_declared_class(tokenizer_name, *args, **kwargs):
             tokenizer_name, "tokenizer_config.json", kwargs.get("revision")
         )
         with open(config_file) as f:
-            tok_class_name = json.load(f).get("tokenizer_class")
+            tok_config = json.load(f)
+        tok_class_name = tok_config.get("tokenizer_class")
     except (OSError, json.JSONDecodeError):
         return None
 
@@ -66,34 +67,27 @@ def _load_tokenizer_by_declared_class(tokenizer_name, *args, **kwargs):
         return None
 
     tok_cls = getattr(transformers, tok_class_name, None)
-    if tok_cls is None:
-        # Class not in transformers — try loading via auto_map (trust_remote_code).
-        if kwargs.get("trust_remote_code"):
-            try:
-                config_file = _resolve_local_or_cached_file(
-                    tokenizer_name, "tokenizer_config.json", kwargs.get("revision")
+    if tok_cls is None and kwargs.get("trust_remote_code"):
+        # Class not in transformers — try loading via auto_map.
+        try:
+            auto_map = tok_config.get("auto_map", {})
+            auto_tok_ref = auto_map.get("AutoTokenizer")
+            if isinstance(auto_tok_ref, (list, tuple)):
+                auto_tok_ref = auto_tok_ref[0]
+            if auto_tok_ref:
+                from transformers.dynamic_module_utils import (
+                    get_class_from_dynamic_module,
                 )
-                with open(config_file) as f:
-                    auto_map = json.load(f).get("auto_map", {})
-                auto_tok_ref = auto_map.get("AutoTokenizer")
-                if isinstance(auto_tok_ref, (list, tuple)):
-                    auto_tok_ref = auto_tok_ref[0]
-                if auto_tok_ref:
-                    from transformers.dynamic_module_utils import (
-                        get_class_from_dynamic_module,
-                    )
 
-                    tok_cls = get_class_from_dynamic_module(
-                        auto_tok_ref,
-                        tokenizer_name,
-                        code_revision=kwargs.get("revision"),
-                    )
-            except Exception as e:
-                logger.debug(
-                    "Dynamic module lookup for %s failed: %s", tok_class_name, e
+                tok_cls = get_class_from_dynamic_module(
+                    auto_tok_ref,
+                    tokenizer_name,
+                    code_revision=kwargs.get("revision"),
                 )
-        if tok_cls is None:
-            return None
+        except (OSError, ImportError, ValueError, RuntimeError) as e:
+            logger.debug("Dynamic module lookup for %s failed: %s", tok_class_name, e)
+    if tok_cls is None:
+        return None
 
     logger.info(
         "Loading tokenizer for %s directly as %s (bypassing AutoTokenizer)",
