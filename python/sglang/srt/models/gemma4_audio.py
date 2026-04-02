@@ -807,6 +807,30 @@ class Gemma4AudioEncoder(nn.Module):
         else:
             self.output_proj = None
 
+        # Precompute causal_valid_mask — depends only on static config values.
+        chunk_size = config.attention_chunk_size
+        max_future_horizon = config.attention_context_right
+        max_past_horizon = max(0, config.attention_context_left - 1)
+        upper_diagonal = max_past_horizon + max_future_horizon
+        context_size = chunk_size + max_past_horizon + max_future_horizon
+
+        lower_causal_mask = torch.tril(
+            torch.ones((context_size, chunk_size), dtype=torch.bool),
+            diagonal=0,
+        ).T
+        upper_causal_mask = torch.tril(
+            torch.ones((chunk_size, context_size), dtype=torch.bool),
+            diagonal=upper_diagonal,
+        )
+        local_causal_valid_mask = torch.ones(
+            (chunk_size, context_size), dtype=torch.bool
+        )
+        self.register_buffer(
+            "causal_valid_mask",
+            local_causal_valid_mask * lower_causal_mask * upper_causal_mask,
+            persistent=False,
+        )
+
     @property
     def device(self):
         return next(self.parameters()).device
@@ -828,30 +852,10 @@ class Gemma4AudioEncoder(nn.Module):
             audio_mel, audio_mel_mask
         )
 
-        with torch.no_grad():
-            chunk_size = self.config.attention_chunk_size
-            max_future_horizon = self.config.attention_context_right
-            max_past_horizon = max(0, self.config.attention_context_left - 1)
-            upper_diagonal = max_past_horizon + max_future_horizon
-            context_size = chunk_size + max_past_horizon + max_future_horizon
-
-            lower_causal_mask = torch.tril(
-                torch.ones((context_size, chunk_size), dtype=torch.bool),
-                diagonal=0,
-            ).T
-            upper_causal_mask = torch.tril(
-                torch.ones((chunk_size, context_size), dtype=torch.bool),
-                diagonal=upper_diagonal,
-            )
-            local_causal_valid_mask = torch.ones(
-                (chunk_size, context_size), dtype=torch.bool
-            )
-            causal_valid_mask = (
-                local_causal_valid_mask * lower_causal_mask * upper_causal_mask
-            )
-
         for block in self.conformer:
-            audio_encodings = block(audio_encodings, current_mask, causal_valid_mask)
+            audio_encodings = block(
+                audio_encodings, current_mask, self.causal_valid_mask
+            )
 
         if self.output_proj is not None:
             audio_encodings, _ = self.output_proj(audio_encodings)

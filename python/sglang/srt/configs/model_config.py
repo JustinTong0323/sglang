@@ -1456,7 +1456,7 @@ def get_hybrid_layer_ids(
             i for i in range(num_hidden_layers) if (i + 1) % 4 == 0
         ]
     elif "GptOssForCausalLM" in model_architectures:
-        layer_types = getattr(hf_text_config, "layer_types", None)
+        layer_types = getattr(hf_text_config, "layer_types", [])
         swa_attention_layer_ids = [
             i for i, x in enumerate(layer_types) if x == "sliding_attention"
         ]

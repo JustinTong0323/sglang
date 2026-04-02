@@ -103,6 +103,7 @@ class Gemma4Router(nn.Module):
             quant_config=None,
             prefix=add_prefix("proj", prefix),
         )
+        self._fused_scale: Optional[torch.Tensor] = None
 
     def fuse_scale(self):
         """Pre-compute scale * root_size. Call after weights are loaded."""
@@ -111,7 +112,7 @@ class Gemma4Router(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Returns raw router logits [T, E]."""
         x = self.norm(x)
-        if not hasattr(self, "_fused_scale"):
+        if self._fused_scale is None:
             self.fuse_scale()
         x = x * self._fused_scale.to(x.dtype)
         router_logits, _ = self.proj(x)
