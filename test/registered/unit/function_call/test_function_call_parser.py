@@ -6,7 +6,12 @@ from sglang.srt.function_call.base_format_detector import BaseFormatDetector
 from sglang.srt.function_call.core_types import StreamingParseResult
 from sglang.srt.function_call.deepseekv3_detector import DeepSeekV3Detector
 from sglang.srt.function_call.deepseekv32_detector import DeepSeekV32Detector
-from sglang.srt.function_call.gemma4_detector import Gemma4Detector
+from sglang.srt.function_call.gemma4_detector import (
+    Gemma4Detector,
+    _parse_gemma4_args,
+    _parse_gemma4_array,
+    _parse_gemma4_value,
+)
 from sglang.srt.function_call.gigachat3_detector import GigaChat3Detector
 from sglang.srt.function_call.glm4_moe_detector import Glm4MoeDetector
 from sglang.srt.function_call.glm47_moe_detector import Glm47MoeDetector
@@ -3948,6 +3953,107 @@ class TestGemma4Detector(unittest.TestCase):
                             found_params = True
 
         self.assertTrue(found_params)
+
+    def test_has_tool_call(self):
+        self.assertTrue(
+            self.detector.has_tool_call(
+                '<|tool_call>call:get_weather{location:<|"|>Tokyo<|"|>}<tool_call|>'
+            )
+        )
+        self.assertFalse(self.detector.has_tool_call("no tool call here"))
+
+    def test_detect_and_parse_no_tool_call(self):
+        text = "This is plain text without any tool calls."
+        result = self.detector.detect_and_parse(text, self.tools)
+        self.assertEqual(result.normal_text, text)
+        self.assertEqual(len(result.calls), 0)
+
+    def test_detect_and_parse_tool_index(self):
+        text = '<|tool_call>call:get_weather{location:<|"|>Tokyo<|"|>}<tool_call|>'
+        result = self.detector.detect_and_parse(text, self.tools)
+        self.assertEqual(len(result.calls), 1)
+        self.assertEqual(result.calls[0].tool_index, 0)
+        self.assertEqual(result.calls[0].name, "get_weather")
+
+    def test_detect_and_parse_unknown_tool_index(self):
+        text = '<|tool_call>call:unknown_func{arg:<|"|>val<|"|>}<tool_call|>'
+        result = self.detector.detect_and_parse(text, self.tools)
+        self.assertEqual(len(result.calls), 1)
+        self.assertEqual(result.calls[0].tool_index, -1)
+
+    def test_detect_and_parse_nested_object(self):
+        text = '<|tool_call>call:get_weather{location:<|"|>Tokyo<|"|>,details:{temp:25,unit:<|"|>celsius<|"|>}}<tool_call|>'
+        result = self.detector.detect_and_parse(text, self.tools)
+        self.assertEqual(len(result.calls), 1)
+        params = json.loads(result.calls[0].parameters)
+        self.assertEqual(params["location"], "Tokyo")
+        self.assertIsInstance(params["details"], dict)
+        self.assertEqual(params["details"]["temp"], 25)
+        self.assertEqual(params["details"]["unit"], "celsius")
+
+    def test_detect_and_parse_multiple_calls(self):
+        extra_tools = self.tools + [
+            Tool(
+                type="function",
+                function=Function(
+                    name="get_time",
+                    description="Get current time",
+                    parameters={
+                        "type": "object",
+                        "properties": {"timezone": {"type": "string"}},
+                    },
+                ),
+            )
+        ]
+        text = (
+            'Some text <|tool_call>call:get_weather{location:<|"|>Tokyo<|"|>}<tool_call|>'
+            ' more text <|tool_call>call:get_time{timezone:<|"|>UTC<|"|>}<tool_call|>'
+        )
+        result = self.detector.detect_and_parse(text, extra_tools)
+        self.assertEqual(len(result.calls), 2)
+        self.assertEqual(result.calls[0].name, "get_weather")
+        self.assertEqual(result.calls[1].name, "get_time")
+        self.assertEqual(result.normal_text, "Some text ")
+
+    def test_parse_gemma4_args_empty(self):
+        self.assertEqual(_parse_gemma4_args(""), {})
+        self.assertEqual(_parse_gemma4_args("   "), {})
+
+    def test_parse_gemma4_args_booleans(self):
+        result = _parse_gemma4_args("flag:true,other:false")
+        self.assertIs(result["flag"], True)
+        self.assertIs(result["other"], False)
+
+    def test_parse_gemma4_args_numbers(self):
+        result = _parse_gemma4_args("count:42,ratio:3.14")
+        self.assertEqual(result["count"], 42)
+        self.assertAlmostEqual(result["ratio"], 3.14)
+
+    def test_parse_gemma4_args_string_with_colon(self):
+        result = _parse_gemma4_args('url:<|"|>http://example.com<|"|>')
+        self.assertEqual(result["url"], "http://example.com")
+
+    def test_parse_gemma4_args_nested_object(self):
+        result = _parse_gemma4_args('outer:{inner:<|"|>val<|"|>,num:5}')
+        self.assertIsInstance(result["outer"], dict)
+        self.assertEqual(result["outer"]["inner"], "val")
+        self.assertEqual(result["outer"]["num"], 5)
+
+    def test_parse_gemma4_array_mixed_types(self):
+        result = _parse_gemma4_array('<|"|>hello<|"|>, 42, true, {key:<|"|>val<|"|>}')
+        self.assertEqual(result[0], "hello")
+        self.assertEqual(result[1], 42)
+        self.assertIs(result[2], True)
+        self.assertIsInstance(result[3], dict)
+        self.assertEqual(result[3]["key"], "val")
+
+    def test_parse_gemma4_value_types(self):
+        self.assertIs(_parse_gemma4_value("true"), True)
+        self.assertIs(_parse_gemma4_value("false"), False)
+        self.assertEqual(_parse_gemma4_value("42"), 42)
+        self.assertAlmostEqual(_parse_gemma4_value("3.14"), 3.14)
+        self.assertEqual(_parse_gemma4_value("hello"), "hello")
+        self.assertEqual(_parse_gemma4_value(""), "")
 
 
 if __name__ == "__main__":
