@@ -315,6 +315,7 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
             incremental_output = output_str[s.sent_offset :]
             s.sent_offset = len(output_str)
             output_strs.append(incremental_output)
+
         return output_strs
 
     def handle_batch_token_id_out(self, recv_obj: BatchTokenIDOutput):
