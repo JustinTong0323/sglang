@@ -656,6 +656,63 @@ class TestGemma4Detector(CustomTestCase):
         self.assertEqual(result.normal_text, "")
         self.assertEqual(result.reasoning_text, "")
 
+    def test_streaming_end_token_mid_chunk(self):
+        """Test end token arriving in the same chunk as reasoning content."""
+        self.detector.parse_streaming_increment("<|channel>thought\n")
+        result = self.detector.parse_streaming_increment(
+            "some reasoning<channel|>the answer"
+        )
+        self.assertEqual(result.reasoning_text, "some reasoning")
+        self.assertEqual(result.normal_text, "the answer")
+        self.assertFalse(self.detector._in_reasoning)
+
+    def test_streaming_split_end_token(self):
+        """Test end token split across two chunks."""
+        self.detector.parse_streaming_increment("<|channel>thought\n")
+        self.detector.parse_streaming_increment("reasoning content")
+
+        result1 = self.detector.parse_streaming_increment("<chan")
+        self.assertEqual(result1.normal_text, "")
+
+        result2 = self.detector.parse_streaming_increment("nel|>final answer")
+        self.assertFalse(self.detector._in_reasoning)
+        self.assertIn("final answer", result2.normal_text)
+
+    def test_streaming_self_label_split_across_chunks(self):
+        """Test self_label ('thought\\n') arriving separately from start token."""
+        result1 = self.detector.parse_streaming_increment("<|channel>")
+        self.assertEqual(result1.reasoning_text, "")
+        self.assertEqual(result1.normal_text, "")
+
+        result2 = self.detector.parse_streaming_increment("thought\n")
+        self.assertTrue(self.detector._in_reasoning)
+
+        result3 = self.detector.parse_streaming_increment("reasoning here")
+        self.assertEqual(result3.reasoning_text, "reasoning here")
+
+    def test_streaming_force_reasoning(self):
+        """Test streaming with force_reasoning=True (no start token needed)."""
+        detector = Gemma4Detector(force_reasoning=True)
+
+        result1 = detector.parse_streaming_increment("reasoning content")
+        self.assertEqual(result1.reasoning_text, "reasoning content")
+        self.assertEqual(result1.normal_text, "")
+
+        result2 = detector.parse_streaming_increment("<channel|>the answer")
+        self.assertFalse(detector._in_reasoning)
+        self.assertIn("the answer", result2.normal_text)
+
+    def test_streaming_multiple_reasoning_chunks(self):
+        """Test reasoning content arriving in many small chunks."""
+        self.detector.parse_streaming_increment("<|channel>thought\n")
+
+        all_reasoning = ""
+        for chunk in ["Think", "ing ", "step ", "by ", "step."]:
+            result = self.detector.parse_streaming_increment(chunk)
+            all_reasoning += result.reasoning_text
+            self.assertEqual(result.normal_text, "")
+        self.assertEqual(all_reasoning, "Thinking step by step.")
+
     def test_force_reasoning(self):
         """Test Gemma4Detector with force_reasoning=True."""
         detector = Gemma4Detector(force_reasoning=True)

@@ -4210,6 +4210,144 @@ class TestGemma4Detector(unittest.TestCase):
         self.assertEqual(_parse_gemma4_value("hello"), "hello")
         self.assertEqual(_parse_gemma4_value(""), "")
 
+    def _collect_streaming(self, chunks):
+        """Helper: feed chunks and collect normal text + tool calls by index."""
+        normal_text = ""
+        tool_calls_by_index = {}
+        for chunk in chunks:
+            result = self.detector.parse_streaming_increment(chunk, self.tools)
+            normal_text += result.normal_text
+            for call in result.calls:
+                if call.tool_index is not None:
+                    if call.tool_index not in tool_calls_by_index:
+                        tool_calls_by_index[call.tool_index] = {
+                            "name": "",
+                            "parameters": "",
+                        }
+                    if call.name:
+                        tool_calls_by_index[call.tool_index]["name"] = call.name
+                    if call.parameters:
+                        tool_calls_by_index[call.tool_index][
+                            "parameters"
+                        ] += call.parameters
+        return normal_text, tool_calls_by_index
+
+    def test_streaming_multiple_tool_calls(self):
+        """Test streaming with two consecutive tool calls."""
+        extra_tools = self.tools + [
+            Tool(
+                type="function",
+                function=Function(
+                    name="get_time",
+                    description="Get current time",
+                    parameters={
+                        "type": "object",
+                        "properties": {"timezone": {"type": "string"}},
+                    },
+                ),
+            )
+        ]
+        chunks = [
+            '<|tool_call>call:get_weather{location:<|"|>',
+            'Tokyo<|"|>}<tool_call|>',
+            ' <|tool_call>call:get_time{timezone:<|"|>',
+            'UTC<|"|>}<tool_call|>',
+        ]
+        normal_text = ""
+        tool_calls_by_index = {}
+        for chunk in chunks:
+            result = self.detector.parse_streaming_increment(chunk, extra_tools)
+            normal_text += result.normal_text
+            for call in result.calls:
+                if call.tool_index is not None:
+                    if call.tool_index not in tool_calls_by_index:
+                        tool_calls_by_index[call.tool_index] = {
+                            "name": "",
+                            "parameters": "",
+                        }
+                    if call.name:
+                        tool_calls_by_index[call.tool_index]["name"] = call.name
+                    if call.parameters:
+                        tool_calls_by_index[call.tool_index][
+                            "parameters"
+                        ] += call.parameters
+
+        self.assertEqual(len(tool_calls_by_index), 2)
+        self.assertEqual(tool_calls_by_index[0]["name"], "get_weather")
+        self.assertEqual(tool_calls_by_index[1]["name"], "get_time")
+        params0 = json.loads(tool_calls_by_index[0]["parameters"])
+        params1 = json.loads(tool_calls_by_index[1]["parameters"])
+        self.assertEqual(params0["location"], "Tokyo")
+        self.assertEqual(params1["timezone"], "UTC")
+
+    def test_streaming_very_small_chunks(self):
+        """Test streaming with character-by-character chunks."""
+        full_text = '<|tool_call>call:get_weather{location:<|"|>Rome<|"|>}<tool_call|>'
+        chunks = list(full_text)
+
+        normal_text, tool_calls = self._collect_streaming(chunks)
+
+        self.assertEqual(len(tool_calls), 1)
+        self.assertEqual(tool_calls[0]["name"], "get_weather")
+        params = json.loads(tool_calls[0]["parameters"])
+        self.assertEqual(params["location"], "Rome")
+
+    def test_streaming_empty_args(self):
+        """Test streaming a tool call with no arguments."""
+        chunks = ["<|tool_call>call:get_weather{}", "<tool_call|>"]
+        normal_text, tool_calls = self._collect_streaming(chunks)
+        self.assertEqual(len(tool_calls), 1)
+        self.assertEqual(tool_calls[0]["name"], "get_weather")
+
+    def test_streaming_text_between_tool_calls(self):
+        """Test streaming with normal text interleaved between two different tool calls."""
+        extra_tools = self.tools + [
+            Tool(
+                type="function",
+                function=Function(
+                    name="get_time",
+                    description="Get current time",
+                    parameters={
+                        "type": "object",
+                        "properties": {"timezone": {"type": "string"}},
+                    },
+                ),
+            )
+        ]
+        chunks = [
+            "Hello! ",
+            '<|tool_call>call:get_weather{location:<|"|>Paris<|"|>}<tool_call|>',
+            " Let me also check ",
+            '<|tool_call>call:get_time{timezone:<|"|>UTC<|"|>}<tool_call|>',
+        ]
+        normal_text = ""
+        tool_calls_by_index = {}
+        for chunk in chunks:
+            result = self.detector.parse_streaming_increment(chunk, extra_tools)
+            normal_text += result.normal_text
+            for call in result.calls:
+                if call.tool_index is not None:
+                    if call.tool_index not in tool_calls_by_index:
+                        tool_calls_by_index[call.tool_index] = {
+                            "name": "",
+                            "parameters": "",
+                        }
+                    if call.name:
+                        tool_calls_by_index[call.tool_index]["name"] = call.name
+                    if call.parameters:
+                        tool_calls_by_index[call.tool_index][
+                            "parameters"
+                        ] += call.parameters
+        self.assertIn("Hello!", normal_text)
+        self.assertIn("Let me also check", normal_text)
+        self.assertEqual(len(tool_calls_by_index), 2)
+        self.assertEqual(tool_calls_by_index[0]["name"], "get_weather")
+        self.assertEqual(tool_calls_by_index[1]["name"], "get_time")
+        params0 = json.loads(tool_calls_by_index[0]["parameters"])
+        params1 = json.loads(tool_calls_by_index[1]["parameters"])
+        self.assertEqual(params0["location"], "Paris")
+        self.assertEqual(params1["timezone"], "UTC")
+
 
 if __name__ == "__main__":
     unittest.main()
