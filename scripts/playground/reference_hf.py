@@ -167,6 +167,7 @@ def synthetic_tokens(args):
             prefill_logits = m.forward(torch.tensor([input_ids], device="cuda")).logits[
                 0
             ][-1]
+
             if i == 0:
                 print("prefill logits", prefill_logits)
             else:
