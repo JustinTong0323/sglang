@@ -28,8 +28,7 @@ from sglang.srt.layers.linear import (
     RowParallelLinear,
 )
 from sglang.srt.layers.logits_processor import LogitsProcessor
-from sglang.srt.layers.moe.fused_moe_triton.layer import (
-    FusedMoE)
+from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
 from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
@@ -38,12 +37,14 @@ from sglang.srt.layers.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
 )
+from sglang.srt.model_executor.cuda_graph_runner import get_is_capture_mode
 from sglang.srt.managers.schedule_batch import ForwardBatch
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
     tensor_model_parallel_all_reduce,
 )
+from sglang.srt.utils import is_cuda
 
 class HYV3FeedForward(nn.Module):
     def __init__(
@@ -91,9 +92,11 @@ class HYV3MoEFused(nn.Module):
         layer_id: int,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
+        alt_stream: Optional[torch.cuda.Stream] = None,
     ):
         super().__init__()
         self.tp_size = get_tensor_model_parallel_world_size()
+        self.alt_stream = alt_stream
         self.n_routed_experts = config.num_experts
         top_k = config.num_experts_per_tok
         intermediate_size = config.expert_hidden_dim
@@ -166,6 +169,16 @@ class HYV3MoEFused(nn.Module):
         param.data.copy_(loaded_weight.to(torch.float32))
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if (
+            self.alt_stream is not None
+            and self.shared_mlp is not None
+            and hidden_states.shape[0] > 0
+            and get_is_capture_mode()
+        ):
+            return self._forward_dual_stream(hidden_states)
+        return self._forward_single_stream(hidden_states)
+
+    def _forward_single_stream(self, hidden_states: torch.Tensor) -> torch.Tensor:
         orig_shape = hidden_states.shape
         hidden_dim = hidden_states.shape[-1]
         hidden_states = hidden_states.view(-1, hidden_dim)
@@ -180,12 +193,38 @@ class HYV3MoEFused(nn.Module):
             final_hidden_states = final_hidden_states + shared_output
         else:
             final_hidden_states = self.experts(
-                hidden_states=hidden_states,  topk_output=topk_output
+                hidden_states=hidden_states, topk_output=topk_output
             )
-            
+
         if self.tp_size > 1:
             final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
-            
+
+        return final_hidden_states.view(orig_shape)
+
+    def _forward_dual_stream(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Shared experts on main stream, routed experts on alt stream."""
+        orig_shape = hidden_states.shape
+        hidden_dim = hidden_states.shape[-1]
+        hidden_states = hidden_states.view(-1, hidden_dim)
+
+        current_stream = torch.cuda.current_stream()
+        self.alt_stream.wait_stream(current_stream)
+
+        shared_output = self.shared_mlp(hidden_states)
+
+        with torch.cuda.stream(self.alt_stream):
+            router_logits, _ = self.gate(hidden_states.to(dtype=torch.float32))
+            topk_output = self.topk(hidden_states, router_logits)
+            final_hidden_states = self.experts(
+                hidden_states=hidden_states, topk_output=topk_output
+            )
+
+        current_stream.wait_stream(self.alt_stream)
+        final_hidden_states = final_hidden_states + shared_output
+
+        if self.tp_size > 1:
+            final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
+
         return final_hidden_states.view(orig_shape)
 
 
@@ -288,6 +327,7 @@ class HYV3DecoderLayer(nn.Module):
         layer_id: int,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
+        alt_stream: Optional[torch.cuda.Stream] = None,
     ) -> None:
         super().__init__()
         self.layer_id = layer_id
@@ -306,7 +346,7 @@ class HYV3DecoderLayer(nn.Module):
         )
         self.input_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
-        
+
         first_k_dense_replace = getattr(config, "first_k_dense_replace", 0)
         if layer_id < first_k_dense_replace:
             self.mlp = HYV3FeedForward(
@@ -319,7 +359,11 @@ class HYV3DecoderLayer(nn.Module):
             self.block_type = "feedforward"
         else:
             self.mlp = HYV3MoEFused(
-                config=config, layer_id=layer_id, quant_config=quant_config, prefix=f"{prefix}.mlp"
+                config=config,
+                layer_id=layer_id,
+                quant_config=quant_config,
+                prefix=f"{prefix}.mlp",
+                alt_stream=alt_stream,
             )
             self.block_type = "moe"
 
@@ -364,6 +408,8 @@ class HYV3Model(nn.Module):
             prefix=f"{prefix}.embed_tokens",
         )
 
+        self.alt_stream = torch.cuda.Stream() if is_cuda() else None
+
         self.layers = nn.ModuleList(
             [
                 HYV3DecoderLayer(
@@ -371,6 +417,7 @@ class HYV3Model(nn.Module):
                     layer_id=i,
                     quant_config=quant_config,
                     prefix=f"{prefix}.layers.{i}",
+                    alt_stream=self.alt_stream,
                 )
                 for i in range(config.num_hidden_layers)
             ]
