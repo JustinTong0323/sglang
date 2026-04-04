@@ -50,7 +50,6 @@ class SWAKVPool(KVCache):
         self.device = device
         self.swa_layer_nums = len(swa_attention_layer_ids)
         self.full_layer_nums = len(full_attention_layer_ids)
-
         self.start_layer = 0
         self.page_size = page_size
         self.swa_loc = None
@@ -165,7 +164,6 @@ class SWAKVPool(KVCache):
 
         layer_id = layer.layer_id
         layer_id_pool, is_swa_layer = self.layers_mapping[layer_id]
-
         if is_swa_layer:
             if self.swa_loc is not None:
                 loc = self.swa_loc
