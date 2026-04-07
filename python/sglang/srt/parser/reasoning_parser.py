@@ -233,7 +233,14 @@ class KimiK2ThinkingDetector(BaseReasoningFormatDetector):
             If True, streams reasoning content as it arrives.
     """
 
-    def __init__(self, stream_reasoning: bool = True, force_reasoning: bool = True):
+    def __init__(
+        self,
+        stream_reasoning: bool = True,
+        force_reasoning: bool = True,
+        continue_final_message: bool = False,
+        previous_content: str = "",
+        **kwargs,
+    ):
         # Kimi-K2-Thinking is assumed to be reasoning until `</think>` token
         think_excluded_tokens = [
             "<think>",
@@ -254,6 +261,9 @@ class KimiK2ThinkingDetector(BaseReasoningFormatDetector):
             strict_reasoning_format=True,
             force_reasoning=force_reasoning,
             stream_reasoning=stream_reasoning,
+            tool_start_token="<|tool_calls_section_begin|>",
+            continue_final_message=continue_final_message,
+            previous_content=previous_content,
         )
 
 
@@ -273,7 +283,14 @@ class GLM45StrictDetector(BaseReasoningFormatDetector):
             If True, streams reasoning content as it arrives.
     """
 
-    def __init__(self, stream_reasoning: bool = True, force_reasoning: bool = False):
+    def __init__(
+        self,
+        stream_reasoning: bool = True,
+        force_reasoning: bool = False,
+        continue_final_message: bool = False,
+        previous_content: str = "",
+        **kwargs,
+    ):
         # The "<think>" token can present 0 or any times
         think_excluded_tokens = [
             "<tool_call>",
@@ -289,6 +306,9 @@ class GLM45StrictDetector(BaseReasoningFormatDetector):
             strict_reasoning_format=True,
             force_reasoning=force_reasoning,
             stream_reasoning=stream_reasoning,
+            tool_start_token="<tool_call>",
+            continue_final_message=continue_final_message,
+            previous_content=previous_content,
         )
 
 
@@ -308,7 +328,14 @@ class Qwen3StrictDetector(BaseReasoningFormatDetector):
             If True, streams reasoning content as it arrives.
     """
 
-    def __init__(self, stream_reasoning: bool = True, force_reasoning: bool = False):
+    def __init__(
+        self,
+        stream_reasoning: bool = True,
+        force_reasoning: bool = False,
+        continue_final_message: bool = False,
+        previous_content: str = "",
+        **kwargs,
+    ):
         # The "<think>" token can present 0 or any times
         think_excluded_tokens = [
             "<tool_call>",
@@ -323,6 +350,9 @@ class Qwen3StrictDetector(BaseReasoningFormatDetector):
             strict_reasoning_format=True,
             force_reasoning=force_reasoning,
             stream_reasoning=stream_reasoning,
+            tool_start_token="<tool_call>",
+            continue_final_message=continue_final_message,
+            previous_content=previous_content,
         )
 
 
