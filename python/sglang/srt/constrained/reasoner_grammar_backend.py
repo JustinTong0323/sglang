@@ -68,6 +68,7 @@ class ReasonerGrammarObject(BaseGrammarObject):
         self.allocate_vocab_mask_fn = allocate_vocab_mask_fn
         self.move_vocab_mask_fn = move_vocab_mask_fn
         self.apply_vocab_mask_fn = apply_vocab_mask_fn
+        self._think_end_id_list = [think_end_id]
 
         self.tokens_in_think = -1
         self.tokens_after_end = -1
@@ -86,11 +87,11 @@ class ReasonerGrammarObject(BaseGrammarObject):
         return self.tokens_after_end >= 0
 
     def transfer_state(self, token: int) -> None:
-        if self._is_thinking() and token == self.think_end_id:
-            self.tokens_after_end = 0
-            return
         if self._is_thinking():
-            self.tokens_in_think += 1
+            if token == self.think_end_id:
+                self.tokens_after_end = 0
+            else:
+                self.tokens_in_think += 1
         elif self._is_generation():
             self.tokens_after_end += 1
 
@@ -139,7 +140,7 @@ class ReasonerGrammarObject(BaseGrammarObject):
                 )
             else:
                 self._do_token_filter(
-                    vocab_mask, [self.think_end_id], idx, is_allowed=True
+                    vocab_mask, self._think_end_id_list, idx, is_allowed=True
                 )
             return
         if self._is_generation() and self.grammar is not None:
@@ -241,7 +242,6 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
                 f"think_end_token '{reasoning_parser.detector.think_end_token}' "
                 "must encode to exactly one token for constrained reasoning."
             )
-        self.think_start_id = think_start_ids[0]
         self.think_end_id = think_end_ids[0]
         self.strict_reasoning_format = (
             reasoning_parser.detector.strict_reasoning_format
@@ -288,12 +288,11 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
             excluded_ids += new_ids
         return excluded_ids
 
-    def init_strict_reasoning_grammar(self, reasoning: bool) -> Optional[BaseGrammarObject]:
-        """Create a grammar object for strict token filtering only (no inner grammar)."""
-        if not self.strict_reasoning_format:
-            return None
+    def _make_grammar_object(
+        self, grammar: Optional[BaseGrammarObject], reasoning: bool
+    ) -> ReasonerGrammarObject:
         obj = ReasonerGrammarObject(
-            grammar=None,
+            grammar=grammar,
             think_end_id=self.think_end_id,
             think_excluded_token_ids=self.think_excluded_token_ids,
             max_think_tokens=self.max_think_tokens,
@@ -306,23 +305,16 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
         obj.maybe_init_reasoning(reasoning)
         return obj
 
+    def init_strict_reasoning_grammar(self, reasoning: bool) -> Optional[BaseGrammarObject]:
+        """Create a grammar object for strict token filtering only (no inner grammar)."""
+        if not self.strict_reasoning_format:
+            return None
+        return self._make_grammar_object(None, reasoning)
+
     def _init_value_dispatch(
         self, key: Tuple[str, str], reasoning: bool
     ) -> Optional[BaseGrammarObject]:
         ret = self.grammar_backend._init_value_dispatch(key, reasoning)
-        # avoid wrapping invalid grammar, so that the scheduler can detect it
         if ret is None or isinstance(ret, InvalidGrammarObject):
             return ret
-        obj = ReasonerGrammarObject(
-            grammar=ret,
-            think_end_id=self.think_end_id,
-            think_excluded_token_ids=self.think_excluded_token_ids,
-            max_think_tokens=self.max_think_tokens,
-            enable_token_filter=self.enable_token_filter,
-            token_filter_fn=self._token_filter_fn,
-            allocate_vocab_mask_fn=self.grammar_backend.allocate_vocab_mask,
-            move_vocab_mask_fn=self.grammar_backend.move_vocab_mask,
-            apply_vocab_mask_fn=self.grammar_backend.apply_vocab_mask,
-        )
-        obj.maybe_init_reasoning(reasoning)
-        return obj
+        return self._make_grammar_object(ret, reasoning)

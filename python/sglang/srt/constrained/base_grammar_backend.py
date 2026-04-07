@@ -21,7 +21,6 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
-from sglang.srt.parser.reasoning_parser import ReasoningParser
 from sglang.srt.server_args import ServerArgs
 
 logger = logging.getLogger(__name__)
@@ -276,6 +275,7 @@ def create_grammar_backend(
         from sglang.srt.constrained.reasoner_grammar_backend import (
             ReasonerGrammarBackend,
         )
+        from sglang.srt.parser.reasoning_parser import ReasoningParser
 
         reasoning_parser = ReasoningParser(
             model_type=server_args.reasoning_parser, stream_reasoning=False
