@@ -214,6 +214,24 @@ class XGrammarGrammarBackend(BaseGrammarBackend):
         return True
 
     @staticmethod
+    def allocate_vocab_mask(vocab_size: int, batch_size: int, device) -> torch.Tensor:
+        return allocate_token_bitmask(batch_size, vocab_size)
+
+    @staticmethod
+    def move_vocab_mask(vocab_mask: torch.Tensor, device) -> torch.Tensor:
+        return vocab_mask.to(device, non_blocking=True)
+
+    @staticmethod
+    def apply_vocab_mask(logits: torch.Tensor, vocab_mask: torch.Tensor) -> None:
+        if logits.device.type in {"cuda", "npu", "xpu", "musa"}:
+            if _is_hip:
+                apply_token_bitmask_inplace_cuda(logits, vocab_mask)
+            else:
+                apply_token_bitmask_inplace_triton(logits, vocab_mask)
+        else:
+            raise RuntimeError(f"Unsupported device: {logits.device.type}")
+
+    @staticmethod
     def set_token_filter(
         vocab_mask: torch.Tensor,
         token_ids: List[int],

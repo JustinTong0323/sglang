@@ -18,6 +18,13 @@ from typing import List
 import torch
 
 
+def _to_int32(value: int) -> int:
+    value &= 0xFFFFFFFF
+    if value >= (1 << 31):
+        value -= 1 << 32
+    return value
+
+
 def set_token_filter_torch(
     vocab_mask: torch.Tensor,
     token_ids: List[int],
@@ -38,4 +45,4 @@ def set_token_filter_torch(
             new_value = current_value | (1 << bit_idx)
         else:
             new_value = current_value & (~(1 << bit_idx) & 0xFFFFFFFF)
-        vocab_mask[batch_idx, element_idx] = new_value & 0xFFFFFFFF
+        vocab_mask[batch_idx, element_idx] = _to_int32(new_value)

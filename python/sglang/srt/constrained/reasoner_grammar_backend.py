@@ -54,6 +54,9 @@ class ReasonerGrammarObject(BaseGrammarObject):
         max_think_tokens: int = -1,
         enable_token_filter: bool = False,
         token_filter_fn=None,
+        allocate_vocab_mask_fn=None,
+        move_vocab_mask_fn=None,
+        apply_vocab_mask_fn=None,
     ):
         super().__init__()
         self.grammar = grammar
@@ -62,6 +65,9 @@ class ReasonerGrammarObject(BaseGrammarObject):
         self.max_think_tokens = max_think_tokens
         self.enable_token_filter = enable_token_filter
         self.token_filter_fn = token_filter_fn
+        self.allocate_vocab_mask_fn = allocate_vocab_mask_fn
+        self.move_vocab_mask_fn = move_vocab_mask_fn
+        self.apply_vocab_mask_fn = apply_vocab_mask_fn
 
         self.tokens_in_think = -1
         self.tokens_after_end = -1
@@ -142,18 +148,22 @@ class ReasonerGrammarObject(BaseGrammarObject):
     def allocate_vocab_mask(self, vocab_size, batch_size, device):
         if self.grammar is not None:
             return self.grammar.allocate_vocab_mask(vocab_size, batch_size, device)
+        if self.allocate_vocab_mask_fn is not None:
+            return self.allocate_vocab_mask_fn(vocab_size, batch_size, device)
         return None
 
     def move_vocab_mask(self, vocab_mask, device):
         if self.grammar is not None:
             return self.grammar.move_vocab_mask(vocab_mask, device)
+        if self.move_vocab_mask_fn is not None:
+            return self.move_vocab_mask_fn(vocab_mask, device)
         return vocab_mask
 
     @property
     def apply_vocab_mask(self):
         if self.grammar is not None:
             return self.grammar.apply_vocab_mask
-        return False
+        return self.apply_vocab_mask_fn
 
     def copy(self):
         return ReasonerGrammarObject(
@@ -163,6 +173,9 @@ class ReasonerGrammarObject(BaseGrammarObject):
             self.max_think_tokens,
             self.enable_token_filter,
             self.token_filter_fn,
+            self.allocate_vocab_mask_fn,
+            self.move_vocab_mask_fn,
+            self.apply_vocab_mask_fn,
         )
 
     @property
@@ -276,6 +289,9 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
             max_think_tokens=self.max_think_tokens,
             enable_token_filter=self.enable_token_filter,
             token_filter_fn=self._token_filter_fn,
+            allocate_vocab_mask_fn=self.grammar_backend.allocate_vocab_mask,
+            move_vocab_mask_fn=self.grammar_backend.move_vocab_mask,
+            apply_vocab_mask_fn=self.grammar_backend.apply_vocab_mask,
         )
         obj.maybe_init_reasoning(reasoning)
         return obj
@@ -294,6 +310,9 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
             max_think_tokens=self.max_think_tokens,
             enable_token_filter=self.enable_token_filter,
             token_filter_fn=self._token_filter_fn,
+            allocate_vocab_mask_fn=self.grammar_backend.allocate_vocab_mask,
+            move_vocab_mask_fn=self.grammar_backend.move_vocab_mask,
+            apply_vocab_mask_fn=self.grammar_backend.apply_vocab_mask,
         )
         obj.maybe_init_reasoning(reasoning)
         return obj
