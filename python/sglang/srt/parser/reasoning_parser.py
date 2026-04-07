@@ -30,6 +30,8 @@ class BaseReasoningFormatDetector:
         tool_start_token: Optional[str] = None,
         continue_final_message: bool = False,
         previous_content: str = "",
+        thinks_internally: bool = False,
+        reasoning_default: str = "always",
     ):
         self.think_start_token = think_start_token
         self.think_end_token = think_end_token
@@ -39,6 +41,8 @@ class BaseReasoningFormatDetector:
         self.force_reasoning = force_reasoning
         self._in_reasoning = force_reasoning
         self.stream_reasoning = stream_reasoning
+        self.thinks_internally = thinks_internally
+        self.reasoning_default = reasoning_default
 
         self._buffer = ""
         self.stripped_think_start = False
@@ -264,6 +268,7 @@ class KimiK2ThinkingDetector(BaseReasoningFormatDetector):
             tool_start_token="<|tool_calls_section_begin|>",
             continue_final_message=continue_final_message,
             previous_content=previous_content,
+            reasoning_default="thinking",
         )
 
 
@@ -309,6 +314,8 @@ class GLM45StrictDetector(BaseReasoningFormatDetector):
             tool_start_token="<tool_call>",
             continue_final_message=continue_final_message,
             previous_content=previous_content,
+            thinks_internally=True,
+            reasoning_default="enable_thinking",
         )
 
 
@@ -353,6 +360,8 @@ class Qwen3StrictDetector(BaseReasoningFormatDetector):
             tool_start_token="<tool_call>",
             continue_final_message=continue_final_message,
             previous_content=previous_content,
+            thinks_internally=True,
+            reasoning_default="enable_thinking",
         )
 
 
@@ -386,6 +395,8 @@ class Qwen3Detector(BaseReasoningFormatDetector):
             stream_reasoning=stream_reasoning,
             continue_final_message=continue_final_message,
             previous_content=previous_content,
+            thinks_internally=True,
+            reasoning_default="enable_thinking",
         )
 
 
@@ -440,6 +451,7 @@ class KimiK2Detector(BaseReasoningFormatDetector):
             tool_start_token="<|tool_calls_section_begin|>",
             continue_final_message=continue_final_message,
             previous_content=previous_content,
+            reasoning_default="thinking",
         )
 
 
@@ -463,6 +475,8 @@ class Glm45Detector(BaseReasoningFormatDetector):
             force_reasoning=force_reasoning,
             stream_reasoning=stream_reasoning,
             tool_start_token="<tool_call>",
+            thinks_internally=True,
+            reasoning_default="enable_thinking",
         )
 
 
@@ -587,6 +601,7 @@ class Nemotron3Detector(BaseReasoningFormatDetector):
             stream_reasoning=stream_reasoning,
             continue_final_message=continue_final_message,
             previous_content=previous_content,
+            reasoning_default="enable_thinking",
         )
         self._force_nonempty_content = force_nonempty_content
 
@@ -621,6 +636,7 @@ class MistralDetector(BaseReasoningFormatDetector):
             stream_reasoning=stream_reasoning,
             continue_final_message=continue_final_message,
             previous_content=previous_content,
+            reasoning_default="mistral",
         )
 
 
