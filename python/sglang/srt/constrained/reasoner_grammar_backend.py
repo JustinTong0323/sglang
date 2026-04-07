@@ -230,7 +230,7 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
         self.enable_token_filter = (
             self.strict_reasoning_format
             and self.think_excluded_token_ids is not None
-            and getattr(self.grammar_backend, "is_support_token_filter", False)
+            and self.grammar_backend.is_support_token_filter
         )
         if (
             self.strict_reasoning_format
