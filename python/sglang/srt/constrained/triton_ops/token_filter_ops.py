@@ -13,6 +13,7 @@
 # ==============================================================================
 """Triton kernels for token filter operations."""
 
+from collections import OrderedDict
 from typing import List
 
 import torch
@@ -109,6 +110,10 @@ def set_token_filter_batch_kernel(
 
 
 _cached_num_sms = None
+_cached_token_id_tensors: OrderedDict[tuple[int, tuple[int, ...]], torch.Tensor] = (
+    OrderedDict()
+)
+_MAX_TOKEN_ID_TENSOR_CACHE_SIZE = 32
 
 
 def _compute_grid(work_items: int):
@@ -118,6 +123,22 @@ def _compute_grid(work_items: int):
     if _cached_num_sms > 0:
         return (min(_cached_num_sms, work_items),)
     return (work_items,)
+
+
+def _get_cached_token_ids_tensor(
+    token_ids: List[int], device: torch.device
+) -> torch.Tensor:
+    key = (device.index or 0, tuple(token_ids))
+    cached = _cached_token_id_tensors.get(key)
+    if cached is not None:
+        _cached_token_id_tensors.move_to_end(key)
+        return cached
+
+    token_ids_tensor = torch.tensor(token_ids, dtype=torch.int32, device=device)
+    _cached_token_id_tensors[key] = token_ids_tensor
+    if len(_cached_token_id_tensors) > _MAX_TOKEN_ID_TENSOR_CACHE_SIZE:
+        _cached_token_id_tensors.popitem(last=False)
+    return token_ids_tensor
 
 
 def set_token_filter_triton(
@@ -146,9 +167,7 @@ def set_token_filter_triton(
         return
 
     num_tokens = len(token_ids)
-    token_ids_tensor = torch.tensor(
-        token_ids, dtype=torch.int32, device=vocab_mask.device
-    )
+    token_ids_tensor = _get_cached_token_ids_tensor(token_ids, vocab_mask.device)
     set_token_filter_batch_kernel[_compute_grid(num_tokens)](
         vocab_mask,
         token_ids_tensor,

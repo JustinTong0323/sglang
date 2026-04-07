@@ -226,10 +226,20 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
                 f"think_start_token '{reasoning_parser.detector.think_start_token}' "
                 f"could not be encoded by the tokenizer."
             )
+        if len(think_start_ids) != 1:
+            raise ValueError(
+                f"think_start_token '{reasoning_parser.detector.think_start_token}' "
+                "must encode to exactly one token for constrained reasoning."
+            )
         if not think_end_ids:
             raise ValueError(
                 f"think_end_token '{reasoning_parser.detector.think_end_token}' "
                 f"could not be encoded by the tokenizer."
+            )
+        if len(think_end_ids) != 1:
+            raise ValueError(
+                f"think_end_token '{reasoning_parser.detector.think_end_token}' "
+                "must encode to exactly one token for constrained reasoning."
             )
         self.think_start_id = think_start_ids[0]
         self.think_end_id = think_end_ids[0]

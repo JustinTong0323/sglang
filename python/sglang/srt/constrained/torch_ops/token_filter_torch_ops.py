@@ -36,13 +36,31 @@ def set_token_filter_torch(
         mask_val = -1 if (not is_allowed) else 0
         vocab_mask[batch_idx].fill_(mask_val)
 
+    if not token_ids:
+        return
+
+    aggregated_masks = {}
     for token_id in token_ids:
         element_idx = token_id // 32
         bit_idx = token_id % 32
-        current_value = vocab_mask[batch_idx, element_idx].item()
+        aggregated_masks[element_idx] = aggregated_masks.get(element_idx, 0) | (
+            1 << bit_idx
+        )
 
-        if is_allowed:
-            new_value = current_value | (1 << bit_idx)
-        else:
-            new_value = current_value & (~(1 << bit_idx) & 0xFFFFFFFF)
-        vocab_mask[batch_idx, element_idx] = _to_int32(new_value)
+    row = vocab_mask[batch_idx]
+    element_indices = torch.tensor(
+        list(aggregated_masks.keys()), dtype=torch.long, device=row.device
+    )
+    bitmasks = torch.tensor(
+        [
+            _to_int32(mask if is_allowed else ~mask)
+            for mask in aggregated_masks.values()
+        ],
+        dtype=row.dtype,
+        device=row.device,
+    )
+
+    if is_allowed:
+        row[element_indices] = torch.bitwise_or(row[element_indices], bitmasks)
+    else:
+        row[element_indices] = torch.bitwise_and(row[element_indices], bitmasks)
