@@ -137,6 +137,23 @@ def init_tokenizer_manager(
         completion_template=server_args.completion_template,
     )
 
+    # Auto-detect reasoning parser from chat template
+    if (
+        server_args.reasoning_parser == "auto"
+        and template_manager.suggested_reasoning_parser is not None
+    ):
+        server_args.reasoning_parser = template_manager.suggested_reasoning_parser
+        logger.info(
+            f"Auto-detected --reasoning-parser as '{server_args.reasoning_parser}' "
+            f"from chat template"
+        )
+    elif server_args.reasoning_parser == "auto":
+        logger.warning(
+            "--reasoning-parser=auto specified but could not detect reasoning "
+            "format from chat template. Disabling reasoning parser."
+        )
+        server_args.reasoning_parser = None
+
     return tokenizer_manager, template_manager
 
 
@@ -663,6 +680,14 @@ class Engine(EngineScoreMixin, EngineBase):
             engine_info_bootstrap_server = EngineInfoBootstrapServer(
                 host=server_args.host, port=bootstrap_port
             )
+
+        # Resolve --reasoning-parser=auto before spawning scheduler subprocesses,
+        # because subprocesses pickle server_args and need a concrete parser name.
+        if server_args.reasoning_parser == "auto":
+            from sglang.srt.managers.template_manager import TemplateManager
+
+            _tm = TemplateManager()
+            _tm.resolve_auto_reasoning_parser(server_args)
 
         # Launch scheduler processes
         scheduler_init_result, scheduler_procs = cls._launch_scheduler_processes(

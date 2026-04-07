@@ -59,6 +59,7 @@ class TemplateManager:
         self._jinja_template_content_format: Optional[str] = "openai"
         self._force_reasoning: bool = False
         self._reasoning_mode: Optional[str] = None
+        self._suggested_reasoning_parser: Optional[str] = None
 
     @property
     def chat_template_name(self) -> Optional[str]:
@@ -89,6 +90,45 @@ class TemplateManager:
     def reasoning_mode(self) -> Optional[str]:
         """Get the reasoning toggle mode inferred from chat template."""
         return self._reasoning_mode
+
+    @property
+    def suggested_reasoning_parser(self) -> Optional[str]:
+        """Get the auto-detected reasoning parser name, or None."""
+        return self._suggested_reasoning_parser
+
+    def resolve_auto_reasoning_parser(self, server_args) -> None:
+        """Resolve --reasoning-parser=auto using a lightweight tokenizer load."""
+        if server_args.reasoning_parser != "auto":
+            return
+        from transformers import AutoTokenizer
+
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                server_args.model_path, trust_remote_code=True
+            )
+            template = getattr(tokenizer, "chat_template", None)
+            if template:
+                self._force_reasoning, self._reasoning_mode = (
+                    self._detect_reasoning_pattern(template)
+                )
+                self._suggested_reasoning_parser = self._detect_reasoning_parser(
+                    template, tokenizer
+                )
+        except Exception as e:
+            logger.warning(f"Failed to load tokenizer for auto-detection: {e}")
+
+        if self._suggested_reasoning_parser:
+            server_args.reasoning_parser = self._suggested_reasoning_parser
+            logger.info(
+                f"Auto-detected --reasoning-parser as '{server_args.reasoning_parser}' "
+                f"from chat template"
+            )
+        else:
+            logger.warning(
+                "--reasoning-parser=auto specified but could not detect reasoning "
+                "format from chat template. Disabling reasoning parser."
+            )
+            server_args.reasoning_parser = None
 
     def _detect_reasoning_pattern(self, template: str) -> tuple[bool, Optional[str]]:
         """
@@ -161,6 +201,80 @@ class TemplateManager:
 
         return False, None
 
+    def _detect_reasoning_parser(
+        self, template: Optional[str], tokenizer
+    ) -> Optional[str]:
+        """
+        Auto-detect which reasoning parser to use from the chat template and tokenizer.
+
+        Uses template markers, Jinja variables, and tokenizer vocab to identify the
+        model family and return the appropriate parser name.
+        """
+        if template is None:
+            return None
+
+        vocab = set()
+        if tokenizer is not None:
+            try:
+                vocab = set(tokenizer.get_vocab().keys())
+            except Exception:
+                pass
+
+        # Gemma4: unique channel markers
+        if "<|channel>" in template:
+            return "gemma4"
+
+        # Kimi (non-K2): unique unicode think tokens
+        if "\u25c1think\u25b7" in template or "◁think▷" in template:
+            return "kimi"
+
+        # Mistral: reasoning_effort-driven
+        if "reasoning_effort" in template and "[THINK]" in template:
+            return "mistral"
+
+        # GPT-OSS: has <|channel|> (different from gemma4's <|channel>)
+        if "<|channel|>" in template:
+            return "gpt-oss"
+
+        # Below: all use <think>/</ think> — disambiguate by Jinja variables and vocab
+
+        has_think = "<think>" in template or "</think>" in template
+        if not has_think:
+            return None
+
+        has_enable_thinking = "enable_thinking" in template
+        # Check for standalone "thinking" variable (not part of "enable_thinking")
+        has_thinking = "thinking" in template.replace("enable_thinking", "")
+
+        # Kimi-K2: identified by its unique tool call tokens in vocab
+        if "<|tool_calls_section_begin|>" in vocab:
+            return "kimi_k2"
+
+        # GLM4.5: identified by <tool_call> in vocab + enable_thinking
+        if "<tool_call>" in vocab and has_enable_thinking:
+            # Check for GLM-specific tokens
+            if "<|user|>" in vocab or "<|endoftext|>" in vocab:
+                return "glm45"
+
+        # Qwen3: enable_thinking variable
+        if has_enable_thinking:
+            # Check if thinking is on by default (qwen3) or explicit (mimo)
+            if self._reasoning_mode == "explicit_enable_thinking":
+                return "mimo"
+            return "qwen3"
+
+        # DeepSeek family: thinking variable
+        if has_thinking:
+            if self._reasoning_mode == "explicit_thinking":
+                return "deepseek-v3"
+            # Check for force reasoning pattern (deepseek-r1 style)
+            if self._force_reasoning:
+                return "deepseek-r1"
+            return "deepseek-r1"
+
+        # Has <think> but no known variable pattern — default to deepseek-r1
+        return "deepseek-r1"
+
     def load_chat_template(
         self,
         tokenizer_manager: TokenizerManager,
@@ -202,11 +316,19 @@ class TemplateManager:
                         "No chat template found, defaulting to 'string' content format"
                     )
 
-        # Detect reasoning pattern from chat template
+        # Detect reasoning pattern and suggest parser from chat template
         if tokenizer_manager.tokenizer:
-            self._force_reasoning, self._reasoning_mode = self._detect_reasoning_pattern(
-                tokenizer_manager.tokenizer.chat_template
+            template = tokenizer_manager.tokenizer.chat_template
+            self._force_reasoning, self._reasoning_mode = (
+                self._detect_reasoning_pattern(template)
             )
+            self._suggested_reasoning_parser = self._detect_reasoning_parser(
+                template, tokenizer_manager.tokenizer
+            )
+            if self._suggested_reasoning_parser:
+                logger.info(
+                    f"Auto-detected reasoning parser: {self._suggested_reasoning_parser}"
+                )
 
     def _load_explicit_chat_template(
         self, tokenizer_manager: TokenizerManager, chat_template_arg: str
