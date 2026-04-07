@@ -89,7 +89,11 @@ REASONING_MODE_RULES = (
     DetectionRule(
         name="force_reasoning_pattern",
         value=ReasoningToggleConfig(special_case="always"),
-        predicate=lambda ctx: ctx.has_pattern(r"<\|im_start\|>assistant\\n<think>\\n"),
+        predicate=lambda ctx: ctx.has_pattern(
+            r"<\|im_start\|>assistant\\n<think>\\n"
+        )
+        and not ctx.has_text("enable_thinking")
+        and not ctx.has_text("thinking"),
     ),
     DetectionRule(
         name="mistral_reasoning_effort",
@@ -104,7 +108,7 @@ REASONING_MODE_RULES = (
         ),
         predicate=lambda ctx: ctx.has_pattern(
             r"{%\s*if\s+not\s+enable_thinking\s+is\s+defined\s*%}.*?"
-            r"{%\s*set\s+enable_thinking\s*=\s*false\s*%}",
+            r"{%\s*set\s+enable_thinking\s*=\s*(?:false|False)\s*%}",
             re.DOTALL,
         ),
     ),
@@ -115,8 +119,11 @@ REASONING_MODE_RULES = (
         ),
         predicate=lambda ctx: ctx.has_pattern(
             r"{%\s*if\s+not\s+enable_thinking\s+is\s+defined\s*%}.*?"
-            r"{%\s*set\s+enable_thinking\s*=\s*true\s*%}",
+            r"{%\s*set\s+enable_thinking\s*=\s*(?:true|True)\s*%}",
             re.DOTALL,
+        )
+        or ctx.has_pattern(
+            r"set\s+enable_thinking\s*=\s*enable_thinking\s+if\s+enable_thinking\s+is\s+defined\s+else\s+(?:true|True)"
         )
         or ctx.has_pattern(
             r"enable_thinking\s+is\s+defined\s+and\s+(?:enable_thinking\s+is\s+false|not\s+enable_thinking)"
@@ -129,7 +136,7 @@ REASONING_MODE_RULES = (
         value=ReasoningToggleConfig(toggle_param="thinking", default_enabled=False),
         predicate=lambda ctx: ctx.has_pattern(
             r"{%\s*if\s+not\s+thinking\s+is\s+defined\s*%}.*?"
-            r"{%\s*set\s+thinking\s*=\s*false\s*%}",
+            r"{%\s*set\s+thinking\s*=\s*(?:false|False)\s*%}",
             re.DOTALL,
         ),
     ),
@@ -138,8 +145,11 @@ REASONING_MODE_RULES = (
         value=ReasoningToggleConfig(toggle_param="thinking", default_enabled=True),
         predicate=lambda ctx: ctx.has_pattern(
             r"{%\s*if\s+not\s+thinking\s+is\s+defined\s*%}.*?"
-            r"{%\s*set\s+thinking\s*=\s*true\s*%}",
+            r"{%\s*set\s+thinking\s*=\s*(?:true|True)\s*%}",
             re.DOTALL,
+        )
+        or ctx.has_pattern(
+            r"set\s+thinking\s*=\s*thinking\s+if\s+thinking\s+is\s+defined\s+else\s+(?:true|True)"
         )
         or ctx.has_pattern(r"thinking\s+is\s+defined\s+and\s+(?:thinking\s+is\s+false|not\s+thinking)")
         or ctx.has_pattern(r"thinking\s+is\s+not\s+defined\s+or\s+thinking")
@@ -161,6 +171,13 @@ REASONING_PARSER_RULES = (
         or ctx.has_text("◁think▷"),
     ),
     DetectionRule(
+        name="interns1",
+        value="interns1",
+        predicate=lambda ctx: ctx.has_text("default_thinking_sys")
+        and ctx.reasoning_config
+        == ReasoningToggleConfig(toggle_param="enable_thinking", default_enabled=True),
+    ),
+    DetectionRule(
         name="mistral",
         value="mistral",
         predicate=lambda ctx: (
@@ -179,9 +196,21 @@ REASONING_PARSER_RULES = (
         predicate=lambda ctx: ctx.has_vocab("<|tool_calls_section_begin|>"),
     ),
     DetectionRule(
+        name="nemotron_3",
+        value="nemotron_3",
+        predicate=lambda ctx: ctx.has_text("truncate_history_thinking")
+        and ctx.reasoning_config
+        == ReasoningToggleConfig(toggle_param="enable_thinking", default_enabled=True),
+    ),
+    DetectionRule(
         name="glm45",
         value="glm45",
-        predicate=lambda ctx: ctx.has_vocab("<tool_call>")
+        predicate=lambda ctx: (
+            ctx.has_text("[gMASK]<sop>")
+            or ctx.has_pattern(r"(?<!<)/nothink")
+            or ctx.has_pattern(r"(?<!<)/think")
+        )
+        and ctx.has_vocab("<tool_call>")
         and ctx.reasoning_config
         == ReasoningToggleConfig(toggle_param="enable_thinking", default_enabled=True)
         and (ctx.has_vocab("<|user|>") or ctx.has_vocab("<|endoftext|>")),
@@ -191,6 +220,11 @@ REASONING_PARSER_RULES = (
         value="mimo",
         predicate=lambda ctx: ctx.reasoning_config
         == ReasoningToggleConfig(toggle_param="enable_thinking", default_enabled=False),
+    ),
+    DetectionRule(
+        name="minimax",
+        value="minimax",
+        predicate=lambda ctx: ctx.has_text("<minimax:tool_call>"),
     ),
     DetectionRule(
         name="qwen3",
