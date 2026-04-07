@@ -139,6 +139,11 @@ class OpenAIServingChat(OpenAIServingBase):
             and hasattr(self.tokenizer_manager.model_config.hf_config, "model_type")
             and self.tokenizer_manager.model_config.hf_config.model_type == "gpt_oss"
         )
+        self.is_gemma4 = (
+            hasattr(self.tokenizer_manager.model_config, "hf_config")
+            and hasattr(self.tokenizer_manager.model_config.hf_config, "model_type")
+            and self.tokenizer_manager.model_config.hf_config.model_type == "gemma4"
+        )
 
         self.use_dpsk_v32_encoding = self._use_dpsk_v32_encoding()
 
@@ -350,7 +355,7 @@ class OpenAIServingChat(OpenAIServingBase):
     ) -> MessageProcessingResult:
         """Process chat messages and apply chat template"""
         # GptOss model needs to keep special tokens for harmony parsing
-        if self.is_gpt_oss:
+        if self.is_gpt_oss or self.is_gemma4:
             request.skip_special_tokens = False
 
         self._patch_mistral_skip_special_tokens(request)
