@@ -1304,47 +1304,31 @@ class OpenAIServingChat(OpenAIServingBase):
         if not self.reasoning_parser:
             return False
 
-        mode = self.template_manager.reasoning_mode
-        if mode is None and self._reasoning_detector is not None:
-            mode = self._reasoning_detector.reasoning_default
-        if mode is None:
+        config = self.template_manager.reasoning_config
+        if config is None:
             return False
 
-        if mode == "always":
+        if config.special_case == "always":
             return True
-        elif mode == "thinking":
-            # On by default, disabled via thinking=False
-            return (
-                not request.chat_template_kwargs
-                or request.chat_template_kwargs.get("thinking") is not False
-            )
-        elif mode == "enable_thinking":
-            # On by default, disabled via enable_thinking=False
-            return (
-                not request.chat_template_kwargs
-                or request.chat_template_kwargs.get("enable_thinking") is not False
-            )
-        elif mode == "explicit_thinking":
-            # Off by default, enabled via thinking=True
-            return (
-                request.chat_template_kwargs is not None
-                and request.chat_template_kwargs.get("thinking") is True
-            )
-        elif mode == "explicit_enable_thinking":
-            # Off by default, enabled via enable_thinking=True
-            return (
-                request.chat_template_kwargs is not None
-                and request.chat_template_kwargs.get("enable_thinking") is True
-            )
-        elif mode == "mistral":
-            # Mistral: enabled when reasoning_effort is set and not "none"
+
+        if config.special_case == "mistral":
             return (
                 request.reasoning_effort is not None
                 and request.reasoning_effort != "none"
             )
 
-        logger.warning(f"Unknown reasoning_default mode: {mode}, defaulting to always-on")
-        return True
+        if config.toggle_param is None or config.default_enabled is None:
+            return False
+
+        if config.default_enabled:
+            return (
+                not request.chat_template_kwargs
+                or request.chat_template_kwargs.get(config.toggle_param) is not False
+            )
+        return (
+            request.chat_template_kwargs is not None
+            and request.chat_template_kwargs.get(config.toggle_param) is True
+        )
 
     async def _process_tool_call_stream(
         self,
