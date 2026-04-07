@@ -31,7 +31,10 @@ from sglang.srt.function_call.qwen3_coder_detector import Qwen3CoderDetector
 from sglang.srt.function_call.qwen25_detector import Qwen25Detector
 from sglang.srt.function_call.step3_detector import Step3Detector
 from sglang.srt.function_call.trinity_detector import TrinityDetector
-from sglang.srt.function_call.utils import get_json_schema_constraint
+from sglang.srt.function_call.utils import (
+    _get_tool_schema_defs,
+    get_json_schema_constraint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +152,13 @@ class FunctionCallParser:
         Generate a structural tag response format for all available tools.
 
         This creates the necessary structural tags that guide the model's output format.
+
+        Raises:
+            ValueError: If tools have conflicting $defs schemas.
         """
+        # Validate $defs consistency before building structural tags
+        _get_tool_schema_defs(self.tools)
+
         tool_structures: List[StructuresResponseFormat] = list()
         tool_trigger_set: Set[str] = set()
 
