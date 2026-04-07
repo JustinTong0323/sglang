@@ -100,6 +100,25 @@ class OpenAIServingChat(OpenAIServingBase):
         self.template_manager = template_manager
         self.tool_call_parser = self.tokenizer_manager.server_args.tool_call_parser
         self.reasoning_parser = self.tokenizer_manager.server_args.reasoning_parser
+        self._reasoning_detector = None
+        if self.reasoning_parser:
+            from sglang.srt.parser.reasoning_parser import ReasoningParser
+
+            try:
+                rp = ReasoningParser(
+                    model_type=self.reasoning_parser, stream_reasoning=True
+                )
+                self._reasoning_detector = rp.detector
+                # Override reasoning_default for parsers that share a detector class
+                # but have different reasoning toggle behavior
+                if self.reasoning_parser == "deepseek-v3":
+                    self._reasoning_detector.reasoning_default = "explicit_thinking"
+                elif self.reasoning_parser == "mimo":
+                    self._reasoning_detector.reasoning_default = (
+                        "explicit_enable_thinking"
+                    )
+            except ValueError:
+                pass
 
         # Get default sampling parameters from model's generation config
         self.default_sampling_params = (
@@ -572,13 +591,10 @@ class OpenAIServingChat(OpenAIServingBase):
             prompt = conv.get_prompt()
             if self._get_reasoning_from_request(
                 request
-            ) and self.reasoning_parser not in [
-                "qwen3",
-                "qwen3-thinking",
-                "qwen3-thinking-strict",
-                "glm4",
-                "glm45-strict",
-            ]:
+            ) and (
+                self._reasoning_detector is None
+                or not self._reasoning_detector.thinks_internally
+            ):
                 # qwen3 and glm4 think internally without a leading <think> token
                 prompt += "<think>"  # Note(Xinyuan): hard code thinking token
 
@@ -1286,51 +1302,50 @@ class OpenAIServingChat(OpenAIServingBase):
             request.skip_special_tokens = False
 
     def _get_reasoning_from_request(self, request: ChatCompletionRequest) -> bool:
-        """Judge whether the request needs reasoning for hybrid reasoning models
+        """Determine whether reasoning mode should be enabled for this request.
+
         NOTE: This is predefined based on model's chat template
         """
-        if not self.reasoning_parser:
+        if not self.reasoning_parser or self._reasoning_detector is None:
             return False
-        if self.reasoning_parser in ["deepseek-v3"]:
-            # Models that require explicit enable thinking (thinking=True)
-            return (
-                request.chat_template_kwargs is not None
-                and request.chat_template_kwargs.get("thinking") is True
-            )
-        if self.reasoning_parser in ["kimi_k2", "kimi_k2-strict"]:
-            # Models that thinking by default, and can be disabled by setting thinking=False
+
+        mode = self._reasoning_detector.reasoning_default
+
+        if mode == "always":
+            return True
+        elif mode == "thinking":
+            # On by default, disabled via thinking=False
             return (
                 not request.chat_template_kwargs
                 or request.chat_template_kwargs.get("thinking") is not False
             )
-        if self.reasoning_parser in [
-            "qwen3",
-            "qwen3-thinking",
-            "qwen3-thinking-strict",
-            "glm45",
-            "glm45-strict",
-            "nemotron_3",
-            "interns1",
-        ]:
-            # Models that thinking by default, and can be disabled by setting enable_thinking=False
+        elif mode == "enable_thinking":
+            # On by default, disabled via enable_thinking=False
             return (
                 not request.chat_template_kwargs
                 or request.chat_template_kwargs.get("enable_thinking") is not False
             )
-        if self.reasoning_parser in ["mimo"]:
-            # Models that require explicit enable thinking (enable_thinking=True)
+        elif mode == "explicit_thinking":
+            # Off by default, enabled via thinking=True
+            return (
+                request.chat_template_kwargs is not None
+                and request.chat_template_kwargs.get("thinking") is True
+            )
+        elif mode == "explicit_enable_thinking":
+            # Off by default, enabled via enable_thinking=True
             return (
                 request.chat_template_kwargs is not None
                 and request.chat_template_kwargs.get("enable_thinking") is True
             )
-        if self.reasoning_parser in ["mistral"]:
-            # Mistral models only reason when reasoning_effort is explicitly
-            # set to a value other than None/"none" (typically "high").
+        elif mode == "mistral":
+            # Mistral: enabled when reasoning_effort is set and not "none"
             return (
                 request.reasoning_effort is not None
                 and request.reasoning_effort != "none"
             )
-        return True  # default
+
+        # Fallback: always on for unknown modes
+        return True
 
     async def _process_tool_call_stream(
         self,
