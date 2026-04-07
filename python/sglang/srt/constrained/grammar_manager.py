@@ -12,7 +12,6 @@ from sglang.srt.constrained.base_grammar_backend import (
     create_grammar_backend,
 )
 from sglang.srt.environ import envs
-from sglang.srt.parser.reasoning_parser import ReasoningParser
 
 if TYPE_CHECKING:
     from sglang.srt.managers.io_struct import AbortReq
@@ -38,18 +37,9 @@ class GrammarManager:
         else:
             self.grammar_backend = None
 
-        self._strict_reasoning_format = False
-        if self.server_args.reasoning_parser:
-            try:
-                rp = ReasoningParser(
-                    model_type=self.server_args.reasoning_parser,
-                    stream_reasoning=False,
-                )
-                self._strict_reasoning_format = (
-                    rp.detector.strict_reasoning_format
-                )
-            except ValueError:
-                pass
+        self._strict_reasoning_format = getattr(
+            self.grammar_backend, "strict_reasoning_format", False
+        )
 
         self.grammar_sync_group = scheduler.dp_tp_cpu_group
         self.grammar_sync_size = scheduler.dp_tp_group.world_size

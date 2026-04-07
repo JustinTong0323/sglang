@@ -122,12 +122,11 @@ class StrictReasonerGrammarObject(ReasonerGrammarObject):
         think_end_id: int,
         strict_reasoning_format: bool = False,
         think_excluded_token_ids: Optional[List[int]] = None,
+        max_think_tokens: int = -1,
     ):
         super().__init__(grammar, think_end_id)
-        self.grammar = grammar
         self.grammar_backend = grammar_backend
         self.think_start_id = think_start_id
-        self.think_end_id = think_end_id
         self.strict_reasoning_format = strict_reasoning_format
         self.think_excluded_token_ids = think_excluded_token_ids
         self.enable_think_token_filter = (
@@ -135,25 +134,14 @@ class StrictReasonerGrammarObject(ReasonerGrammarObject):
             and think_excluded_token_ids
             and getattr(grammar_backend, "is_support_token_filter", False)
         )
-        if (
-            strict_reasoning_format
-            and think_excluded_token_ids
-            and not getattr(grammar_backend, "is_support_token_filter", False)
-        ):
+        if strict_reasoning_format and think_excluded_token_ids and not self.enable_think_token_filter:
             logger.warning(
                 "Strict reasoning format requested but the grammar backend does not "
                 "support token filtering. Think-phase token filter will be disabled."
             )
         self.is_init_reasoning = False
-        self.max_think_tokens = envs.SGLANG_MAX_THINK_TOKENS.get()
-        # -1    means thinking has not began yet
-        # 0     means just began thinking in the last token
-        # +     means number of tokens in thinking
+        self.max_think_tokens = max_think_tokens
         self.tokens_in_think = -1
-        # -1    means thinking has not ended yet
-        # 0     means just ended thinking in the last token
-        # +     means number of tokens after thinking ended
-        self.tokens_after_think_end = -1
 
     def maybe_init_reasoning(self, reasoning: bool):
         if reasoning:
@@ -270,6 +258,7 @@ class StrictReasonerGrammarObject(ReasonerGrammarObject):
             self.think_end_id,
             self.strict_reasoning_format,
             self.think_excluded_token_ids,
+            self.max_think_tokens,
         )
 
 
@@ -304,6 +293,7 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
         self.think_excluded_token_ids = self._get_think_excluded_token_ids(
             reasoning_parser, tokenizer
         )
+        self.max_think_tokens = envs.SGLANG_MAX_THINK_TOKENS.get()
 
     def _get_think_excluded_token_ids(
         self,
@@ -342,6 +332,7 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
                 self.think_end_id,
                 self.strict_reasoning_format,
                 self.think_excluded_token_ids,
+                self.max_think_tokens,
             )
         obj.maybe_init_reasoning(reasoning)
         return obj

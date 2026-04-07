@@ -108,6 +108,18 @@ def set_token_filter_batch_kernel(
             tl.atomic_and(vocab_mask_ptr + offset, ~(1 << bit_idx))
 
 
+_cached_num_sms = None
+
+
+def _compute_grid(work_items: int):
+    global _cached_num_sms
+    if _cached_num_sms is None:
+        _cached_num_sms = get_device_core_count()
+    if _cached_num_sms > 0:
+        return (min(_cached_num_sms, work_items),)
+    return (work_items,)
+
+
 def set_token_filter_triton(
     vocab_mask: torch.Tensor,
     token_ids: List[int],
@@ -115,72 +127,14 @@ def set_token_filter_triton(
     is_allowed: bool = True,
     reset_vocab_mask: bool = True,
 ):
-    """Set or clear specific tokens in the vocab mask using Triton.
-
-    This is a Triton-accelerated version of the set_token_filter function.
-
-    Parameters
-    ----------
-    vocab_mask : torch.Tensor
-        The vocab mask tensor of shape [batch_size, num_elements] where each
-        int32 element contains 32 bits representing 32 tokens.
-
-    token_ids : List[int]
-        List of token IDs to set or clear.
-
-    batch_idx : int
-        The batch index to modify.
-
-    is_allowed : bool, default=True
-        If True, set the bits for the given token_ids to 1 (allow tokens).
-        If False, clear the bits for the given token_ids to 0 (block tokens).
-
-    reset_vocab_mask : bool, default=True
-        If True, reset the entire vocab mask row before setting/clearing tokens.
-        The reset value is:
-        - 0 if is_allowed=True (block all tokens, then allow specified ones)
-        - -1 if is_allowed=False (allow all tokens, then block specified ones)
-    """
-
-    # Ensure vocab_mask is on GPU device for Triton kernel
+    """Set or clear specific tokens in the vocab mask using Triton."""
     assert vocab_mask.device.type == "cuda"
 
-    if not token_ids:
-        if reset_vocab_mask:
-            # Just reset the entire row
-            num_elements = vocab_mask.shape[1]
-            NUM_SMS = get_device_core_count()
-            if NUM_SMS > 0:
-                grid = (min(NUM_SMS, num_elements),)
-            else:
-                grid = (num_elements,)
-
-            reset_value = 0 if is_allowed else -1
-            reset_vocab_mask_kernel[grid](
-                vocab_mask,
-                batch_idx,
-                num_elements,
-                reset_value,
-                num_warps=4,
-            )
-        return
-
-    num_tokens = len(token_ids)
     num_elements = vocab_mask.shape[1]
-    token_ids_tensor = torch.tensor(
-        token_ids, dtype=torch.int32, device=vocab_mask.device
-    )
 
     if reset_vocab_mask:
-        # First: reset the vocab mask
-        NUM_SMS = get_device_core_count()
-        if NUM_SMS > 0:
-            grid = (min(NUM_SMS, num_elements),)
-        else:
-            grid = (num_elements,)
-
         reset_value = 0 if is_allowed else -1
-        reset_vocab_mask_kernel[grid](
+        reset_vocab_mask_kernel[_compute_grid(num_elements)](
             vocab_mask,
             batch_idx,
             num_elements,
@@ -188,98 +142,19 @@ def set_token_filter_triton(
             num_warps=4,
         )
 
-        # Second: set/clear specific tokens (synchronization happens between kernel launches)
-        if NUM_SMS > 0:
-            grid = (min(NUM_SMS, num_tokens),)
-        else:
-            grid = (num_tokens,)
+    if not token_ids:
+        return
 
-        set_token_filter_batch_kernel[grid](
-            vocab_mask,
-            token_ids_tensor,
-            batch_idx,
-            num_tokens,
-            num_elements,
-            is_allowed,
-            num_warps=4,
-        )
-    else:
-        # Only set/clear specific tokens without reset
-        NUM_SMS = get_device_core_count()
-        if NUM_SMS > 0:
-            grid = (min(NUM_SMS, num_tokens),)
-        else:
-            grid = (num_tokens,)
-
-        set_token_filter_batch_kernel[grid](
-            vocab_mask,
-            token_ids_tensor,
-            batch_idx,
-            num_tokens,
-            num_elements,
-            is_allowed,
-            num_warps=4,
-        )
-
-
-def demo_test():
-    """Demo test to verify the Triton implementation."""
-    import torch
-
-    # Test 1: Set specific tokens as allowed (reset to 0, then set bits)
-    vocab_mask = torch.zeros(2, 4, dtype=torch.int32, device="cuda")
-    token_ids = [10, 20, 30, 40, 50]
-
-    set_token_filter_triton(
-        vocab_mask, token_ids, batch_idx=0, is_allowed=True, reset_vocab_mask=True
+    num_tokens = len(token_ids)
+    token_ids_tensor = torch.tensor(
+        token_ids, dtype=torch.int32, device=vocab_mask.device
     )
-
-    # Verify: all elements should be 0 except where tokens are set
-    print("Test 1 - Set tokens as allowed:")
-    print(f"vocab_mask[0] = {vocab_mask[0].cpu().tolist()}")
-    # Token 10: element_idx=0, bit_idx=10, value should have bit 10 set
-    # Token 20: element_idx=0, bit_idx=20, value should have bit 20 set
-    # Token 30: element_idx=0, bit_idx=30, value should have bit 30 set
-    # Token 40: element_idx=1, bit_idx=8, value should have bit 8 set
-    # Token 50: element_idx=1, bit_idx=18, value should have bit 18 set
-
-    # Test 2: Block specific tokens (reset to -1, then clear bits)
-    vocab_mask = torch.full((2, 4), -1, dtype=torch.int32, device="cuda")
-    token_ids = [10, 20, 30, 40, 50]
-
-    set_token_filter_triton(
-        vocab_mask, token_ids, batch_idx=1, is_allowed=False, reset_vocab_mask=True
+    set_token_filter_batch_kernel[_compute_grid(num_tokens)](
+        vocab_mask,
+        token_ids_tensor,
+        batch_idx,
+        num_tokens,
+        num_elements,
+        is_allowed,
+        num_warps=4,
     )
-
-    print("\nTest 2 - Block tokens:")
-    print(f"vocab_mask[1] = {vocab_mask[1].cpu().tolist()}")
-    # All should be -1 except bits 10, 20, 30 in element 0 and bits 8, 18 in element 1 should be cleared
-
-    # Test 3: Set tokens without reset
-    vocab_mask = torch.full((2, 4), -1, dtype=torch.int32, device="cuda")
-    token_ids = [10, 20]
-
-    set_token_filter_triton(
-        vocab_mask, token_ids, batch_idx=0, is_allowed=True, reset_vocab_mask=False
-    )
-
-    print("\nTest 3 - Set tokens without reset:")
-    print(f"vocab_mask[0] = {vocab_mask[0].cpu().tolist()}")
-    # Should still be -1 with bits 10 and 20 set (but -1 already has all bits set)
-
-    # Test 4: Empty token list with reset
-    vocab_mask = torch.ones((2, 4), dtype=torch.int32, device="cuda")
-
-    set_token_filter_triton(
-        vocab_mask, [], batch_idx=0, is_allowed=True, reset_vocab_mask=True
-    )
-
-    print("\nTest 4 - Empty token list with reset:")
-    print(f"vocab_mask[0] = {vocab_mask[0].cpu().tolist()}")
-    # Should be all 0s
-
-    print("\nAll tests completed!")
-
-
-if __name__ == "__main__":
-    demo_test()
