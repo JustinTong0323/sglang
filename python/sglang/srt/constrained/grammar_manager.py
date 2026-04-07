@@ -108,16 +108,11 @@ class GrammarManager:
                         )
                         req.set_finish_with_abort(error_msg)
         elif self._strict_reasoning_format and self.grammar_backend is not None:
-            from sglang.srt.constrained.reasoner_grammar_backend import (
-                ReasonerGrammarBackend,
+            grammar_obj = self.grammar_backend.init_strict_reasoning_grammar(
+                req.require_reasoning
             )
-
-            if isinstance(self.grammar_backend, ReasonerGrammarBackend):
-                grammar_obj = self.grammar_backend.init_strict_reasoning_grammar(
-                    req.require_reasoning
-                )
-                if grammar_obj is not None:
-                    req.grammar = grammar_obj
+            if grammar_obj is not None:
+                req.grammar = grammar_obj
 
         if add_to_grammar_queue:
             self.grammar_queue.append(req)

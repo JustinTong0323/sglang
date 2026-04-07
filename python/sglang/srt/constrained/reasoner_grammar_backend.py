@@ -241,6 +241,9 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
                 "Strict reasoning format requested but the grammar backend does not "
                 "support token filtering. Think-phase token filter will be disabled."
             )
+        self._token_filter_fn = (
+            self.grammar_backend.set_token_filter if self.enable_token_filter else None
+        )
 
     def _get_think_excluded_token_ids(
         self,
@@ -262,11 +265,6 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
             excluded_ids += new_ids
         return excluded_ids
 
-    def _get_token_filter_fn(self):
-        if self.enable_token_filter:
-            return self.grammar_backend.set_token_filter
-        return None
-
     def init_strict_reasoning_grammar(self, reasoning: bool) -> Optional[BaseGrammarObject]:
         """Create a grammar object for strict token filtering only (no inner grammar)."""
         if not self.strict_reasoning_format:
@@ -277,7 +275,7 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
             think_excluded_token_ids=self.think_excluded_token_ids,
             max_think_tokens=self.max_think_tokens,
             enable_token_filter=self.enable_token_filter,
-            token_filter_fn=self._get_token_filter_fn(),
+            token_filter_fn=self._token_filter_fn,
         )
         obj.maybe_init_reasoning(reasoning)
         return obj
@@ -295,7 +293,7 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
             think_excluded_token_ids=self.think_excluded_token_ids,
             max_think_tokens=self.max_think_tokens,
             enable_token_filter=self.enable_token_filter,
-            token_filter_fn=self._get_token_filter_fn(),
+            token_filter_fn=self._token_filter_fn,
         )
         obj.maybe_init_reasoning(reasoning)
         return obj

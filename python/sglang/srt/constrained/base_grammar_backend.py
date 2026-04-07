@@ -145,6 +145,10 @@ class BaseGrammarBackend:
         """Set or clear specific tokens in the vocab mask. No-op by default."""
         pass
 
+    def init_strict_reasoning_grammar(self, reasoning: bool):
+        """Create a grammar object for strict token filtering only. Returns None by default."""
+        return None
+
     def dispatch_fallback(self, key_type: str, key_string: str) -> BaseGrammarObject:
         """
         This function should not be reached in any case.

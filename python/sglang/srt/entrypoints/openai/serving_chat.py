@@ -1344,7 +1344,7 @@ class OpenAIServingChat(OpenAIServingBase):
                 and request.reasoning_effort != "none"
             )
 
-        # Fallback: always on for unknown modes
+        logger.warning(f"Unknown reasoning_default mode: {mode}, defaulting to always-on")
         return True
 
     async def _process_tool_call_stream(
