@@ -58,6 +58,7 @@ class TemplateManager:
         self._completion_template_name: Optional[str] = None
         self._jinja_template_content_format: Optional[str] = "openai"
         self._force_reasoning: bool = False
+        self._reasoning_mode: Optional[str] = None
 
     @property
     def chat_template_name(self) -> Optional[str]:
@@ -84,12 +85,21 @@ class TemplateManager:
         """
         return self._force_reasoning
 
-    def _detect_reasoning_pattern(self, template: str) -> bool:
+    @property
+    def reasoning_mode(self) -> Optional[str]:
+        """Get the reasoning toggle mode inferred from chat template."""
+        return self._reasoning_mode
+
+    def _detect_reasoning_pattern(self, template: str) -> tuple[bool, Optional[str]]:
         """
         Detect if the chat template contains reasoning/thinking patterns.
         """
         if template is None:
-            return False
+            return False, None
+
+        if "<|channel|>" in template:
+            logger.info("Detected GPT-OSS style channel markers in chat template.")
+            return False, "always"
 
         # TODO: remove this hard code the reasoning pattern
         force_reasoning_pattern = r"<\|im_start\|>assistant\\n<think>\\n"
@@ -97,8 +107,59 @@ class TemplateManager:
 
         if has_reasoning:
             logger.info("Detected the force reasoning pattern in chat template.")
+            return True, "always"
 
-        return has_reasoning
+        if "reasoning_effort" in template and "[THINK]" in template:
+            logger.info("Detected reasoning_effort-driven reasoning in chat template.")
+            return False, "mistral"
+
+        for variable in ("enable_thinking", "thinking"):
+            if variable not in template:
+                continue
+
+            explicit_false_pattern = (
+                r"{%\s*if\s+not\s+"
+                + variable
+                + r"\s+is\s+defined\s*%}.*?{%\s*set\s+"
+                + variable
+                + r"\s*=\s*false\s*%}"
+            )
+            explicit_true_pattern = (
+                r"{%\s*if\s+not\s+"
+                + variable
+                + r"\s+is\s+defined\s*%}.*?{%\s*set\s+"
+                + variable
+                + r"\s*=\s*true\s*%}"
+            )
+            if re.search(explicit_false_pattern, template, re.DOTALL):
+                return False, f"explicit_{variable}"
+            if re.search(explicit_true_pattern, template, re.DOTALL):
+                return False, variable
+
+            enabled_by_override_false_pattern = (
+                variable
+                + r"\s+is\s+defined\s+and\s+(?:"
+                + variable
+                + r"\s+is\s+false|not\s+"
+                + variable
+                + r")"
+            )
+            if re.search(enabled_by_override_false_pattern, template):
+                return False, variable
+
+            enabled_by_default_pattern = (
+                variable
+                + r"\s+is\s+not\s+defined\s+or\s+"
+                + variable
+            )
+            if re.search(enabled_by_default_pattern, template):
+                return False, variable
+
+            namespace_enabled_pattern = r"namespace\([^)]*" + variable + r"\s*=\s*true"
+            if re.search(namespace_enabled_pattern, template):
+                return False, variable
+
+        return False, None
 
     def load_chat_template(
         self,
@@ -143,7 +204,7 @@ class TemplateManager:
 
         # Detect reasoning pattern from chat template
         if tokenizer_manager.tokenizer:
-            self._force_reasoning = self._detect_reasoning_pattern(
+            self._force_reasoning, self._reasoning_mode = self._detect_reasoning_pattern(
                 tokenizer_manager.tokenizer.chat_template
             )
 

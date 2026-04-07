@@ -102,21 +102,11 @@ class OpenAIServingChat(OpenAIServingBase):
         self.reasoning_parser = self.tokenizer_manager.server_args.reasoning_parser
         self._reasoning_detector = None
         if self.reasoning_parser:
-            from sglang.srt.parser.reasoning_parser import ReasoningParser
-
             try:
                 rp = ReasoningParser(
                     model_type=self.reasoning_parser, stream_reasoning=True
                 )
                 self._reasoning_detector = rp.detector
-                # Override reasoning_default for parsers that share a detector class
-                # but have different reasoning toggle behavior
-                if self.reasoning_parser == "deepseek-v3":
-                    self._reasoning_detector.reasoning_default = "explicit_thinking"
-                elif self.reasoning_parser == "mimo":
-                    self._reasoning_detector.reasoning_default = (
-                        "explicit_enable_thinking"
-                    )
             except ValueError:
                 pass
 
@@ -1311,10 +1301,14 @@ class OpenAIServingChat(OpenAIServingBase):
 
         NOTE: This is predefined based on model's chat template
         """
-        if not self.reasoning_parser or self._reasoning_detector is None:
+        if not self.reasoning_parser:
             return False
 
-        mode = self._reasoning_detector.reasoning_default
+        mode = self.template_manager.reasoning_mode
+        if mode is None and self._reasoning_detector is not None:
+            mode = self._reasoning_detector.reasoning_default
+        if mode is None:
+            return False
 
         if mode == "always":
             return True
