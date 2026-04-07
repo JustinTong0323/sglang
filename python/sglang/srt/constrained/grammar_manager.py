@@ -107,27 +107,17 @@ class GrammarManager:
                             f"Failed to compile {key[0]} grammar: {value.error_message}"
                         )
                         req.set_finish_with_abort(error_msg)
-        elif self._strict_reasoning_format:
-            key = ("regex", ".*")
-            logger.debug(
-                f"strict reasoning enabled: {self.server_args.reasoning_parser}, config reasoner grammar with fake grammar."
+        elif self._strict_reasoning_format and self.grammar_backend is not None:
+            from sglang.srt.constrained.reasoner_grammar_backend import (
+                ReasonerGrammarBackend,
             )
-            value, cache_hit = self.grammar_backend.get_cached_or_future_value(
-                key, req.require_reasoning
-            )
-            req.grammar = value
 
-            if not cache_hit:
-                req.grammar_key = key
-                add_to_grammar_queue = True
-            else:
-                if isinstance(
-                    value, InvalidGrammarObject
-                ):  # We hit a cached invalid grammar.
-                    error_msg = (
-                        f"Failed to compile {key[0]} grammar: {value.error_message}"
-                    )
-                    req.set_finish_with_abort(error_msg)
+            if isinstance(self.grammar_backend, ReasonerGrammarBackend):
+                grammar_obj = self.grammar_backend.init_strict_reasoning_grammar(
+                    req.require_reasoning
+                )
+                if grammar_obj is not None:
+                    req.grammar = grammar_obj
 
         if add_to_grammar_queue:
             self.grammar_queue.append(req)

@@ -267,6 +267,21 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
             return self.grammar_backend.set_token_filter
         return None
 
+    def init_strict_reasoning_grammar(self, reasoning: bool) -> Optional[BaseGrammarObject]:
+        """Create a grammar object for strict token filtering only (no inner grammar)."""
+        if not self.strict_reasoning_format:
+            return None
+        obj = ReasonerGrammarObject(
+            grammar=None,
+            think_end_id=self.think_end_id,
+            think_excluded_token_ids=self.think_excluded_token_ids,
+            max_think_tokens=self.max_think_tokens,
+            enable_token_filter=self.enable_token_filter,
+            token_filter_fn=self._get_token_filter_fn(),
+        )
+        obj.maybe_init_reasoning(reasoning)
+        return obj
+
     def _init_value_dispatch(
         self, key: Tuple[str, str], reasoning: bool
     ) -> Optional[BaseGrammarObject]:
