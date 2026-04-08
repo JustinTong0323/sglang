@@ -36,12 +36,16 @@ from .common import (
     download_from_hf,
     get_tokenizer_from_processor,
 )
-from .mistral_utils import is_mistral_model, load_mistral_config, wrap_as_pixtral
+from .mistral_utils import (
+    is_mistral_model,
+    load_mistral_config,
+    patch_mistral_common_tokenizer,
+    wrap_as_pixtral,
+)
 from .tokenizer import (
     _TOKENIZERS_BACKEND,
     _fix_added_tokens_encoding,
     _fix_special_tokens_pattern,
-    _patch_mistral_common_tokenizer,
 )
 
 
@@ -277,7 +281,7 @@ def get_processor(
             tokenizer.chat_template = jinja_path.read_text()
             logger.info("Loaded chat_template from %s", jinja_path)
 
-    _patch_mistral_common_tokenizer(tokenizer)
+    patch_mistral_common_tokenizer(tokenizer)
     _fix_special_tokens_pattern(tokenizer)
     _fix_added_tokens_encoding(tokenizer)
     attach_additional_stop_token_ids(tokenizer)
