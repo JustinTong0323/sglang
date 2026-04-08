@@ -89,9 +89,7 @@ REASONING_MODE_RULES = (
     DetectionRule(
         name="force_reasoning_pattern",
         value=ReasoningToggleConfig(special_case="always"),
-        predicate=lambda ctx: ctx.has_pattern(
-            r"<\|im_start\|>assistant\\n<think>\\n"
-        )
+        predicate=lambda ctx: ctx.has_pattern(r"<\|im_start\|>assistant\\n<think>\\n")
         and not ctx.has_text("enable_thinking")
         and not ctx.has_text("thinking"),
     ),
@@ -128,7 +126,9 @@ REASONING_MODE_RULES = (
         or ctx.has_pattern(
             r"enable_thinking\s+is\s+defined\s+and\s+(?:enable_thinking\s+is\s+false|not\s+enable_thinking)"
         )
-        or ctx.has_pattern(r"enable_thinking\s+is\s+not\s+defined\s+or\s+enable_thinking")
+        or ctx.has_pattern(
+            r"enable_thinking\s+is\s+not\s+defined\s+or\s+enable_thinking"
+        )
         or ctx.has_pattern(r"namespace\([^)]*enable_thinking\s*=\s*true"),
     ),
     DetectionRule(
@@ -151,7 +151,9 @@ REASONING_MODE_RULES = (
         or ctx.has_pattern(
             r"set\s+thinking\s*=\s*thinking\s+if\s+thinking\s+is\s+defined\s+else\s+(?:true|True)"
         )
-        or ctx.has_pattern(r"thinking\s+is\s+defined\s+and\s+(?:thinking\s+is\s+false|not\s+thinking)")
+        or ctx.has_pattern(
+            r"thinking\s+is\s+defined\s+and\s+(?:thinking\s+is\s+false|not\s+thinking)"
+        )
         or ctx.has_pattern(r"thinking\s+is\s+not\s+defined\s+or\s+thinking")
         or ctx.has_pattern(r"namespace\([^)]*thinking\s*=\s*true"),
     ),

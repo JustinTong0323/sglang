@@ -140,7 +140,9 @@ class BaseGrammarBackend:
     def is_support_token_filter(self):
         return False
 
-    def set_token_filter(self, vocab_mask, token_ids, batch_idx, is_allowed=True, reset_vocab_mask=True):
+    def set_token_filter(
+        self, vocab_mask, token_ids, batch_idx, is_allowed=True, reset_vocab_mask=True
+    ):
         """Set or clear specific tokens in the vocab mask. No-op by default."""
         pass
 

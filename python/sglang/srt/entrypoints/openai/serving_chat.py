@@ -584,9 +584,7 @@ class OpenAIServingChat(OpenAIServingBase):
                 prompt = prompt[: -len(conv.sep2)]
         else:
             prompt = conv.get_prompt()
-            if self._get_reasoning_from_request(
-                request
-            ) and (
+            if self._get_reasoning_from_request(request) and (
                 self._reasoning_detector is None
                 or not self._reasoning_detector.thinks_internally
             ):

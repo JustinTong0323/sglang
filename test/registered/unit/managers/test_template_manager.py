@@ -40,9 +40,7 @@ class TestTemplateManagerReasoningDetection(unittest.TestCase):
 
         self.assertEqual(
             config,
-            ReasoningToggleConfig(
-                toggle_param="enable_thinking", default_enabled=True
-            ),
+            ReasoningToggleConfig(toggle_param="enable_thinking", default_enabled=True),
         )
         self.assertEqual(parser, "qwen3")
 
@@ -59,9 +57,7 @@ class TestTemplateManagerReasoningDetection(unittest.TestCase):
 
         self.assertEqual(
             config,
-            ReasoningToggleConfig(
-                toggle_param="enable_thinking", default_enabled=True
-            ),
+            ReasoningToggleConfig(toggle_param="enable_thinking", default_enabled=True),
         )
         self.assertEqual(parser, "glm45")
 
@@ -74,9 +70,7 @@ class TestTemplateManagerReasoningDetection(unittest.TestCase):
 
         self.assertEqual(
             config,
-            ReasoningToggleConfig(
-                toggle_param="enable_thinking", default_enabled=True
-            ),
+            ReasoningToggleConfig(toggle_param="enable_thinking", default_enabled=True),
         )
         self.assertEqual(parser, "interns1")
 
@@ -89,9 +83,7 @@ class TestTemplateManagerReasoningDetection(unittest.TestCase):
 
         self.assertEqual(
             config,
-            ReasoningToggleConfig(
-                toggle_param="enable_thinking", default_enabled=True
-            ),
+            ReasoningToggleConfig(toggle_param="enable_thinking", default_enabled=True),
         )
         self.assertEqual(parser, "nemotron_3")
 

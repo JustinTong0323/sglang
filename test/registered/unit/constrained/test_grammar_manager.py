@@ -16,6 +16,7 @@ Usage:
 
 import unittest
 from concurrent.futures import Future
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from sglang.srt.constrained.base_grammar_backend import (
@@ -48,7 +49,12 @@ def _make_scheduler(grammar_backend_name="none", skip_tokenizer=False):
 
 
 def _make_req(
-    json_schema=None, regex=None, ebnf=None, structural_tag=None, rid="req-1"
+    json_schema=None,
+    regex=None,
+    ebnf=None,
+    structural_tag=None,
+    rid="req-1",
+    custom_params=None,
 ):
     """Create a mock request with sampling params."""
     req = MagicMock()
@@ -57,6 +63,7 @@ def _make_req(
     req.sampling_params.regex = regex
     req.sampling_params.ebnf = ebnf
     req.sampling_params.structural_tag = structural_tag
+    req.sampling_params.custom_params = custom_params
     req.require_reasoning = False
     req.grammar = None
     req.grammar_key = None
@@ -255,6 +262,35 @@ class TestProcessReqWithGrammar(unittest.TestCase):
         mgr.process_req_with_grammar(req)
         self.assertTrue(mgr.has_waiting_grammars())
         self.assertEqual(len(mgr), 1)
+
+    def test_cache_hit_applies_request_thinking_budget(self):
+        mgr = self._make_mgr()
+        grammar_obj = SimpleNamespace(max_think_tokens=99)
+        mgr.grammar_backend.get_cached_or_future_value.return_value = (
+            grammar_obj,
+            True,
+        )
+
+        req = _make_req(
+            json_schema="schema",
+            custom_params={"thinking_budget": 7},
+        )
+        mgr.process_req_with_grammar(req)
+
+        self.assertEqual(req.grammar.max_think_tokens, 7)
+
+    def test_strict_reasoning_grammar_applies_request_thinking_budget(self):
+        mgr = self._make_mgr()
+        mgr._strict_reasoning_format = True
+        grammar_obj = SimpleNamespace(max_think_tokens=99)
+        mgr.grammar_backend.init_strict_reasoning_grammar.return_value = grammar_obj
+
+        req = _make_req(custom_params={"thinking_budget": 3})
+        req.require_reasoning = True
+        mgr.process_req_with_grammar(req)
+
+        self.assertIs(req.grammar, grammar_obj)
+        self.assertEqual(req.grammar.max_think_tokens, 3)
 
 
 class TestAbortRequests(unittest.TestCase):
@@ -508,6 +544,28 @@ class TestGetReadyGrammarRequests(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             mgr.get_ready_grammar_requests()
+
+    def test_ready_future_applies_request_budget_without_polluting_cache(self):
+        mgr = self._make_mgr()
+
+        cache_copy = SimpleNamespace(max_think_tokens=99)
+        grammar_obj = SimpleNamespace(max_think_tokens=99)
+        grammar_obj.copy = MagicMock(return_value=cache_copy)
+        future = Future()
+        future.set_result(grammar_obj)
+
+        req = _make_req(json_schema="schema", custom_params={"thinking_budget": 4})
+        req.grammar = future
+        req.grammar_key = ("json", "schema")
+        mgr.grammar_queue.append(req)
+
+        result = mgr.get_ready_grammar_requests()
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(req.grammar.max_think_tokens, 4)
+        cached_key, cached_value = mgr.grammar_backend.set_cache.call_args[0]
+        self.assertEqual(cached_key, ("json", "schema"))
+        self.assertEqual(cached_value.max_think_tokens, 99)
 
     @patch("sglang.srt.constrained.grammar_manager.torch.distributed.all_gather_object")
     def test_multi_rank_sync_intersects_ready_unions_failed(self, mock_all_gather):

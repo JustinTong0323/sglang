@@ -243,9 +243,7 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
                 "must encode to exactly one token for constrained reasoning."
             )
         self.think_end_id = think_end_ids[0]
-        self.strict_reasoning_format = (
-            reasoning_parser.detector.strict_reasoning_format
-        )
+        self.strict_reasoning_format = reasoning_parser.detector.strict_reasoning_format
         self.think_excluded_token_ids = self._get_think_excluded_token_ids(
             reasoning_parser, tokenizer
         )
@@ -305,7 +303,9 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
         obj.maybe_init_reasoning(reasoning)
         return obj
 
-    def init_strict_reasoning_grammar(self, reasoning: bool) -> Optional[BaseGrammarObject]:
+    def init_strict_reasoning_grammar(
+        self, reasoning: bool
+    ) -> Optional[BaseGrammarObject]:
         """Create a grammar object for strict token filtering only (no inner grammar)."""
         if not self.strict_reasoning_format:
             return None

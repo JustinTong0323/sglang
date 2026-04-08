@@ -69,6 +69,24 @@ class GrammarManager:
                     req.grammar.cancel()
                 req.set_finish_with_abort("Aborted by AbortReq.")
 
+    def _get_request_thinking_budget(self, req: Req) -> int | None:
+        custom_params = getattr(req.sampling_params, "custom_params", None)
+        if not isinstance(custom_params, dict):
+            return None
+
+        thinking_budget = custom_params.get("thinking_budget")
+        if isinstance(thinking_budget, int):
+            return thinking_budget
+        return None
+
+    def _apply_request_reasoning_budget(self, req: Req) -> None:
+        grammar = getattr(req, "grammar", None)
+        thinking_budget = self._get_request_thinking_budget(req)
+        if grammar is None or thinking_budget is None:
+            return
+        if hasattr(grammar, "max_think_tokens"):
+            grammar.max_think_tokens = thinking_budget
+
     def process_req_with_grammar(self, req: Req) -> bool:
         # Init grammar cache for this request
         add_to_grammar_queue = False
@@ -107,12 +125,15 @@ class GrammarManager:
                             f"Failed to compile {key[0]} grammar: {value.error_message}"
                         )
                         req.set_finish_with_abort(error_msg)
+                    else:
+                        self._apply_request_reasoning_budget(req)
         elif self._strict_reasoning_format and self.grammar_backend is not None:
             grammar_obj = self.grammar_backend.init_strict_reasoning_grammar(
                 req.require_reasoning
             )
             if grammar_obj is not None:
                 req.grammar = grammar_obj
+                self._apply_request_reasoning_budget(req)
 
         if add_to_grammar_queue:
             self.grammar_queue.append(req)
@@ -189,6 +210,7 @@ class GrammarManager:
             assert isinstance(req.grammar, futures.Future) and req.grammar_key
             req.grammar = req.grammar.result()
             self.grammar_backend.set_cache(req.grammar_key, req.grammar.copy())
+            self._apply_request_reasoning_budget(req)
             if isinstance(req.grammar, InvalidGrammarObject):
                 error_msg = f"Failed to compile {req.grammar_key[0]} grammar: {req.grammar.error_message}"
                 req.set_finish_with_abort(error_msg)
