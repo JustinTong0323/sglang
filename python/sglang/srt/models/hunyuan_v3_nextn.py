@@ -62,13 +62,18 @@ class HYV3ModelNextN(nn.Module):
 
         self.alt_stream = torch.cuda.Stream() if is_cuda() else None
 
+        # Force MoE for the MTP layer: first_k_dense_replace=1 would make
+        # layer_id=0 pick a dense MLP instead of MoE, so override it.
+        orig_first_k = getattr(config, "first_k_dense_replace", 0)
+        config.first_k_dense_replace = 0
         self.decoder = HYV3DecoderLayer(
             config=config,
-            layer_id=config.num_hidden_layers,
+            layer_id=0,
             quant_config=quant_config,
             prefix=f"{prefix}.decoder",
             alt_stream=self.alt_stream,
         )
+        config.first_k_dense_replace = orig_first_k
 
         self.shared_head = nn.Module()
         self.shared_head.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
