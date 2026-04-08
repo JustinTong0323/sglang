@@ -718,6 +718,7 @@ class ReasoningParser:
         # Special cases where we override force_reasoning
         if model_type.lower() in {
             "qwen3-thinking",
+            "qwen3-thinking-strict",
             "gpt-oss",
             "minimax",
         }:

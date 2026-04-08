@@ -882,7 +882,7 @@ class ServingChatTestCase(unittest.TestCase):
         req.reasoning_effort = "medium"
         self.assertTrue(self.chat._get_reasoning_from_request(req))
 
-    def test_build_chat_response_qwen3_strict_respects_disabled_thinking(self):
+    def test_build_chat_response_qwen3_strict_forces_reasoning(self):
         self.tm.server_args.reasoning_parser = "qwen3-thinking-strict"
         self.chat.reasoning_parser = "qwen3-thinking-strict"
         self.template_manager.reasoning_config = ReasoningToggleConfig(
@@ -909,8 +909,8 @@ class ServingChatTestCase(unittest.TestCase):
 
         response = self.chat._build_chat_response(req, [ret_item], created=0)
         msg = response.choices[0].message
-        self.assertEqual(msg.content, "42")
-        self.assertIsNone(msg.reasoning_content)
+        self.assertIsNone(msg.content)
+        self.assertEqual(msg.reasoning_content, "42")
 
 
 if __name__ == "__main__":
