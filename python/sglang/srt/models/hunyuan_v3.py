@@ -41,8 +41,11 @@ from sglang.srt.model_executor.cuda_graph_runner import get_is_capture_mode
 from sglang.srt.managers.schedule_batch import ForwardBatch
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.distributed import (
+    get_moe_expert_parallel_world_size,
+    get_moe_tensor_parallel_world_size,
     get_tensor_model_parallel_world_size,
-    tensor_model_parallel_all_reduce,
+    moe_expert_parallel_all_reduce,
+    moe_tensor_model_parallel_all_reduce,
 )
 from sglang.srt.utils import is_cuda
 
@@ -95,29 +98,19 @@ class HYV3MoEFused(nn.Module):
         alt_stream: Optional[torch.cuda.Stream] = None,
     ):
         super().__init__()
-        self.tp_size = get_tensor_model_parallel_world_size()
+        self.tp_size = get_moe_tensor_parallel_world_size()
+        self.ep_size = get_moe_expert_parallel_world_size()
+        self.layer_id = layer_id
         self.alt_stream = alt_stream
         self.n_routed_experts = config.num_experts
         top_k = config.num_experts_per_tok
         intermediate_size = config.expert_hidden_dim
-        '''
-        self.use_routing_bias = getattr(config, "use_routing_bias", False)
-        if self.use_routing_bias:
-            self.e_score_correction_bias = nn.Parameter(
-                torch.empty(config.num_local_experts, dtype=torch.float32)
-            )
-            self.e_score_correction_bias.weight_loader = (
-                HYV3MoEFused.ebias_weight_loader
-            )
-        else:
-            self.e_score_correction_bias = None
-        '''
+
         self.expert_bias = nn.Parameter(torch.empty(config.num_experts, dtype=torch.float32))
         self.expert_bias.weight_loader = (
                 HYV3MoEFused.ebias_weight_loader
             )
         scoring_func = "sigmoid"
-        # routing_method_type = None
         self.e_score_correction_bias = self.expert_bias
         self.router_scaling_factor = getattr(config, "router_scaling_factor", 1.0)
         self.gate = ReplicatedLinear(
@@ -139,7 +132,7 @@ class HYV3MoEFused(nn.Module):
             routed_scaling_factor=self.router_scaling_factor,
             apply_routed_scaling_factor_on_output=True,
         )
-        
+
         if getattr(config, "num_shared_experts", 0) > 0:
             self.shared_mlp = HYV3FeedForward(
                 hidden_size=config.hidden_size,
@@ -196,8 +189,11 @@ class HYV3MoEFused(nn.Module):
                 hidden_states=hidden_states, topk_output=topk_output
             )
 
+        if self.ep_size > 1:
+            final_hidden_states = moe_expert_parallel_all_reduce(final_hidden_states)
+
         if self.tp_size > 1:
-            final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
+            final_hidden_states = moe_tensor_model_parallel_all_reduce(final_hidden_states)
 
         return final_hidden_states.view(orig_shape)
 
@@ -222,8 +218,11 @@ class HYV3MoEFused(nn.Module):
         current_stream.wait_stream(self.alt_stream)
         final_hidden_states = final_hidden_states + shared_output
 
+        if self.ep_size > 1:
+            final_hidden_states = moe_expert_parallel_all_reduce(final_hidden_states)
+
         if self.tp_size > 1:
-            final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
+            final_hidden_states = moe_tensor_model_parallel_all_reduce(final_hidden_states)
 
         return final_hidden_states.view(orig_shape)
 
