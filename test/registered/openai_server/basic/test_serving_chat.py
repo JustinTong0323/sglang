@@ -21,6 +21,7 @@ from sglang.srt.entrypoints.openai.protocol import (
 )
 from sglang.srt.entrypoints.openai.serving_chat import OpenAIServingChat
 from sglang.srt.managers.io_struct import GenerateReqInput
+from sglang.srt.managers.template_manager import ReasoningToggleConfig
 from sglang.srt.utils import get_or_create_event_loop
 from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
 
@@ -80,6 +81,8 @@ class _MockTemplateManager:
         self.chat_template_name: Optional[str] = "llama-3"
         self.jinja_template_content_format: Optional[str] = None
         self.completion_template_name: Optional[str] = None
+        self.reasoning_config = None
+        self.force_reasoning = False
 
 
 class ServingChatTestCase(unittest.TestCase):
@@ -820,6 +823,94 @@ class ServingChatTestCase(unittest.TestCase):
             )
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("must be an integer", context.exception.detail)
+
+    # ------------- reasoning config tests -------------
+    def test_get_reasoning_from_request_default_true_toggle(self):
+        self.tm.server_args.reasoning_parser = "qwen3"
+        self.chat.reasoning_parser = "qwen3"
+        self.template_manager.reasoning_config = ReasoningToggleConfig(
+            toggle_param="enable_thinking", default_enabled=True
+        )
+
+        enabled_by_default = ChatCompletionRequest(
+            model="x", messages=[{"role": "user", "content": "Hi?"}]
+        )
+        disabled_explicitly = ChatCompletionRequest(
+            model="x",
+            messages=[{"role": "user", "content": "Hi?"}],
+            chat_template_kwargs={"enable_thinking": False},
+        )
+
+        self.assertTrue(self.chat._get_reasoning_from_request(enabled_by_default))
+        self.assertFalse(self.chat._get_reasoning_from_request(disabled_explicitly))
+
+    def test_get_reasoning_from_request_default_false_toggle(self):
+        self.tm.server_args.reasoning_parser = "deepseek-v3"
+        self.chat.reasoning_parser = "deepseek-v3"
+        self.template_manager.reasoning_config = ReasoningToggleConfig(
+            toggle_param="thinking", default_enabled=False
+        )
+
+        disabled_by_default = ChatCompletionRequest(
+            model="x", messages=[{"role": "user", "content": "Hi?"}]
+        )
+        enabled_explicitly = ChatCompletionRequest(
+            model="x",
+            messages=[{"role": "user", "content": "Hi?"}],
+            chat_template_kwargs={"thinking": True},
+        )
+
+        self.assertFalse(self.chat._get_reasoning_from_request(disabled_by_default))
+        self.assertTrue(self.chat._get_reasoning_from_request(enabled_explicitly))
+
+    def test_get_reasoning_from_request_special_cases(self):
+        self.tm.server_args.reasoning_parser = "mistral"
+        self.chat.reasoning_parser = "mistral"
+        req = ChatCompletionRequest(
+            model="x", messages=[{"role": "user", "content": "Hi?"}]
+        )
+
+        self.template_manager.reasoning_config = ReasoningToggleConfig(
+            special_case="always"
+        )
+        self.assertTrue(self.chat._get_reasoning_from_request(req))
+
+        self.template_manager.reasoning_config = ReasoningToggleConfig(
+            special_case="mistral"
+        )
+        self.assertFalse(self.chat._get_reasoning_from_request(req))
+        req.reasoning_effort = "medium"
+        self.assertTrue(self.chat._get_reasoning_from_request(req))
+
+    def test_build_chat_response_qwen3_strict_respects_disabled_thinking(self):
+        self.tm.server_args.reasoning_parser = "qwen3-thinking-strict"
+        self.chat.reasoning_parser = "qwen3-thinking-strict"
+        self.template_manager.reasoning_config = ReasoningToggleConfig(
+            toggle_param="enable_thinking", default_enabled=True
+        )
+
+        req = ChatCompletionRequest(
+            model="Qwen/Qwen3-0.6B",
+            messages=[{"role": "user", "content": "Hi?"}],
+            separate_reasoning=True,
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        ret_item = {
+            "text": "42",
+            "meta_info": {
+                "id": f"chatcmpl-{uuid.uuid4()}",
+                "prompt_tokens": 10,
+                "completion_tokens": 1,
+                "weight_version": "default",
+                "finish_reason": {"type": "stop", "matched": None},
+            },
+            "index": 0,
+        }
+
+        response = self.chat._build_chat_response(req, [ret_item], created=0)
+        msg = response.choices[0].message
+        self.assertEqual(msg.content, "42")
+        self.assertIsNone(msg.reasoning_content)
 
 
 if __name__ == "__main__":
