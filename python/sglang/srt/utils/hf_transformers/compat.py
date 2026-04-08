@@ -81,10 +81,7 @@ def normalize_rope_scaling_compat(config) -> None:
     """
 
     def _patch(cfg):
-        try:
-            rs = getattr(cfg, "rope_scaling", None)
-        except AttributeError:
-            rs = None
+        rs = getattr(cfg, "rope_scaling", None)
         if isinstance(rs, dict) and "rope_type" in rs and "type" not in rs:
             rs["type"] = rs["rope_type"]
         # Recurse into sub-configs
@@ -116,7 +113,7 @@ def _ensure_gguf_version():
                 gguf.__version__ = importlib.metadata.version("gguf")
             except importlib.metadata.PackageNotFoundError:
                 gguf.__version__ = "0.0.0"
-            except Exception as e:
+            except (ValueError, OSError, TypeError) as e:
                 logger.warning(
                     "Failed to determine gguf package version: %s. "
                     "Falling back to '0.0.0'.",
@@ -277,7 +274,9 @@ def _patch_image_processor_kwargs():
 
         BaseImageProcessor.__call__ = safe_call
     except ImportError:
-        pass
+        logger.debug(
+            "_patch_image_processor_kwargs: BaseImageProcessor not importable, patch skipped"
+        )
 
 
 def _patch_image_process_cuda_tensor():
@@ -308,7 +307,9 @@ def _patch_image_process_cuda_tensor():
 
             cls.process_image = patched_process_image
     except ImportError:
-        pass
+        logger.debug(
+            "_patch_image_process_cuda_tensor: required modules not importable, patch skipped"
+        )
 
 
 def _patch_nemotron_h_pattern():
@@ -340,7 +341,9 @@ def _patch_nemotron_h_pattern():
 
         NemotronHConfig._pattern_to_list = _pattern_to_list
     except ImportError:
-        pass
+        logger.debug(
+            "_patch_nemotron_h_pattern: NemotronHConfig not importable, patch skipped"
+        )
 
 
 # ---------------------------------------------------------------------------

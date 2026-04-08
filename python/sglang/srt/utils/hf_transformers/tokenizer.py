@@ -62,7 +62,12 @@ def _load_tokenizer_by_declared_class(tokenizer_name, *args, **kwargs):
         with open(config_file) as f:
             tok_config = json.load(f)
         tok_class_name = tok_config.get("tokenizer_class")
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as e:
+        logger.debug(
+            "Failed to read tokenizer_config.json for %s: %s", tokenizer_name, e
+        )
         return None
 
     if not tok_class_name:
@@ -232,7 +237,7 @@ def get_tokenizer(
             tokenizer = AutoTokenizer.from_pretrained(
                 tokenizer_name, *args, **common_kwargs
             )
-        except Exception as e:
+        except (ValueError, TypeError, OSError, ImportError, RuntimeError) as e:
             raise RuntimeError(
                 f"Retry with use_fast=False for {tokenizer_name} also failed "
                 f"(initial load returned TokenizersBackend): {e}"
@@ -298,9 +303,9 @@ def _fix_v5_tokenizer_components(tokenizer, model_name_or_path, revision=None):
             model_name_or_path, "tokenizer.json", revision
         )
         raw = RawTokenizer.from_file(tok_file)
-    except OSError:
+    except FileNotFoundError:
         return
-    except (ValueError, RuntimeError) as e:
+    except (OSError, ValueError, RuntimeError) as e:
         logger.warning(
             "_fix_v5_tokenizer_components: unexpected error loading tokenizer.json "
             "for %s, v5 component fix will not be applied: %s",
@@ -363,9 +368,9 @@ def _fix_v5_add_bos_eos_token(tokenizer, model_name_or_path, revision=None):
         )
         with open(config_file) as f:
             config = json.load(f)
-    except OSError:
+    except FileNotFoundError:
         return
-    except (json.JSONDecodeError, ValueError) as e:
+    except (OSError, json.JSONDecodeError, ValueError) as e:
         logger.warning(
             "_fix_v5_add_bos_eos_token: failed to read tokenizer_config.json "
             "for %s, BOS/EOS token restoration will not be applied: %s",
@@ -465,7 +470,7 @@ def _fix_added_tokens_encoding(tokenizer):
             continue
         try:
             val = getattr(tokenizer, attr)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             continue
         if not _is_special_token_attr(val):
             continue

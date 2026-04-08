@@ -400,6 +400,9 @@ def patch_mistral_common_tokenizer(tokenizer):
         try:
             return _orig_convert(val)
         except AssertionError:
+            logger.debug(
+                "convert_tokens_to_ids failed for %r, returning unk_token_id", val
+            )
             return getattr(tokenizer, "unk_token_id", None)
 
     tokenizer.convert_tokens_to_ids = _safe_convert
