@@ -28,6 +28,7 @@ from transformers import (
 from sglang.srt.connector import create_remote_connector
 from sglang.srt.utils import is_remote_url, logger
 from sglang.srt.utils.patch_tokenizer import patch_tokenizer
+from sglang.srt.utils.runai_utils import ObjectStorageModel, is_runai_obj_uri
 
 from .common import (
     _resolve_local_or_cached_file,
@@ -148,6 +149,9 @@ def get_tokenizer(
         kwargs["gguf_file"] = tokenizer_name
         tokenizer_name = Path(tokenizer_name).parent
 
+    if is_runai_obj_uri(tokenizer_name):
+        tokenizer_name = ObjectStorageModel.get_path(tokenizer_name)
+
     if is_remote_url(tokenizer_name):
         # BaseConnector implements __del__() to clean up the local dir.
         # Since config files need to exist all the time, so we DO NOT use
@@ -181,9 +185,25 @@ def get_tokenizer(
         )
         raise RuntimeError(err_msg) from e
     except ValueError as e:
+        # MistralCommon tokenizers reject standard HF kwargs like
+        # trust_remote_code, use_fast etc. Retry without them.
+        if "are not supported by" in str(e) and "MistralCommon" in str(e):
+            for k in (
+                "trust_remote_code",
+                "tokenizer_revision",
+                "use_fast",
+                "_from_auto",
+                "clean_up_tokenization_spaces",
+            ):
+                kwargs.pop(k, None)
+            tokenizer = AutoTokenizer.from_pretrained(
+                tokenizer_name,
+                *args,
+                **kwargs,
+            )
         # If the error pertains to the tokenizer class not existing or not
         # currently being imported, suggest using the --trust-remote-code flag.
-        if not trust_remote_code and (
+        elif not trust_remote_code and (
             "does not exist or is not currently imported." in str(e)
             or "requires you to execute the tokenizer file" in str(e)
         ):
@@ -247,6 +267,7 @@ def get_tokenizer(
             "slowdown. Consider using a fast tokenizer instead."
         )
 
+    _patch_mistral_common_tokenizer(tokenizer)
     _fix_special_tokens_pattern(tokenizer)
     attach_additional_stop_token_ids(tokenizer)
     tokenizer = patch_tokenizer(tokenizer)
@@ -373,6 +394,14 @@ def _fix_v5_add_bos_eos_token(tokenizer, model_name_or_path, revision=None):
         if config_val is None:
             # Key missing or null -> use v4 default for this tokenizer class
             config_val = _V4_DEFAULTS.get(attr, False)
+        # Fast tokenizers in v4 used tokenizer.json post-processor for EOS —
+        # the add_eos_token Python attribute was set but the post-processor
+        # came from tokenizer.json, not from the attribute. In v5, the flag is
+        # stripped and both sglang and HF reference end up with add_eos_token=False.
+        # Restoring add_eos_token for fast tokenizers makes sglang diverge from
+        # the HF reference, breaking embedding models like e5-mistral-7b-instruct.
+        if attr == "add_eos_token" and isinstance(tokenizer, PreTrainedTokenizerFast):
+            config_val = _V4_DEFAULTS["add_eos_token"]  # False
         current_val = getattr(tokenizer, attr, None)
         if current_val != config_val:
             logger.info(
@@ -470,3 +499,72 @@ def _fix_added_tokens_encoding(tokenizer):
         len(broken),
         broken[:10],
     )
+
+
+def _patch_mistral_common_tokenizer(tokenizer):
+    """Patch MistralCommonTokenizer/Backend to be compatible with HF tokenizer API.
+
+    MistralCommon tokenizers (used by Voxtral, Pixtral, etc.) reject several
+    standard kwargs and lack some attributes that sglang expects.  We wrap the
+    offending methods once at load time so that the rest of the codebase does
+    not need any special-casing.
+    """
+    cls_name = type(tokenizer).__name__
+    if "MistralCommon" not in cls_name:
+        return tokenizer
+    if getattr(tokenizer, "_mistral_common_patched", False):
+        return tokenizer
+    tokenizer._mistral_common_patched = True
+
+    if not hasattr(tokenizer, "get_added_vocab"):
+        tokenizer.get_added_vocab = lambda: {}
+
+    # Set a chat_template containing "audio" so that sglang's content format
+    # detector returns "openai" (which preserves audio_url extraction).
+    if not hasattr(tokenizer, "chat_template") or tokenizer.chat_template is None:
+        tokenizer.chat_template = "<!-- audio/image multimodal -->"
+
+    _orig_convert = tokenizer.convert_tokens_to_ids
+
+    def _safe_convert(val):
+        try:
+            return _orig_convert(val)
+        except AssertionError:
+            return getattr(tokenizer, "unk_token_id", None)
+
+    tokenizer.convert_tokens_to_ids = _safe_convert
+
+    def _drop_kwargs(fn, keys):
+        def wrapper(*args, **kwargs):
+            for k in keys:
+                kwargs.pop(k, None)
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    tokenizer.decode = _drop_kwargs(tokenizer.decode, ["spaces_between_special_tokens"])
+    tokenizer.batch_decode = _drop_kwargs(
+        tokenizer.batch_decode, ["spaces_between_special_tokens"]
+    )
+
+    tokenizer._orig_apply_chat_template = tokenizer.apply_chat_template
+
+    def _safe_apply_chat_template(messages, **kwargs):
+        kwargs.pop("add_generation_prompt", None)
+        cleaned = []
+        for msg in messages:
+            if isinstance(msg, dict):
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    text_parts = [
+                        p.get("text", "")
+                        for p in content
+                        if isinstance(p, dict) and p.get("type") == "text"
+                    ]
+                    msg = {**msg, "content": " ".join(text_parts) if text_parts else ""}
+                cleaned.append(msg)
+            else:
+                cleaned.append(msg)
+        return tokenizer._orig_apply_chat_template(cleaned, **kwargs)
+
+    tokenizer.apply_chat_template = _safe_apply_chat_template

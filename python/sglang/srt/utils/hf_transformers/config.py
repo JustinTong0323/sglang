@@ -21,6 +21,7 @@ from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_N
 
 from sglang.srt.connector import create_remote_connector
 from sglang.srt.utils import is_remote_url, logger, lru_cache_frozenset
+from sglang.srt.utils.runai_utils import ObjectStorageModel, is_runai_obj_uri
 
 from .common import (
     _CONFIG_REGISTRY,
@@ -60,6 +61,9 @@ def get_config(
         _ensure_gguf_version()
         kwargs["gguf_file"] = model
         model = Path(model).parent
+
+    if is_runai_obj_uri(model):
+        model = ObjectStorageModel.get_path(model)
 
     if is_remote_url(model):
         client = create_remote_connector(model)

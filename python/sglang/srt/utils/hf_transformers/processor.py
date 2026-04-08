@@ -41,6 +41,7 @@ from .tokenizer import (
     _TOKENIZERS_BACKEND,
     _fix_added_tokens_encoding,
     _fix_special_tokens_pattern,
+    _patch_mistral_common_tokenizer,
 )
 
 
@@ -220,6 +221,22 @@ def get_processor(
                 revision,
                 **kwargs,
             )
+        elif (
+            "are not supported by" in error_message and "MistralCommon" in error_message
+        ):
+            logger.info(
+                "AutoProcessor for %s rejected standard kwargs, "
+                "retrying without trust_remote_code/use_fast",
+                tokenizer_name,
+            )
+            kwargs.pop("use_fast", None)
+            kwargs.pop("_from_auto", None)
+            processor = AutoProcessor.from_pretrained(
+                tokenizer_name,
+                *args,
+                revision=revision,
+                **kwargs,
+            )
         else:
             raise
     if (
@@ -260,6 +277,7 @@ def get_processor(
             tokenizer.chat_template = jinja_path.read_text()
             logger.info("Loaded chat_template from %s", jinja_path)
 
+    _patch_mistral_common_tokenizer(tokenizer)
     _fix_special_tokens_pattern(tokenizer)
     _fix_added_tokens_encoding(tokenizer)
     attach_additional_stop_token_ids(tokenizer)
