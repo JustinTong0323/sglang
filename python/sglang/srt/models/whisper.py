@@ -292,6 +292,10 @@ class WhisperEncoder(torch.nn.Module):
         position_ids: torch.Tensor,
         forward_batch: ForwardBatch,
     ):
+        device = self.conv1.weight.device
+        input_features = input_features.to(device=device)
+        position_ids = position_ids.to(device=device)
+
         inputs_embeds = torch.nn.functional.gelu(self.conv1(input_features))
         inputs_embeds = torch.nn.functional.gelu(self.conv2(inputs_embeds))
 
@@ -456,8 +460,8 @@ class WhisperForConditionalGeneration(torch.nn.Module):
                 # Batch all features and run encoder once instead of sequentially
                 features_batch = torch.cat(features_to_encode, dim=0)
                 encoder_len = features_batch.shape[-1] // 2
-                encoder_position_ids = torch.arange(encoder_len).to(
-                    features_batch.device, non_blocking=True
+                encoder_position_ids = torch.arange(
+                    encoder_len, device=features_batch.device
                 )
 
                 batched_output = self.encoder(
