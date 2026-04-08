@@ -155,7 +155,7 @@ def get_config(
         _apply_deepseek_ocr_overrides(config, model)
     elif config.model_type in _CONFIG_REGISTRY:
         model_type = config.model_type
-        if model_type == "deepseek_vl_v2" and (is_ocr or is_ocr2):
+        if model_type == "deepseek_vl_v2" and is_ocr:
             model_type = "deepseek-ocr"
         config = _CONFIG_REGISTRY[model_type].from_pretrained(model, revision=revision)
 

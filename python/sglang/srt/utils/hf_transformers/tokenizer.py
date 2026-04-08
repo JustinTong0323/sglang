@@ -56,8 +56,9 @@ def _load_tokenizer_by_declared_class(tokenizer_name, *args, **kwargs):
     import transformers
 
     try:
+        revision = kwargs.get("revision") or kwargs.get("tokenizer_revision")
         config_file = _resolve_local_or_cached_file(
-            tokenizer_name, "tokenizer_config.json", kwargs.get("revision")
+            tokenizer_name, "tokenizer_config.json", revision
         )
         with open(config_file) as f:
             tok_config = json.load(f)
@@ -89,7 +90,7 @@ def _load_tokenizer_by_declared_class(tokenizer_name, *args, **kwargs):
                 tok_cls = get_class_from_dynamic_module(
                     auto_tok_ref,
                     tokenizer_name,
-                    code_revision=kwargs.get("revision"),
+                    code_revision=revision,
                 )
         except (OSError, ImportError, ValueError, RuntimeError) as e:
             logger.debug("Dynamic module lookup for %s failed: %s", tok_class_name, e)
@@ -139,9 +140,9 @@ def get_tokenizer(
             raise ValueError("Cannot use the fast tokenizer in slow tokenizer mode.")
         kwargs["use_fast"] = False
     elif tokenizer_mode == "auto":
-        # In Transformers v5, the default for use_fast changed from True to False.
-        # Explicitly set use_fast=True for "auto" mode to maintain previous behavior
-        # and avoid issues with models that have incorrect tokenizer_class values.
+        # Transformers v5 AutoTokenizer ignores use_fast (always fast), but
+        # some code paths pass kwargs to non-AutoTokenizer loaders where
+        # use_fast still matters. Set explicitly for those fallback paths.
         if "use_fast" not in kwargs:
             kwargs["use_fast"] = True
 

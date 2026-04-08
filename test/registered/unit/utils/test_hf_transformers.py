@@ -450,5 +450,137 @@ class TestModuleReExports(unittest.TestCase):
             )
 
 
+# ---------------------------------------------------------------------------
+# compat: _patch_removed_symbols
+# ---------------------------------------------------------------------------
+
+
+class TestPatchRemovedSymbols(unittest.TestCase):
+    def test_llama_flash_attention2_exists(self):
+        from transformers.models.llama import modeling_llama
+
+        self.assertTrue(
+            hasattr(modeling_llama, "LlamaFlashAttention2"),
+            "LlamaFlashAttention2 should be patched onto modeling_llama",
+        )
+
+    def test_is_flash_attn_greater_or_equal_2_10_callable(self):
+        import transformers.utils as _u
+
+        self.assertTrue(
+            hasattr(_u, "is_flash_attn_greater_or_equal_2_10"),
+            "is_flash_attn_greater_or_equal_2_10 should be patched onto transformers.utils",
+        )
+        self.assertIsInstance(_u.is_flash_attn_greater_or_equal_2_10(), bool)
+
+
+# ---------------------------------------------------------------------------
+# compat: _patch_rope_parameters_validation
+# ---------------------------------------------------------------------------
+
+
+class TestPatchRopeParametersValidation(unittest.TestCase):
+    def test_injects_rope_theta_into_rope_scaling(self):
+        config_dict = {
+            "model_type": "llama",
+            "rope_theta": 500000.0,
+            "max_position_embeddings": 131072,
+            "rope_scaling": {
+                "rope_type": "llama3",
+                "factor": 8.0,
+                "low_freq_factor": 1.0,
+                "high_freq_factor": 4.0,
+                "original_max_position_embeddings": 8192,
+            },
+        }
+        config = PretrainedConfig.from_dict(config_dict)
+        rope_params = getattr(config, "rope_parameters", None)
+        if rope_params is not None:
+            self.assertIn("rope_theta", rope_params)
+
+    def test_no_injection_when_rope_theta_already_in_scaling(self):
+        config_dict = {
+            "model_type": "llama",
+            "rope_theta": 500000.0,
+            "max_position_embeddings": 131072,
+            "rope_scaling": {
+                "rope_type": "llama3",
+                "factor": 8.0,
+                "rope_theta": 999.0,
+                "low_freq_factor": 1.0,
+                "high_freq_factor": 4.0,
+                "original_max_position_embeddings": 8192,
+            },
+        }
+        config = PretrainedConfig.from_dict(config_dict)
+        rope_params = getattr(config, "rope_parameters", None)
+        if rope_params is not None:
+            self.assertEqual(rope_params["rope_theta"], 999.0)
+
+    def test_no_crash_without_rope_scaling(self):
+        config_dict = {"model_type": "llama", "rope_theta": 10000.0}
+        config = PretrainedConfig.from_dict(config_dict)
+        self.assertIsNotNone(config)
+
+
+# ---------------------------------------------------------------------------
+# compat: _ensure_clean_up_tokenization_compat
+# ---------------------------------------------------------------------------
+
+
+class TestCleanUpTokenizationCompat(unittest.TestCase):
+    def test_clean_up_tokenization_exists(self):
+        from transformers import PreTrainedTokenizerBase
+
+        self.assertTrue(hasattr(PreTrainedTokenizerBase, "clean_up_tokenization"))
+
+    def test_clean_up_tokenization_callable(self):
+        from transformers import PreTrainedTokenizerBase
+
+        self.assertTrue(callable(PreTrainedTokenizerBase.clean_up_tokenization))
+
+
+# ---------------------------------------------------------------------------
+# compat: _ensure_is_torch_fx_available_compat
+# ---------------------------------------------------------------------------
+
+
+class TestIsTorchFxAvailableCompat(unittest.TestCase):
+    def test_is_torch_fx_available_exists(self):
+        import transformers.utils.import_utils as _iu
+
+        self.assertTrue(hasattr(_iu, "is_torch_fx_available"))
+        self.assertTrue(_iu.is_torch_fx_available())
+
+
+# ---------------------------------------------------------------------------
+# compat: _patch_nemotron_h_pattern
+# ---------------------------------------------------------------------------
+
+
+class TestPatchNemotronHPattern(unittest.TestCase):
+    def test_pattern_to_list_handles_mlp_dash(self):
+        try:
+            from transformers.models.nemotron_h.configuration_nemotron_h import (
+                NemotronHConfig,
+            )
+
+            result = NemotronHConfig._pattern_to_list("M-*-")
+            self.assertEqual(result, ["mamba", "mlp", "attention", "mlp"])
+        except ImportError:
+            self.skipTest("NemotronHConfig not available in this transformers version")
+
+    def test_pattern_to_list_standard_chars(self):
+        try:
+            from transformers.models.nemotron_h.configuration_nemotron_h import (
+                NemotronHConfig,
+            )
+
+            result = NemotronHConfig._pattern_to_list("ME*")
+            self.assertEqual(result, ["mamba", "moe", "attention"])
+        except ImportError:
+            self.skipTest("NemotronHConfig not available in this transformers version")
+
+
 if __name__ == "__main__":
     unittest.main()
