@@ -480,6 +480,17 @@ class HYV3ForCausalLM(nn.Module):
             input_ids, hidden_states, self.lm_head, forward_batch
         )
 
+    def get_embed_and_head(self):
+        return self.model.embed_tokens.weight, self.lm_head.weight
+
+    def set_embed_and_head(self, embed, head):
+        del self.model.embed_tokens.weight
+        del self.lm_head.weight
+        self.model.embed_tokens.weight = embed
+        self.lm_head.weight = head
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         stacked_params_mapping = [
             ("qkv_proj", "q_proj", "q"),
@@ -499,13 +510,19 @@ class HYV3ForCausalLM(nn.Module):
         )
 
         params_dict = dict(self.named_parameters())
-        
+        num_nextn_layers = getattr(self.config, "num_nextn_predict_layers", 0)
+
         for name, loaded_weight in weights:
             if "lm_head.weight" in name and getattr(self.config, "tie_word_embeddings", False):
                 continue
-                
+
             if "rotary_emb.inv_freq" in name:
                 continue
+
+            if num_nextn_layers > 0 and name.startswith("model.layers."):
+                parts = name.split(".")
+                if len(parts) >= 3 and int(parts[2]) >= self.config.num_hidden_layers:
+                    continue
 
             is_found = False
             for param_name, weight_name, shard_id in stacked_params_mapping:
