@@ -1149,6 +1149,7 @@ class OpenAIServingChat(OpenAIServingBase):
                 not is_required or parser.detector.supports_structural_tag()
             )
             if should_try_parser and parser.has_tool_call(text):
+                original_finish_type = finish_reason["type"]
                 if finish_reason["type"] == "stop":
                     finish_reason["type"] = "tool_calls"
                     finish_reason["matched"] = None
@@ -1172,10 +1173,12 @@ class OpenAIServingChat(OpenAIServingBase):
                     return ToolCallProcessingResult(tool_calls, text, finish_reason)
                 except Exception as e:
                     logger.error(f"Tool call parsing error: {e}")
+                    finish_reason["type"] = original_finish_type
                     return ToolCallProcessingResult(None, text, finish_reason)
 
         # json_schema constraint → JSON array output for required/named
         if is_required:
+            original_finish_type = finish_reason["type"]
             if finish_reason["type"] == "stop":
                 finish_reason["type"] = "tool_calls"
                 finish_reason["matched"] = None
@@ -1204,8 +1207,9 @@ class OpenAIServingChat(OpenAIServingBase):
                         )
                     )
                 return ToolCallProcessingResult(tool_calls, "", finish_reason)
-            except json.JSONDecodeError as e:
+            except Exception as e:
                 logger.error(f"Tool call parsing error: {e}")
+                finish_reason["type"] = original_finish_type
                 return ToolCallProcessingResult(None, text, finish_reason)
 
         return ToolCallProcessingResult(None, text, finish_reason)

@@ -3895,6 +3895,7 @@ class TestGetStructureConstraint(unittest.TestCase):
         result = parser.get_structure_constraint("required")
         self.assertIsNotNone(result)
         self.assertEqual(result[0], "structural_tag")
+        self.assertTrue(result[1].at_least_one)
 
     def test_kimi_required_no_strict_returns_structural_tag(self):
         """required should use structural_tag even without strict, to preserve native format."""
@@ -3902,12 +3903,14 @@ class TestGetStructureConstraint(unittest.TestCase):
         result = parser.get_structure_constraint("required")
         self.assertIsNotNone(result)
         self.assertEqual(result[0], "structural_tag")
+        self.assertTrue(result[1].at_least_one)
 
     def test_kimi_auto_strict_returns_structural_tag(self):
         parser = self._make_parser("kimi_k2", strict=True)
         result = parser.get_structure_constraint("auto")
         self.assertIsNotNone(result)
         self.assertEqual(result[0], "structural_tag")
+        self.assertFalse(result[1].at_least_one)
 
     def test_kimi_auto_no_strict_returns_none(self):
         """auto without strict should not constrain."""
