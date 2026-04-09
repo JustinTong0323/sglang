@@ -102,7 +102,8 @@ for name, cls in _CONFIG_REGISTRY.items():
     try:
         AutoConfig.register(name, cls)
     except ValueError as e:
-        if "already registered" not in str(e).lower():
+        err = str(e).lower()
+        if "already registered" not in err and "already used" not in err:
             logger.warning("Failed to register config %s: %s", name, e)
 
 

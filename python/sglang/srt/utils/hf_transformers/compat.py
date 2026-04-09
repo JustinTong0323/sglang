@@ -132,16 +132,19 @@ def _ensure_gguf_version():
 def _patch_rope_parameters_validation():
     """Fix rope_parameters validation for unregistered model types.
 
-    Transformers v5.4+ validates that ``rope_parameters`` contains
-    ``rope_theta`` for yarn/llama3/longrope types.  For unregistered model
-    types (e.g. ``deepseek_v32``), the generic ``PretrainedConfig`` lacks a
-    ``rope_parameters`` field so the conversion that injects ``rope_theta``
-    from the top-level config is skipped, causing a ``KeyError``.
+    For unregistered model types (e.g. ``deepseek_v32``), the generic
+    ``PretrainedConfig`` lacks a ``rope_parameters`` field so the conversion
+    that injects ``rope_theta`` from the top-level config is skipped.
+    Additionally, ``standardize_rope_params()`` accesses
+    ``self.max_position_embeddings`` during ``__post_init__`` before extra
+    kwargs are set as attributes, causing ``AttributeError``.
 
-    Fix: patch ``PretrainedConfig.from_dict`` to inject ``rope_theta`` into
-    ``rope_scaling`` before ``__init__`` validates.
+    Fix: (1) patch ``from_dict`` to inject ``rope_theta`` into
+    ``rope_scaling``, (2) guard ``standardize_rope_params`` against missing
+    ``max_position_embeddings``.
 
-    TODO(upstream): fixed in https://github.com/huggingface/transformers/pull/45049, remove once the pinned transformers version includes this fix (expected >= 5.5.0)
+    TODO(upstream): remove once unregistered model types handle rope
+    standardization correctly in transformers.
     """
     from transformers import PretrainedConfig
 
@@ -161,6 +164,18 @@ def _patch_rope_parameters_validation():
         return original(cls, config_dict, **kwargs)
 
     PretrainedConfig.from_dict = patched
+
+    # standardize_rope_params accesses self.max_position_embeddings before
+    # __post_init__ sets extra kwargs — skip when the attribute is absent.
+    if hasattr(PretrainedConfig, "standardize_rope_params"):
+        _orig_standardize = PretrainedConfig.standardize_rope_params
+
+        def _safe_standardize(self):
+            if not hasattr(self, "max_position_embeddings"):
+                return
+            return _orig_standardize(self)
+
+        PretrainedConfig.standardize_rope_params = _safe_standardize
 
 
 def _patch_flash_attn_availability():
@@ -313,12 +328,14 @@ def _patch_image_process_cuda_tensor():
 
 
 def _patch_nemotron_h_pattern():
-    """Fix ``_pattern_to_list()`` not handling ``-`` (mlp) layer type.
+    """Fix ``_pattern_to_list()`` crashing on ``-`` in hybrid_override_pattern.
 
     Nemotron-H models (e.g. NVIDIA-Nemotron-Nano-9B-v2) use patterns like
-    ``M-M-M-MM-M-*-...`` where ``-`` denotes an MLP layer.  Transformers
-    v5.4's ``NemotronHConfig._pattern_to_list`` only maps ``M``, ``E``,
-    ``*`` and crashes with ``KeyError: '-'``.
+    ``M-M-M-MM-M-*-...`` where ``-`` denotes an MLP layer.  The upstream
+    ``_pattern_to_list`` tries to map every character and crashes with
+    ``KeyError: '-'``.  We skip ``-`` (and any other unmapped chars)
+    since ``layers_block_type`` only tracks mamba/moe/attention layers.
+    SGLang reads MLP positions from ``hybrid_override_pattern`` directly.
 
     TODO(upstream): report to HF transformers.
     """
@@ -333,7 +350,6 @@ def _patch_nemotron_h_pattern():
                 "M": "mamba",
                 "E": "moe",
                 "*": "attention",
-                "-": "mlp",
             }
             return [
                 pattern_mapping[char] for char in pattern if char in pattern_mapping
@@ -415,6 +431,9 @@ def patch_is_base_mistral_in_ci():
     version that simply returns the tokenizer unchanged.
 
     In CI this prevents exhausting the 3000 req/5min HF API rate limit.
+
+    TODO(upstream): remove once transformers stops calling model_info()
+    inside _patch_mistral_regex (or removes the method entirely).
     """
     global _is_base_mistral_patched
     if _is_base_mistral_patched:
@@ -423,17 +442,6 @@ def patch_is_base_mistral_in_ci():
     from sglang.srt.environ import envs
 
     if not envs.SGLANG_IS_IN_CI.get():
-        return
-
-    import transformers
-
-    if transformers.__version__ != "5.4.0":
-        logger.warning(
-            "transformers version changed to %s (expected 5.4.0), "
-            "_patch_mistral_regex patch skipped — may need update if 429 errors recur",
-            transformers.__version__,
-        )
-        _is_base_mistral_patched = True
         return
 
     from transformers import PreTrainedTokenizerFast

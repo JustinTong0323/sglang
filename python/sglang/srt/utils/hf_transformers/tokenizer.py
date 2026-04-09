@@ -74,6 +74,10 @@ def _load_tokenizer_by_declared_class(tokenizer_name, *args, **kwargs):
     if not tok_class_name:
         return None
 
+    # Skip base classes that don't implement required methods (e.g. get_vocab)
+    if tok_class_name in ("PreTrainedTokenizer", "PreTrainedTokenizerBase"):
+        return None
+
     tok_cls = getattr(transformers, tok_class_name, None)
     if tok_cls is None and kwargs.get("trust_remote_code"):
         # Class not in transformers — try loading via auto_map.

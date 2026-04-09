@@ -559,14 +559,14 @@ class TestIsTorchFxAvailableCompat(unittest.TestCase):
 
 
 class TestPatchNemotronHPattern(unittest.TestCase):
-    def test_pattern_to_list_handles_mlp_dash(self):
+    def test_pattern_to_list_skips_mlp_dash(self):
         try:
             from transformers.models.nemotron_h.configuration_nemotron_h import (
                 NemotronHConfig,
             )
 
             result = NemotronHConfig._pattern_to_list("M-*-")
-            self.assertEqual(result, ["mamba", "mlp", "attention", "mlp"])
+            self.assertEqual(result, ["mamba", "attention"])
         except ImportError:
             self.skipTest("NemotronHConfig not available in this transformers version")
 
