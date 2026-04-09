@@ -406,13 +406,15 @@ class TestToolChoiceLlama32(CustomTestCase):
                 )
 
     def test_complex_parameters_required_non_streaming(self):
-        """Validate complex nested parameter schemas in non-streaming required mode"""
+        """Validate complex nested parameter schemas in non-streaming required mode.
+        Uses strict=True so the grammar enforces the parameter schema."""
         complex_tools = [
             {
                 "type": "function",
                 "function": {
                     "name": "analyze_data",
                     "description": "Analyze complex data structures",
+                    "strict": True,
                     "parameters": {
                         "type": "object",
                         "properties": {
