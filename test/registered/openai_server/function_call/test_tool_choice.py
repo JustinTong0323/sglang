@@ -348,8 +348,12 @@ class TestToolChoiceLlama32(CustomTestCase):
         self.assertEqual(found_name, "get_weather")
 
     def test_required_streaming_arguments_chunks_json(self):
-        """In streaming required mode, complete tool call arguments should be valid JSON when all chunks are combined"""
+        """In streaming required mode, complete tool call arguments should be valid JSON when all chunks are combined.
+        Uses strict=True so the grammar enforces the parameter schema."""
         tools = self.get_test_tools()
+        # Add strict=True so arguments are schema-constrained
+        for tool in tools:
+            tool["function"]["strict"] = True
         messages = self.get_test_messages()
 
         response = self.client.chat.completions.create(
