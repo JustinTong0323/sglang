@@ -3946,11 +3946,11 @@ class TestGetStructureConstraint(unittest.TestCase):
         self.assertIn("<|tool_call_end|>", structures[0].end)
 
     def test_kimi_required_no_strict_uses_empty_schema(self):
-        """Without strict, structural_tag should use empty schema (no parameter constraint)."""
+        """Without strict, structural_tag should use empty schema per OpenAI
+        protocol: strict=False means no parameter schema enforcement."""
         parser = self._make_parser("kimi_k2", strict=False)
         result = parser.get_structure_constraint("required")
         tag = result[1]
-        # Empty schema means no parameter validation, only format constraint
         self.assertEqual(tag.structures[0].schema_, {})
 
     def test_kimi_required_strict_uses_tool_schema(self):

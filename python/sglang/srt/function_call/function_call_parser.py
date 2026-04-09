@@ -212,7 +212,8 @@ class FunctionCallParser:
         # It cannot parse or validate function call Pythonic or XML-ish syntax.
         if self.detector.supports_structural_tag():
             # For "required"/named: always use structural_tag to preserve the
-            # model's native tool call format (with empty schema if not strict).
+            # model's native tool call format. Schema is only included when
+            # strict=True, per OpenAI protocol semantics.
             # For "auto": only constrain when strict is enabled.
             is_required = tool_choice == "required" or isinstance(
                 tool_choice, ToolChoice
