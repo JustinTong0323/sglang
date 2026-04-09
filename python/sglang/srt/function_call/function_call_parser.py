@@ -3,6 +3,7 @@ from typing import Dict, List, Literal, Optional, Set, Tuple, Type, Union
 
 from sglang.srt.entrypoints.openai.protocol import (
     LegacyStructuralTagResponseFormat,
+    StructuralTagResponseFormat,
     StructuresResponseFormat,
     Tool,
     ToolCallConstraint,
@@ -149,11 +150,17 @@ class FunctionCallParser:
 
         return final_normal_text, final_calls
 
-    def get_structure_tag(self) -> LegacyStructuralTagResponseFormat:
+    def get_structure_tag(
+        self, at_least_one: bool = False
+    ) -> StructuralTagResponseFormat:
         """
         Generate a structural tag response format for all available tools.
 
         This creates the necessary structural tags that guide the model's output format.
+
+        Args:
+            at_least_one: If True, the grammar forces at least one tool call
+                (no free text allowed). Used for required/named tool_choice.
 
         Raises:
             ValueError: If tools have conflicting $defs schemas.
@@ -192,6 +199,7 @@ class FunctionCallParser:
             type="structural_tag",
             structures=tool_structures,
             triggers=list(tool_trigger_set),
+            at_least_one=at_least_one,
         )
 
     def get_structure_constraint(
@@ -227,7 +235,7 @@ class FunctionCallParser:
                     or self.tool_strict_level >= ToolStrictLevel.FUNCTION
                 )
             ):
-                tag = self.get_structure_tag()
+                tag = self.get_structure_tag(at_least_one=is_required)
                 return ("structural_tag", tag)
         elif tool_choice == "required" or isinstance(tool_choice, ToolChoice):
             json_schema = get_json_schema_constraint(
