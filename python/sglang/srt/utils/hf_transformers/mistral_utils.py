@@ -371,6 +371,40 @@ def wrap_as_pixtral(processor, config):
     )
 
 
+# kwargs that MistralCommon tokenizers reject.
+_MISTRAL_COMMON_REJECTED_KWARGS = frozenset(
+    {
+        "trust_remote_code",
+        "tokenizer_revision",
+        "use_fast",
+        "_from_auto",
+        "clean_up_tokenization_spaces",
+    }
+)
+
+# Models whose tokenizer should be loaded from a different checkpoint.
+_MISTRAL_TOKENIZER_REDIRECTS = {
+    # TODO(Xinyuan): Remove this once we have a proper tokenizer for Devstral
+    "mistralai/Devstral-Small-2505": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+}
+
+
+def retry_without_mistral_common_kwargs(tokenizer_name, *args, **common_kwargs):
+    """Retry ``AutoTokenizer.from_pretrained`` without kwargs that MistralCommon rejects.
+
+    Returns the loaded tokenizer, or *None* if the error is not a
+    MistralCommon kwargs rejection.
+    """
+    from transformers import AutoTokenizer
+
+    stripped = {
+        k: v
+        for k, v in common_kwargs.items()
+        if k not in _MISTRAL_COMMON_REJECTED_KWARGS
+    }
+    return AutoTokenizer.from_pretrained(tokenizer_name, *args, **stripped)
+
+
 def patch_mistral_common_tokenizer(tokenizer):
     """Patch MistralCommonTokenizer/Backend to be compatible with HF tokenizer API.
 

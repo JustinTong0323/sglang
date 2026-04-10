@@ -36,7 +36,11 @@ from .common import (
     check_gguf_file,
 )
 from .compat import _ensure_gguf_version, patch_is_base_mistral_in_ci
-from .mistral_utils import patch_mistral_common_tokenizer
+from .mistral_utils import (
+    _MISTRAL_TOKENIZER_REDIRECTS,
+    patch_mistral_common_tokenizer,
+    retry_without_mistral_common_kwargs,
+)
 
 # A fast LLaMA tokenizer with the pre-processed `tokenizer.json` file.
 _FAST_LLAMA_TOKENIZER = "hf-internal-testing/llama-tokenizer"
@@ -125,37 +129,19 @@ class TokenizerWarningsFilter(logging.Filter):
         return "Calling super().encode with" not in record.getMessage()
 
 
-def get_tokenizer(
-    tokenizer_name: str,
-    *args,
-    tokenizer_mode: str = "auto",
-    trust_remote_code: bool = False,
-    tokenizer_revision: Optional[str] = None,
-    **kwargs,
-) -> Union[PreTrainedTokenizer, PreTrainedTokenizerFast]:
-    """Gets a tokenizer for the given model name via Huggingface."""
-    if tokenizer_name.endswith(".json"):
-        from sglang.srt.tokenizer.tiktoken_tokenizer import TiktokenTokenizer
+# ---------------------------------------------------------------------------
+# Helpers for get_tokenizer
+# ---------------------------------------------------------------------------
 
-        return TiktokenTokenizer(tokenizer_name)
 
-    if tokenizer_mode == "slow":
-        if kwargs.get("use_fast", False):
-            raise ValueError("Cannot use the fast tokenizer in slow tokenizer mode.")
-        kwargs["use_fast"] = False
-    elif tokenizer_mode == "auto":
-        # Transformers v5 AutoTokenizer ignores use_fast (always fast), but
-        # some code paths pass kwargs to non-AutoTokenizer loaders where
-        # use_fast still matters. Set explicitly for those fallback paths.
-        if "use_fast" not in kwargs:
-            kwargs["use_fast"] = True
+def _resolve_tokenizer_name(tokenizer_name, kwargs):
+    """Resolve special name formats (GGUF, remote URLs, etc.) to a local path.
 
-    # TODO(Xinyuan): Remove this once we have a proper tokenizer for Devstral
-    if tokenizer_name == "mistralai/Devstral-Small-2505":
-        tokenizer_name = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+    May mutate *kwargs* (e.g. to add ``gguf_file``).
+    """
+    tokenizer_name = _MISTRAL_TOKENIZER_REDIRECTS.get(tokenizer_name, tokenizer_name)
 
-    is_gguf = check_gguf_file(tokenizer_name)
-    if is_gguf:
+    if check_gguf_file(tokenizer_name):
         _ensure_gguf_version()
         kwargs["gguf_file"] = tokenizer_name
         tokenizer_name = Path(tokenizer_name).parent
@@ -171,15 +157,11 @@ def get_tokenizer(
         client.pull_files(ignore_pattern=["*.pt", "*.safetensors", "*.bin"])
         tokenizer_name = client.get_local_dir()
 
-    patch_is_base_mistral_in_ci()
+    return tokenizer_name
 
-    common_kwargs = dict(
-        trust_remote_code=trust_remote_code,
-        tokenizer_revision=tokenizer_revision,
-        clean_up_tokenization_spaces=False,
-        **kwargs,
-    )
 
+def _auto_tokenizer_from_pretrained(tokenizer_name, *args, **common_kwargs):
+    """Call ``AutoTokenizer.from_pretrained`` with error handling."""
     try:
         tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_name, *args, **common_kwargs
@@ -187,8 +169,8 @@ def get_tokenizer(
         logging.getLogger(tokenizer.__class__.__module__).addFilter(
             TokenizerWarningsFilter()
         )
+        return tokenizer
     except TypeError as e:
-        # The LLaMA tokenizer causes a protobuf error in some environments.
         err_msg = (
             "Failed to load the tokenizer. If you are using a LLaMA V1 model "
             f"consider using '{_FAST_LLAMA_TOKENIZER}' instead of the "
@@ -199,22 +181,12 @@ def get_tokenizer(
         # MistralCommon tokenizers reject standard HF kwargs like
         # trust_remote_code, use_fast etc. Retry without them.
         if "are not supported by" in str(e) and "MistralCommon" in str(e):
-            for k in (
-                "trust_remote_code",
-                "tokenizer_revision",
-                "use_fast",
-                "_from_auto",
-                "clean_up_tokenization_spaces",
-            ):
-                kwargs.pop(k, None)
-            tokenizer = AutoTokenizer.from_pretrained(
-                tokenizer_name,
-                *args,
-                **kwargs,
+            return retry_without_mistral_common_kwargs(
+                tokenizer_name, *args, **common_kwargs
             )
         # If the error pertains to the tokenizer class not existing or not
         # currently being imported, suggest using the --trust-remote-code flag.
-        elif not trust_remote_code and (
+        if not common_kwargs.get("trust_remote_code") and (
             "does not exist or is not currently imported." in str(e)
             or "requires you to execute the tokenizer file" in str(e)
         ):
@@ -225,64 +197,61 @@ def get_tokenizer(
                 "or using the `--trust-remote-code` flag in the CLI."
             )
             raise RuntimeError(err_msg) from e
-        else:
-            raise
+        raise
 
-    # Transformers v5 may silently fall back to a generic TokenizersBackend
-    # when the model requires a custom tokenizer. Retry with use_fast=False
-    # but only escalate trust_remote_code if the caller already opted in.
+
+def _resolve_tokenizers_backend(tokenizer_name, *args, **common_kwargs):
+    """Resolve generic ``TokenizersBackend`` to a proper tokenizer class.
+
+    In transformers v5, ``AutoTokenizer`` falls back to ``TokenizersBackend``
+    when the model_type has no tokenizer mapping.  This retries with
+    ``use_fast=False``, then attempts loading by the class declared in
+    ``tokenizer_config.json``.  May still return a ``TokenizersBackend``
+    if all retries fail (with a warning).
+    """
+    logger.warning(
+        "Tokenizer loaded as generic TokenizersBackend for %s, "
+        "retrying with use_fast=False",
+        tokenizer_name,
+    )
+    common_kwargs = {**common_kwargs, "use_fast": False}
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_name, *args, **common_kwargs
+        )
+    except (ValueError, TypeError, OSError, ImportError, RuntimeError) as e:
+        raise RuntimeError(
+            f"Retry with use_fast=False for {tokenizer_name} also failed "
+            f"(initial load returned TokenizersBackend): {e}"
+        ) from e
+
     if type(tokenizer).__name__ == _TOKENIZERS_BACKEND:
-        logger.warning(
-            "Tokenizer loaded as generic TokenizersBackend for %s, "
-            "retrying with use_fast=False",
-            tokenizer_name,
-        )
-        common_kwargs["use_fast"] = False
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(
-                tokenizer_name, *args, **common_kwargs
-            )
-        except (ValueError, TypeError, OSError, ImportError, RuntimeError) as e:
-            raise RuntimeError(
-                f"Retry with use_fast=False for {tokenizer_name} also failed "
-                f"(initial load returned TokenizersBackend): {e}"
-            ) from e
-        if type(tokenizer).__name__ == _TOKENIZERS_BACKEND:
-            tokenizer = (
-                _load_tokenizer_by_declared_class(
-                    tokenizer_name, *args, **common_kwargs
-                )
-                or tokenizer
-            )
-        if type(tokenizer).__name__ == _TOKENIZERS_BACKEND:
-            if trust_remote_code:
-                logger.warning(
-                    "Tokenizer for %s is still TokenizersBackend after retries "
-                    "with --trust-remote-code. Model-specific tokenizer attributes "
-                    "may be missing.",
-                    tokenizer_name,
-                )
-            else:
-                logger.warning(
-                    "Tokenizer for %s loaded as generic TokenizersBackend. "
-                    "Set --trust-remote-code to load the model-specific tokenizer.",
-                    tokenizer_name,
-                )
-
-    _fix_v5_tokenizer_components(tokenizer, tokenizer_name, tokenizer_revision)
-    _fix_v5_add_bos_eos_token(tokenizer, tokenizer_name, tokenizer_revision)
-
-    if not isinstance(tokenizer, PreTrainedTokenizerFast):
-        warnings.warn(
-            "Using a slow tokenizer. This might cause a significant "
-            "slowdown. Consider using a fast tokenizer instead."
+        tokenizer = (
+            _load_tokenizer_by_declared_class(tokenizer_name, *args, **common_kwargs)
+            or tokenizer
         )
 
-    patch_mistral_common_tokenizer(tokenizer)
-    _fix_special_tokens_pattern(tokenizer)
-    attach_additional_stop_token_ids(tokenizer)
-    tokenizer = patch_tokenizer(tokenizer)
+    if type(tokenizer).__name__ == _TOKENIZERS_BACKEND:
+        if common_kwargs.get("trust_remote_code"):
+            logger.warning(
+                "Tokenizer for %s is still TokenizersBackend after retries "
+                "with --trust-remote-code. Model-specific tokenizer attributes "
+                "may be missing.",
+                tokenizer_name,
+            )
+        else:
+            logger.warning(
+                "Tokenizer for %s loaded as generic TokenizersBackend. "
+                "Set --trust-remote-code to load the model-specific tokenizer.",
+                tokenizer_name,
+            )
+
     return tokenizer
+
+
+# ---------------------------------------------------------------------------
+# Post-load fixups
+# ---------------------------------------------------------------------------
 
 
 def _fix_v5_tokenizer_components(tokenizer, model_name_or_path, revision=None):
@@ -407,7 +376,7 @@ def _fix_v5_add_bos_eos_token(tokenizer, model_name_or_path, revision=None):
             config_val = _V4_DEFAULTS.get(attr, False)
         # Fast tokenizers in v4 used tokenizer.json post-processor for EOS —
         # the add_eos_token Python attribute was set but the post-processor
-        # came from tokenizer.json, not from the attribute. In v5, the flag is
+        # came from tokenizer.json, not from the attribute.  In v5, the flag is
         # stripped and both sglang and HF reference end up with add_eos_token=False.
         # Restoring add_eos_token for fast tokenizers makes sglang diverge from
         # the HF reference, breaking embedding models like e5-mistral-7b-instruct.
@@ -443,6 +412,76 @@ def _fix_special_tokens_pattern(tokenizer):
         tokenizer.cls_token_id is None or tokenizer.sep_token_id is None
     ):
         tokenizer.special_tokens_pattern = "none"
+
+
+def _apply_post_load_fixes(tokenizer, tokenizer_name, revision):
+    """Apply all post-load patches and return the final tokenizer."""
+    _fix_v5_tokenizer_components(tokenizer, tokenizer_name, revision)
+    _fix_v5_add_bos_eos_token(tokenizer, tokenizer_name, revision)
+
+    if not isinstance(tokenizer, PreTrainedTokenizerFast):
+        warnings.warn(
+            "Using a slow tokenizer. This might cause a significant "
+            "slowdown. Consider using a fast tokenizer instead."
+        )
+
+    patch_mistral_common_tokenizer(tokenizer)
+    _fix_special_tokens_pattern(tokenizer)
+    attach_additional_stop_token_ids(tokenizer)
+    return patch_tokenizer(tokenizer)
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+
+def get_tokenizer(
+    tokenizer_name: str,
+    *args,
+    tokenizer_mode: str = "auto",
+    trust_remote_code: bool = False,
+    tokenizer_revision: Optional[str] = None,
+    **kwargs,
+) -> Union[PreTrainedTokenizer, PreTrainedTokenizerFast]:
+    """Gets a tokenizer for the given model name via Huggingface."""
+    if tokenizer_name.endswith(".json"):
+        from sglang.srt.tokenizer.tiktoken_tokenizer import TiktokenTokenizer
+
+        return TiktokenTokenizer(tokenizer_name)
+
+    if tokenizer_mode == "slow":
+        if kwargs.get("use_fast", False):
+            raise ValueError("Cannot use the fast tokenizer in slow tokenizer mode.")
+        kwargs["use_fast"] = False
+    elif tokenizer_mode == "auto":
+        # Transformers v5 AutoTokenizer ignores use_fast (always fast), but
+        # some code paths pass kwargs to non-AutoTokenizer loaders where
+        # use_fast still matters. Set explicitly for those fallback paths.
+        if "use_fast" not in kwargs:
+            kwargs["use_fast"] = True
+
+    tokenizer_name = _resolve_tokenizer_name(tokenizer_name, kwargs)
+    patch_is_base_mistral_in_ci()
+
+    common_kwargs = dict(
+        trust_remote_code=trust_remote_code,
+        tokenizer_revision=tokenizer_revision,
+        clean_up_tokenization_spaces=False,
+        **kwargs,
+    )
+
+    tokenizer = _auto_tokenizer_from_pretrained(tokenizer_name, *args, **common_kwargs)
+
+    if type(tokenizer).__name__ == _TOKENIZERS_BACKEND:
+        tokenizer = _resolve_tokenizers_backend(tokenizer_name, *args, **common_kwargs)
+
+    return _apply_post_load_fixes(tokenizer, tokenizer_name, tokenizer_revision)
+
+
+# ---------------------------------------------------------------------------
+# Exported helpers (used by processor.py, etc.)
+# ---------------------------------------------------------------------------
 
 
 def _fix_added_tokens_encoding(tokenizer):
