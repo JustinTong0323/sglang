@@ -1268,9 +1268,8 @@ class OpenAIServingChat(OpenAIServingBase):
                 not request.chat_template_kwargs
                 or request.chat_template_kwargs.get("enable_thinking") is not False
             )
-        if self.reasoning_parser in ["mistral"]:
-            # Mistral models only reason when reasoning_effort is explicitly
-            # set to a value other than None/"none" (typically "high").
+        if self.reasoning_parser in ["hunyuan", "mistral"]:
+            # These models only reason when reasoning_effort is explicitly set
             return (
                 request.reasoning_effort is not None
                 and request.reasoning_effort != "none"
