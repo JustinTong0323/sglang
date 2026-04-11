@@ -530,8 +530,8 @@ class TestGetReadyGrammarRequests(unittest.TestCase):
         req.set_finish_with_abort.assert_called_once()
         self.assertIn("timed out", req.set_finish_with_abort.call_args[0][0])
 
-    def test_future_exception_propagates(self):
-        """A future that raised an exception should propagate on .result()."""
+    def test_future_exception_creates_invalid_grammar_object(self):
+        """A future that raised an exception should create InvalidGrammarObject, not crash."""
         mgr = self._make_mgr()
 
         future = Future()
@@ -542,8 +542,10 @@ class TestGetReadyGrammarRequests(unittest.TestCase):
         req.grammar_key = ("json", "crash")
         mgr.grammar_queue.append(req)
 
-        with self.assertRaises(RuntimeError):
-            mgr.get_ready_grammar_requests()
+        result = mgr.get_ready_grammar_requests()
+        self.assertEqual(len(result), 1)
+        self.assertIsInstance(result[0].grammar, InvalidGrammarObject)
+        req.set_finish_with_abort.assert_called_once()
 
     def test_ready_future_applies_request_budget_without_polluting_cache(self):
         mgr = self._make_mgr()
@@ -714,22 +716,17 @@ class TestStrictReasoningPaths(unittest.TestCase):
     def test_future_exception_creates_invalid_grammar(self):
         """Future.result() raising should create InvalidGrammarObject, not crash."""
         mgr = self._make_mgr()
-        mgr.grammar_backend.get_cached_or_future_value.return_value = (
-            MagicMock(spec=Future),
-            False,
-        )
+
+        future = Future()
+        future.set_exception(RuntimeError("compilation failed"))
 
         req = _make_req(json_schema='{"type": "object"}')
         req.require_reasoning = True
+        req.grammar = future
         req.grammar_key = ("json", '{"type": "object"}')
         mgr.grammar_queue.append(req)
 
-        # Make the future raise an exception
-        req.grammar.done.return_value = True
-        req.grammar.result.side_effect = RuntimeError("compilation failed")
-
         mgr.SGLANG_GRAMMAR_POLL_INTERVAL = 0.001
-        mgr.SGLANG_GRAMMAR_MAX_POLL_ITERATIONS = 10
         result = mgr.get_ready_grammar_requests()
 
         self.assertEqual(len(result), 1)

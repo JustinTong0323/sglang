@@ -353,6 +353,11 @@ class TestReasonerGrammarObjectFillVocabMask(unittest.TestCase):
 
     def test_thinking_phase_does_not_consult_inner_grammar(self):
         inner_grammar = MagicMock()
+        # Must return a real tensor for allocate_vocab_mask since fill_vocab_mask
+        # delegates to allocate_vocab_mask via self.grammar when grammar is not None
+        inner_grammar.allocate_vocab_mask.side_effect = lambda vs, bs, d: torch.zeros(
+            (bs, (vs + 31) // 32), dtype=torch.int32
+        )
         obj = ReasonerGrammarObject(
             grammar=inner_grammar,
             think_end_id=7,
@@ -378,6 +383,9 @@ class TestReasonerGrammarObjectFillVocabMask(unittest.TestCase):
 
     def test_generation_phase_consults_inner_grammar(self):
         inner_grammar = MagicMock()
+        inner_grammar.allocate_vocab_mask.side_effect = lambda vs, bs, d: torch.zeros(
+            (bs, (vs + 31) // 32), dtype=torch.int32
+        )
         obj = ReasonerGrammarObject(
             grammar=inner_grammar,
             think_end_id=7,

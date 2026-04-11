@@ -115,16 +115,15 @@ class TestTemplateDetectionRuleMatrix(unittest.TestCase):
     PARSER_RULES_MATRIX = [
         # (name, template_snippet, vocab, expected_parser, expected_toggle_param)
         (
-            "deepseek_r1_force",
-            "{% set enable_thinking = enable_thinking if enable_thinking is defined else true %}\n"
-            '{% if "<think>" in content %}<think>',
+            "deepseek_r1_think_tags",
+            "<think>\nLet me reason about this\n</think>\nAnswer here",
             [],
             "deepseek-r1",
-            None,  # force_reasoning pattern has special_case="always"
+            None,  # matched by deepseek_r1_think_tags rule (has <think> text)
         ),
         (
             "deepseek_v3",
-            "{% set thinking = thinking if thinking is defined else false %}\n"
+            "{% if not thinking is defined %}{% set thinking = false %}{% endif %}\n"
             "<think>",
             [],
             "deepseek-v3",
@@ -167,8 +166,8 @@ class TestTemplateDetectionRuleMatrix(unittest.TestCase):
         ),
         (
             "mimo_enable_thinking_false",
-            "{% if enable_thinking is defined and enable_thinking == true %}\n"
-            "{% else %}{% set enable_thinking = false %}{% endif %}",
+            "{% if not enable_thinking is defined %}{% set enable_thinking = false %}{% endif %}\n"
+            "enable_thinking",
             [],
             "mimo",
             "enable_thinking",
