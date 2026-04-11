@@ -167,7 +167,7 @@ class ReasonerGrammarObject(BaseGrammarObject):
         return self.apply_vocab_mask_fn
 
     def copy(self):
-        return ReasonerGrammarObject(
+        new_obj = ReasonerGrammarObject(
             self.grammar.copy() if self.grammar is not None else None,
             self.think_end_id,
             self.think_excluded_token_ids,
@@ -178,6 +178,9 @@ class ReasonerGrammarObject(BaseGrammarObject):
             self.move_vocab_mask_fn,
             self.apply_vocab_mask_fn,
         )
+        new_obj.tokens_in_think = self.tokens_in_think
+        new_obj.tokens_after_end = self.tokens_after_end
+        return new_obj
 
     @property
     def finished(self):
@@ -248,20 +251,21 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
             reasoning_parser, tokenizer
         )
         self.max_think_tokens = envs.SGLANG_MAX_THINK_TOKENS.get()
+        if (
+            self.strict_reasoning_format
+            and self.think_excluded_token_ids is not None
+            and not self.grammar_backend.is_support_token_filter
+        ):
+            raise ValueError(
+                "Strict reasoning format requested but the grammar backend does not "
+                "support token filtering. Use a grammar backend that supports token "
+                "filtering (e.g., xgrammar) or disable strict reasoning mode."
+            )
         self.enable_token_filter = (
             self.strict_reasoning_format
             and self.think_excluded_token_ids is not None
             and self.grammar_backend.is_support_token_filter
         )
-        if (
-            self.strict_reasoning_format
-            and self.think_excluded_token_ids is not None
-            and not self.enable_token_filter
-        ):
-            logger.warning(
-                "Strict reasoning format requested but the grammar backend does not "
-                "support token filtering. Think-phase token filter will be disabled."
-            )
         self._token_filter_fn = (
             self.grammar_backend.set_token_filter if self.enable_token_filter else None
         )
@@ -279,10 +283,11 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
         for token in reasoning_parser.detector.think_excluded_tokens:
             new_ids = tokenizer.encode(token, add_special_tokens=False)
             if not new_ids:
-                logger.warning(
-                    f"think_excluded_token '{token}' could not be encoded; skipping."
+                raise ValueError(
+                    f"think_excluded_token '{token}' could not be encoded by the "
+                    f"tokenizer. All excluded tokens must be encodable for strict "
+                    f"reasoning mode to function correctly."
                 )
-                continue
             excluded_ids += new_ids
         return excluded_ids
 

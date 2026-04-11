@@ -253,6 +253,19 @@ def create_grammar_backend(
                 any_whitespace=not server_args.constrained_json_disable_any_whitespace,
             )
         except TokenizerNotSupportedError as e:
+            if server_args.reasoning_parser:
+                from sglang.srt.parser.reasoning_parser import ReasoningParser
+
+                rp = ReasoningParser(
+                    model_type=server_args.reasoning_parser, stream_reasoning=False
+                )
+                if rp.detector.strict_reasoning_format:
+                    raise ValueError(
+                        f"Strict reasoning parser '{server_args.reasoning_parser}' "
+                        f"requires a grammar backend with token filtering support, "
+                        f"but XGrammar failed to initialize: {e}. Cannot fall back to "
+                        f"grammar_backend='none' with strict reasoning."
+                    ) from e
             logger.warning(
                 f"Grammar backend disabled because tokenizer is not supported by XGrammar: {e}. "
                 "Falling back to grammar_backend='none'. "
@@ -269,6 +282,19 @@ def create_grammar_backend(
             whitespace_pattern=server_args.constrained_json_whitespace_pattern,
         )
     elif name == "none":
+        if server_args.reasoning_parser:
+            from sglang.srt.parser.reasoning_parser import ReasoningParser
+
+            reasoning_parser = ReasoningParser(
+                model_type=server_args.reasoning_parser, stream_reasoning=False
+            )
+            if reasoning_parser.detector.strict_reasoning_format:
+                raise ValueError(
+                    f"Strict reasoning parser '{server_args.reasoning_parser}' requires "
+                    f"a grammar backend that supports token filtering, but "
+                    f"grammar_backend='none' was specified. Use --grammar-backend xgrammar "
+                    f"or another backend that supports token filtering."
+                )
         return None
     else:
         raise ValueError(f"Invalid grammar backend: {name}")

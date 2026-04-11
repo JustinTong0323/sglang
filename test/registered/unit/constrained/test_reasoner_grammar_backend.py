@@ -201,6 +201,224 @@ class TestReasonerGrammarBackend(unittest.TestCase):
                 self._make_tokenizer(end_ids=[2, 3]),
             )
 
+    def test_rejects_unencodable_excluded_token(self):
+        backend = _DummyGrammarBackend(support_token_filter=True)
+        parser = self._make_parser(strict=True)
+        parser.detector.think_excluded_tokens = ["<unknown>"]
+        tokenizer = _DummyTokenizer(
+            {
+                "<think>": [1],
+                "</think>": [2],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "could not be encoded"):
+            ReasonerGrammarBackend(backend, parser, tokenizer)
+
+    def test_strict_mode_fails_when_backend_lacks_token_filter(self):
+        backend = _DummyGrammarBackend(support_token_filter=False)
+
+        with self.assertRaisesRegex(ValueError, "does not support token filtering"):
+            ReasonerGrammarBackend(
+                backend, self._make_parser(strict=True), self._make_tokenizer()
+            )
+
+
+class TestReasonerGrammarObjectRollback(unittest.TestCase):
+    """Tests for rollback correctness at the THINKING→GENERATION boundary."""
+
+    def _make_object_with_mock_grammar(self):
+        inner_grammar = MagicMock()
+        inner_grammar.is_terminated.return_value = False
+        obj = ReasonerGrammarObject(
+            grammar=inner_grammar,
+            think_end_id=7,
+            think_excluded_token_ids=[3, 5],
+            max_think_tokens=-1,
+            enable_token_filter=True,
+            token_filter_fn=set_token_filter_torch,
+            allocate_vocab_mask_fn=lambda vs, bs, d: torch.zeros(
+                (bs, (vs + 31) // 32), dtype=torch.int32
+            ),
+            move_vocab_mask_fn=lambda vm, d: vm,
+            apply_vocab_mask_fn=lambda l, vm: None,
+        )
+        return obj, inner_grammar
+
+    def test_rollback_at_generation_boundary_returns_to_thinking(self):
+        obj, inner_grammar = self._make_object_with_mock_grammar()
+        obj.maybe_init_reasoning(True)
+
+        # Accept 3 thinking tokens then think_end_id
+        obj.accept_token(10)
+        obj.accept_token(11)
+        obj.accept_token(12)
+        obj.accept_token(7)  # think_end_id → tokens_after_end = 0
+
+        self.assertTrue(obj._is_generation())
+        self.assertEqual(obj.tokens_after_end, 0)
+
+        # Rollback 1 step: should return to THINKING
+        obj.rollback(1)
+        self.assertTrue(obj._is_thinking())
+        self.assertEqual(obj.tokens_in_think, 3)
+        self.assertEqual(obj.tokens_after_end, -1)
+        # Grammar should not have been rolled back (no generation tokens were accepted)
+        inner_grammar.rollback.assert_not_called()
+
+    def test_rollback_spanning_both_phases(self):
+        obj, inner_grammar = self._make_object_with_mock_grammar()
+        obj.maybe_init_reasoning(True)
+
+        # 2 thinking tokens + think_end + 3 generation tokens
+        obj.accept_token(10)  # think
+        obj.accept_token(11)  # think
+        obj.accept_token(7)  # think_end_id
+        obj.accept_token(20)  # gen 1
+        obj.accept_token(21)  # gen 2
+        obj.accept_token(22)  # gen 3
+
+        self.assertEqual(obj.tokens_after_end, 3)
+
+        # Rollback 5: should roll back 3 generation tokens + think_end + 1 thinking token
+        obj.rollback(5)
+        self.assertTrue(obj._is_thinking())
+        self.assertEqual(obj.tokens_in_think, 1)
+        # Grammar should be rolled back by 3 (only generation tokens)
+        inner_grammar.rollback.assert_called_once_with(3)
+
+    def test_rollback_generation_tokens_only(self):
+        obj, inner_grammar = self._make_object_with_mock_grammar()
+        obj.maybe_init_reasoning(True)
+
+        obj.accept_token(10)  # think
+        obj.accept_token(7)  # think_end_id
+        obj.accept_token(20)  # gen 1
+        obj.accept_token(21)  # gen 2
+
+        # Rollback 1: should only roll back 1 generation token
+        obj.rollback(1)
+        self.assertTrue(obj._is_generation())
+        self.assertEqual(obj.tokens_after_end, 1)
+        inner_grammar.rollback.assert_called_once_with(1)
+
+    def test_rollback_thinking_tokens_does_not_touch_grammar(self):
+        obj, inner_grammar = self._make_object_with_mock_grammar()
+        obj.maybe_init_reasoning(True)
+
+        obj.accept_token(10)
+        obj.accept_token(11)
+        obj.accept_token(12)
+
+        obj.rollback(2)
+        self.assertTrue(obj._is_thinking())
+        self.assertEqual(obj.tokens_in_think, 1)
+        inner_grammar.rollback.assert_not_called()
+        inner_grammar.accept_token.assert_not_called()
+
+    def test_copy_preserves_state(self):
+        obj, inner_grammar = self._make_object_with_mock_grammar()
+        obj.maybe_init_reasoning(True)
+
+        obj.accept_token(10)
+        obj.accept_token(7)  # think_end_id → GENERATION
+        obj.accept_token(20)
+
+        self.assertEqual(obj.tokens_in_think, 1)
+        self.assertEqual(obj.tokens_after_end, 1)
+
+        copy = obj.copy()
+        # State counters must be preserved for speculative decoding
+        self.assertEqual(copy.tokens_in_think, 1)
+        self.assertEqual(copy.tokens_after_end, 1)
+        self.assertTrue(copy._is_generation())
+        self.assertIsNotNone(copy.grammar)
+        inner_grammar.copy.assert_called_once()
+
+    def test_copy_preserves_thinking_state(self):
+        obj, inner_grammar = self._make_object_with_mock_grammar()
+        obj.maybe_init_reasoning(True)
+
+        obj.accept_token(10)
+        obj.accept_token(11)
+
+        copy = obj.copy()
+        self.assertEqual(copy.tokens_in_think, 2)
+        self.assertEqual(copy.tokens_after_end, -1)
+        self.assertTrue(copy._is_thinking())
+
+
+class TestReasonerGrammarObjectFillVocabMask(unittest.TestCase):
+    """Tests for fill_vocab_mask behavior in different states."""
+
+    def test_thinking_phase_does_not_consult_inner_grammar(self):
+        inner_grammar = MagicMock()
+        obj = ReasonerGrammarObject(
+            grammar=inner_grammar,
+            think_end_id=7,
+            think_excluded_token_ids=[3, 5],
+            max_think_tokens=-1,
+            enable_token_filter=True,
+            token_filter_fn=set_token_filter_torch,
+            allocate_vocab_mask_fn=lambda vs, bs, d: torch.zeros(
+                (bs, (vs + 31) // 32), dtype=torch.int32
+            ),
+            move_vocab_mask_fn=lambda vm, d: vm,
+            apply_vocab_mask_fn=lambda l, vm: None,
+        )
+        obj.maybe_init_reasoning(True)
+        mask = obj.allocate_vocab_mask(64, 1, "cpu")
+
+        obj.fill_vocab_mask(mask, 0)
+
+        inner_grammar.fill_vocab_mask.assert_not_called()
+        # Excluded tokens (3, 5) should be blocked
+        allowed = _allowed_token_ids(mask, [0, 1, 3, 5, 7, 8])
+        self.assertEqual(allowed, [0, 1, 7, 8])
+
+    def test_generation_phase_consults_inner_grammar(self):
+        inner_grammar = MagicMock()
+        obj = ReasonerGrammarObject(
+            grammar=inner_grammar,
+            think_end_id=7,
+            think_excluded_token_ids=[3, 5],
+            max_think_tokens=-1,
+            enable_token_filter=True,
+            token_filter_fn=set_token_filter_torch,
+            allocate_vocab_mask_fn=lambda vs, bs, d: torch.zeros(
+                (bs, (vs + 31) // 32), dtype=torch.int32
+            ),
+            move_vocab_mask_fn=lambda vm, d: vm,
+            apply_vocab_mask_fn=lambda l, vm: None,
+        )
+        obj.maybe_init_reasoning(True)
+        obj.accept_token(10)
+        obj.accept_token(7)  # think_end_id → GENERATION
+
+        mask = obj.allocate_vocab_mask(64, 1, "cpu")
+        obj.fill_vocab_mask(mask, 0)
+
+        inner_grammar.fill_vocab_mask.assert_called_once_with(mask, 0)
+
+    def test_non_strict_thinking_is_noop(self):
+        inner_grammar = MagicMock()
+        obj = ReasonerGrammarObject(
+            grammar=inner_grammar,
+            think_end_id=7,
+            think_excluded_token_ids=None,
+            max_think_tokens=-1,
+            enable_token_filter=False,
+            token_filter_fn=None,
+        )
+        obj.maybe_init_reasoning(True)
+        mask = torch.zeros((1, 2), dtype=torch.int32)
+
+        obj.fill_vocab_mask(mask, 0)
+
+        inner_grammar.fill_vocab_mask.assert_not_called()
+        # Mask should remain all zeros (no filtering)
+        self.assertTrue(torch.all(mask == 0))
+
 
 if __name__ == "__main__":
     unittest.main()

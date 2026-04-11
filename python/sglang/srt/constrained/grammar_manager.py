@@ -208,7 +208,14 @@ class GrammarManager:
                 continue
 
             assert isinstance(req.grammar, futures.Future) and req.grammar_key
-            req.grammar = req.grammar.result()
+            try:
+                req.grammar = req.grammar.result()
+            except Exception as e:
+                logger.error(
+                    f"Grammar compilation raised an exception: {e}, "
+                    f"grammar_key={req.grammar_key}"
+                )
+                req.grammar = InvalidGrammarObject(f"Grammar compilation failed: {e}")
             self.grammar_backend.set_cache(req.grammar_key, req.grammar.copy())
             self._apply_request_reasoning_budget(req)
             if isinstance(req.grammar, InvalidGrammarObject):

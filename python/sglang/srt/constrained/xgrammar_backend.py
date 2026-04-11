@@ -62,7 +62,7 @@ class XGrammarGrammar(BaseGrammarObject):
         vocab_size: int,
         ctx: CompiledGrammar,
         override_stop_tokens: Optional[Union[List[int], int]],
-        key_string: Optional[str] = None,  # TODO (sk): for debugging, remove later
+        key_string: Optional[str] = None,
         grammar_stats: Optional[GrammarStats] = GrammarStats(),
     ) -> None:
         super().__init__()
@@ -160,7 +160,14 @@ class XGrammarGrammar(BaseGrammarObject):
             self.matcher.rollback(len(old_output_ids) - k)
 
         for i in range(k, len(new_output_ids)):
-            assert self.matcher.accept_token(new_output_ids[i])
+            if not self.matcher.accept_token(new_output_ids[i]):
+                raise ValueError(
+                    f"Token not accepted during retokenization: {new_output_ids[i]} "
+                    f"at position {i}\n"
+                    f"Old output IDs: {old_output_ids}\n"
+                    f"New output IDs: {new_output_ids}\n"
+                    f"Key string: {self.key_string}"
+                )
 
     def __repr__(self):
         return f"XGrammarGrammar({self.key_string=}, {self.accepted_tokens=}, {self.current_token=})"

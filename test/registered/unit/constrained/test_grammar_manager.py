@@ -637,5 +637,105 @@ class TestGetReadyGrammarRequests(unittest.TestCase):
         self.assertEqual(len(mgr.grammar_queue), 0)
 
 
+class TestStrictReasoningPaths(unittest.TestCase):
+    """Test _strict_reasoning_format code paths in GrammarManager."""
+
+    def _make_mgr(self):
+        scheduler = _make_scheduler()
+        scheduler.server_args.skip_tokenizer_init = True
+        mgr = GrammarManager(scheduler)
+        mgr.grammar_backend = MagicMock(spec=BaseGrammarBackend)
+        mgr._strict_reasoning_format = True
+        return mgr
+
+    def test_strict_unconstrained_request_gets_strict_grammar(self):
+        """Request without json_schema/regex/ebnf should get strict-only grammar."""
+        mgr = self._make_mgr()
+        grammar_obj = MagicMock()
+        mgr.grammar_backend.init_strict_reasoning_grammar.return_value = grammar_obj
+
+        req = _make_req()  # No constraint
+        req.require_reasoning = True
+        result = mgr.process_req_with_grammar(req)
+
+        self.assertFalse(result)  # Not added to grammar queue
+        self.assertIs(req.grammar, grammar_obj)
+        mgr.grammar_backend.init_strict_reasoning_grammar.assert_called_once_with(True)
+
+    def test_strict_unconstrained_no_reasoning_flag(self):
+        """Unconstrained request with require_reasoning=False still gets strict grammar."""
+        mgr = self._make_mgr()
+        grammar_obj = MagicMock()
+        mgr.grammar_backend.init_strict_reasoning_grammar.return_value = grammar_obj
+
+        req = _make_req()
+        req.require_reasoning = False
+        mgr.process_req_with_grammar(req)
+
+        self.assertIs(req.grammar, grammar_obj)
+        mgr.grammar_backend.init_strict_reasoning_grammar.assert_called_once_with(False)
+
+    def test_strict_unconstrained_none_grammar_is_fine(self):
+        """If init_strict_reasoning_grammar returns None, req.grammar stays None."""
+        mgr = self._make_mgr()
+        mgr.grammar_backend.init_strict_reasoning_grammar.return_value = None
+
+        req = _make_req()
+        req.require_reasoning = True
+        mgr.process_req_with_grammar(req)
+
+        self.assertIsNone(req.grammar)
+
+    def test_strict_constrained_request_uses_normal_dispatch(self):
+        """Request with json_schema should go through normal dispatch, not strict path."""
+        mgr = self._make_mgr()
+        future = MagicMock(spec=Future)
+        mgr.grammar_backend.get_cached_or_future_value.return_value = (future, False)
+
+        req = _make_req(json_schema='{"type": "object"}')
+        req.require_reasoning = True
+        result = mgr.process_req_with_grammar(req)
+
+        self.assertTrue(result)  # Added to grammar queue
+        mgr.grammar_backend.init_strict_reasoning_grammar.assert_not_called()
+
+    def test_strict_not_set_skips_strict_path(self):
+        """When _strict_reasoning_format=False, unconstrained requests get no grammar."""
+        mgr = self._make_mgr()
+        mgr._strict_reasoning_format = False
+
+        req = _make_req()
+        req.require_reasoning = True
+        mgr.process_req_with_grammar(req)
+
+        self.assertIsNone(req.grammar)
+        mgr.grammar_backend.init_strict_reasoning_grammar.assert_not_called()
+
+    def test_future_exception_creates_invalid_grammar(self):
+        """Future.result() raising should create InvalidGrammarObject, not crash."""
+        mgr = self._make_mgr()
+        mgr.grammar_backend.get_cached_or_future_value.return_value = (
+            MagicMock(spec=Future),
+            False,
+        )
+
+        req = _make_req(json_schema='{"type": "object"}')
+        req.require_reasoning = True
+        req.grammar_key = ("json", '{"type": "object"}')
+        mgr.grammar_queue.append(req)
+
+        # Make the future raise an exception
+        req.grammar.done.return_value = True
+        req.grammar.result.side_effect = RuntimeError("compilation failed")
+
+        mgr.SGLANG_GRAMMAR_POLL_INTERVAL = 0.001
+        mgr.SGLANG_GRAMMAR_MAX_POLL_ITERATIONS = 10
+        result = mgr.get_ready_grammar_requests()
+
+        self.assertEqual(len(result), 1)
+        self.assertIsInstance(result[0].grammar, InvalidGrammarObject)
+        req.set_finish_with_abort.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

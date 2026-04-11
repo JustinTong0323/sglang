@@ -251,6 +251,27 @@ class OpenAIServingChat(OpenAIServingBase):
             if schema is None:
                 return "schema_ is required for json_schema response format request."
 
+        # Reject strict reasoning parser + explicitly disabled thinking
+        if self.reasoning_parser and "strict" in self.reasoning_parser:
+            config = self.template_manager.reasoning_config
+            if config and config.toggle_param and request.chat_template_kwargs:
+                toggle_value = request.chat_template_kwargs.get(config.toggle_param)
+                if toggle_value is False:
+                    return (
+                        f"Strict reasoning parser '{self.reasoning_parser}' requires "
+                        f"reasoning to be enabled, but '{config.toggle_param}' is "
+                        f"explicitly set to False in the request. Either use a "
+                        f"non-strict reasoning parser or enable reasoning."
+                    )
+            if (
+                hasattr(request, "reasoning_effort")
+                and request.reasoning_effort == "none"
+            ):
+                return (
+                    f"Strict reasoning parser '{self.reasoning_parser}' requires "
+                    f"reasoning to be enabled, but reasoning_effort is set to 'none'."
+                )
+
         return None
 
     def _convert_to_internal_request(
@@ -1181,8 +1202,10 @@ class OpenAIServingChat(OpenAIServingBase):
                         )
                     )
                 return ToolCallProcessingResult(tool_calls, "", finish_reason)
-            except json.JSONDecodeError as e:
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
                 logger.error(f"Tool call parsing error: {e}")
+                finish_reason["type"] = "stop"
+                finish_reason["matched"] = None
                 return ToolCallProcessingResult(None, text, finish_reason)
 
         # Use parser since output is not constrained by JSON schema
@@ -1210,7 +1233,8 @@ class OpenAIServingChat(OpenAIServingBase):
                 return ToolCallProcessingResult(tool_calls, text, finish_reason)
             except Exception as e:
                 logger.error(f"Tool call parsing error: {e}")
-                # Return error but don't fail the whole request
+                finish_reason["type"] = "stop"
+                finish_reason["matched"] = None
                 return ToolCallProcessingResult(None, text, finish_reason)
 
         return ToolCallProcessingResult(None, text, finish_reason)
