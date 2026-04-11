@@ -316,7 +316,7 @@ class TestCreateGrammarBackend(unittest.TestCase):
         mock_inner = MagicMock(spec=BaseGrammarBackend)
         register_grammar_backend("inner_r", lambda *a: mock_inner)
 
-        args = self._make_server_args("inner_r", reasoning_parser="deepseek")
+        args = self._make_server_args("inner_r", reasoning_parser="deepseek-r1")
         tokenizer = MagicMock()
 
         result = create_grammar_backend(args, tokenizer, 32000)
@@ -383,7 +383,7 @@ class TestCreateGrammarBackend(unittest.TestCase):
 
         mock_backend = MagicMock(spec=BaseGrammarBackend)
         mock_outlines_cls.return_value = mock_backend
-        args = self._make_server_args("outlines", reasoning_parser="deepseek")
+        args = self._make_server_args("outlines", reasoning_parser="deepseek-r1")
         tokenizer = MagicMock()
 
         result = create_grammar_backend(args, tokenizer, 32000, think_end_id=42)
@@ -396,7 +396,7 @@ class TestCreateGrammarBackend(unittest.TestCase):
         """Without think_end_id passed in, no reasoner wrapping."""
         mock_backend = MagicMock(spec=BaseGrammarBackend)
         mock_outlines_cls.return_value = mock_backend
-        args = self._make_server_args("outlines", reasoning_parser="deepseek")
+        args = self._make_server_args("outlines", reasoning_parser="deepseek-r1")
         tokenizer = MagicMock(spec=[])  # No think_end_id attribute
 
         result = create_grammar_backend(args, tokenizer, 32000, think_end_id=None)
