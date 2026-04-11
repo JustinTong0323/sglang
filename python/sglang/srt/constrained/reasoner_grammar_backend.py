@@ -216,25 +216,13 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
         grammar_backend: BaseGrammarBackend,
         reasoning_parser: ReasoningParser,
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
+        enable_strict_thinking: bool = False,
     ):
         super().__init__()
         self.grammar_backend = grammar_backend
-        think_start_ids = tokenizer.encode(
-            reasoning_parser.detector.think_start_token, add_special_tokens=False
-        )
         think_end_ids = tokenizer.encode(
             reasoning_parser.detector.think_end_token, add_special_tokens=False
         )
-        if not think_start_ids:
-            raise ValueError(
-                f"think_start_token '{reasoning_parser.detector.think_start_token}' "
-                f"could not be encoded by the tokenizer."
-            )
-        if len(think_start_ids) != 1:
-            raise ValueError(
-                f"think_start_token '{reasoning_parser.detector.think_start_token}' "
-                "must encode to exactly one token for constrained reasoning."
-            )
         if not think_end_ids:
             raise ValueError(
                 f"think_end_token '{reasoning_parser.detector.think_end_token}' "
@@ -246,13 +234,13 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
                 "must encode to exactly one token for constrained reasoning."
             )
         self.think_end_id = think_end_ids[0]
-        self.strict_reasoning_format = reasoning_parser.detector.strict_reasoning_format
+        self.enable_strict_thinking = enable_strict_thinking
         self.think_excluded_token_ids = self._get_think_excluded_token_ids(
             reasoning_parser, tokenizer
         )
         self.max_think_tokens = envs.SGLANG_MAX_THINK_TOKENS.get()
         if (
-            self.strict_reasoning_format
+            self.enable_strict_thinking
             and self.think_excluded_token_ids is not None
             and not self.grammar_backend.is_support_token_filter
         ):
@@ -262,7 +250,7 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
                 "filtering (e.g., xgrammar) or disable strict reasoning mode."
             )
         self.enable_token_filter = (
-            self.strict_reasoning_format
+            self.enable_strict_thinking
             and self.think_excluded_token_ids is not None
             and self.grammar_backend.is_support_token_filter
         )
@@ -276,7 +264,7 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
     ) -> Optional[List[int]]:
         excluded_ids = []
-        if (not self.strict_reasoning_format) or (
+        if (not self.enable_strict_thinking) or (
             not reasoning_parser.detector.think_excluded_tokens
         ):
             return None
@@ -312,7 +300,7 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
         self, reasoning: bool
     ) -> Optional[BaseGrammarObject]:
         """Create a grammar object for strict token filtering only (no inner grammar)."""
-        if not self.strict_reasoning_format:
+        if not self.enable_strict_thinking:
             return None
         return self._make_grammar_object(None, reasoning)
 

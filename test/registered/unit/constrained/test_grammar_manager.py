@@ -281,7 +281,7 @@ class TestProcessReqWithGrammar(unittest.TestCase):
 
     def test_strict_reasoning_grammar_applies_request_thinking_budget(self):
         mgr = self._make_mgr()
-        mgr._strict_reasoning_format = True
+        mgr._enable_strict_thinking = True
         grammar_obj = SimpleNamespace(max_think_tokens=99)
         mgr.grammar_backend.init_strict_reasoning_grammar.return_value = grammar_obj
 
@@ -640,14 +640,14 @@ class TestGetReadyGrammarRequests(unittest.TestCase):
 
 
 class TestStrictReasoningPaths(unittest.TestCase):
-    """Test _strict_reasoning_format code paths in GrammarManager."""
+    """Test _enable_strict_thinking code paths in GrammarManager."""
 
     def _make_mgr(self):
         scheduler = _make_scheduler()
         scheduler.server_args.skip_tokenizer_init = True
         mgr = GrammarManager(scheduler)
         mgr.grammar_backend = MagicMock(spec=BaseGrammarBackend)
-        mgr._strict_reasoning_format = True
+        mgr._enable_strict_thinking = True
         return mgr
 
     def test_strict_unconstrained_request_gets_strict_grammar(self):
@@ -702,9 +702,9 @@ class TestStrictReasoningPaths(unittest.TestCase):
         mgr.grammar_backend.init_strict_reasoning_grammar.assert_not_called()
 
     def test_strict_not_set_skips_strict_path(self):
-        """When _strict_reasoning_format=False, unconstrained requests get no grammar."""
+        """When _enable_strict_thinking=False, unconstrained requests get no grammar."""
         mgr = self._make_mgr()
-        mgr._strict_reasoning_format = False
+        mgr._enable_strict_thinking = False
 
         req = _make_req()
         req.require_reasoning = True

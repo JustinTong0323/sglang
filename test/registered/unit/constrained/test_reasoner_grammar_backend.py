@@ -123,11 +123,10 @@ class TestReasonerGrammarBackend(unittest.TestCase):
         else:
             os.environ["SGLANG_MAX_THINK_TOKENS"] = self._prev_budget
 
-    def _make_parser(self, strict=True):
+    def _make_parser(self):
         detector = SimpleNamespace(
             think_start_token="<think>",
             think_end_token="</think>",
-            strict_reasoning_format=strict,
             think_excluded_tokens=["<tool_call>", "</tool_call>"],
         )
         return SimpleNamespace(detector=detector)
@@ -146,7 +145,10 @@ class TestReasonerGrammarBackend(unittest.TestCase):
         os.environ["SGLANG_MAX_THINK_TOKENS"] = "2"
         backend = _DummyGrammarBackend(support_token_filter=True)
         reasoner = ReasonerGrammarBackend(
-            backend, self._make_parser(strict=True), self._make_tokenizer()
+            backend,
+            self._make_parser(),
+            self._make_tokenizer(),
+            enable_strict_thinking=True,
         )
 
         obj = reasoner.init_strict_reasoning_grammar(reasoning=True)
@@ -156,10 +158,13 @@ class TestReasonerGrammarBackend(unittest.TestCase):
         self.assertEqual(obj.max_think_tokens, 2)
         self.assertEqual(obj.think_excluded_token_ids, [3, 4])
 
-    def test_init_strict_reasoning_grammar_none_for_non_strict_parser(self):
+    def test_init_strict_reasoning_grammar_none_when_strict_disabled(self):
         backend = _DummyGrammarBackend(support_token_filter=True)
         reasoner = ReasonerGrammarBackend(
-            backend, self._make_parser(strict=False), self._make_tokenizer()
+            backend,
+            self._make_parser(),
+            self._make_tokenizer(),
+            enable_strict_thinking=False,
         )
 
         self.assertIsNone(reasoner.init_strict_reasoning_grammar(reasoning=True))
@@ -170,7 +175,10 @@ class TestReasonerGrammarBackend(unittest.TestCase):
         inner_grammar = MagicMock()
         backend._dispatch_result = inner_grammar
         reasoner = ReasonerGrammarBackend(
-            backend, self._make_parser(strict=True), self._make_tokenizer()
+            backend,
+            self._make_parser(),
+            self._make_tokenizer(),
+            enable_strict_thinking=True,
         )
 
         wrapped = reasoner._init_value_dispatch(("json", "{}"), reasoning=True)
@@ -181,15 +189,16 @@ class TestReasonerGrammarBackend(unittest.TestCase):
         wrapped.accept_token(42)
         inner_grammar.accept_token.assert_called_once_with(42)
 
-    def test_rejects_multi_token_think_start_marker(self):
+    def test_accepts_multi_token_think_start_marker(self):
+        """think_start_token can be multi-token (e.g., GPT-OSS) since it's not used."""
         backend = _DummyGrammarBackend(support_token_filter=True)
-
-        with self.assertRaisesRegex(ValueError, "must encode to exactly one token"):
-            ReasonerGrammarBackend(
-                backend,
-                self._make_parser(strict=True),
-                self._make_tokenizer(start_ids=[1, 2]),
-            )
+        reasoner = ReasonerGrammarBackend(
+            backend,
+            self._make_parser(),
+            self._make_tokenizer(start_ids=[1, 2]),
+            enable_strict_thinking=True,
+        )
+        self.assertIsNotNone(reasoner)
 
     def test_rejects_multi_token_think_end_marker(self):
         backend = _DummyGrammarBackend(support_token_filter=True)
@@ -197,13 +206,14 @@ class TestReasonerGrammarBackend(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must encode to exactly one token"):
             ReasonerGrammarBackend(
                 backend,
-                self._make_parser(strict=True),
+                self._make_parser(),
                 self._make_tokenizer(end_ids=[2, 3]),
+                enable_strict_thinking=True,
             )
 
     def test_rejects_unencodable_excluded_token(self):
         backend = _DummyGrammarBackend(support_token_filter=True)
-        parser = self._make_parser(strict=True)
+        parser = self._make_parser()
         parser.detector.think_excluded_tokens = ["<unknown>"]
         tokenizer = _DummyTokenizer(
             {
@@ -213,14 +223,22 @@ class TestReasonerGrammarBackend(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "could not be encoded"):
-            ReasonerGrammarBackend(backend, parser, tokenizer)
+            ReasonerGrammarBackend(
+                backend,
+                parser,
+                tokenizer,
+                enable_strict_thinking=True,
+            )
 
     def test_strict_mode_fails_when_backend_lacks_token_filter(self):
         backend = _DummyGrammarBackend(support_token_filter=False)
 
         with self.assertRaisesRegex(ValueError, "does not support token filtering"):
             ReasonerGrammarBackend(
-                backend, self._make_parser(strict=True), self._make_tokenizer()
+                backend,
+                self._make_parser(),
+                self._make_tokenizer(),
+                enable_strict_thinking=True,
             )
 
 

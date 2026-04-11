@@ -269,10 +269,13 @@ class TestCreateGrammarBackend(unittest.TestCase):
         GRAMMAR_BACKEND_REGISTRY.clear()
         GRAMMAR_BACKEND_REGISTRY.update(self._saved)
 
-    def _make_server_args(self, backend="none", reasoning_parser=None):
+    def _make_server_args(
+        self, backend="none", reasoning_parser=None, enable_strict_thinking=False
+    ):
         args = MagicMock()
         args.grammar_backend = backend
         args.reasoning_parser = reasoning_parser
+        args.enable_strict_thinking = enable_strict_thinking
         args.constrained_json_whitespace_pattern = None
         args.constrained_json_disable_any_whitespace = False
         return args
@@ -281,6 +284,11 @@ class TestCreateGrammarBackend(unittest.TestCase):
         args = self._make_server_args("none")
         result = create_grammar_backend(args, None, 32000)
         self.assertIsNone(result)
+
+    def test_none_backend_with_strict_thinking_raises(self):
+        args = self._make_server_args("none", enable_strict_thinking=True)
+        with self.assertRaisesRegex(ValueError, "enable-strict-thinking"):
+            create_grammar_backend(args, None, 32000)
 
     def test_invalid_backend_raises(self):
         args = self._make_server_args("nonexistent_backend")

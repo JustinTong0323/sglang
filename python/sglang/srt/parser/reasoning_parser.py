@@ -24,7 +24,6 @@ class BaseReasoningFormatDetector:
         think_start_token: str,
         think_end_token: str,
         think_excluded_tokens: Optional[List[str]] = None,
-        strict_reasoning_format: bool = False,
         force_reasoning: bool = False,
         stream_reasoning: bool = True,
         tool_start_token: Optional[str] = None,
@@ -36,7 +35,6 @@ class BaseReasoningFormatDetector:
         self.think_start_token = think_start_token
         self.think_end_token = think_end_token
         self.think_excluded_tokens = think_excluded_tokens
-        self.strict_reasoning_format = strict_reasoning_format
         self.tool_start_token = tool_start_token
         self.force_reasoning = force_reasoning
         self._in_reasoning = force_reasoning
@@ -223,153 +221,6 @@ class DeepSeekR1Detector(BaseReasoningFormatDetector):
         # https://github.com/sgl-project/sglang/pull/3202#discussion_r1950153599
 
 
-class KimiK2ThinkingDetector(BaseReasoningFormatDetector):
-    """
-    Detector for Kimi-K2-Thinking model.
-    Assumes reasoning format:
-      (<think>)*(.*)</think>
-    Returns all the text before the </think> tag as `reasoning_text`
-    and the rest of the text as `normal_text`.
-
-    Supported models:
-      - Kimi-K2-Thinking: Generates thinking content with <think> start tag
-
-    Format patterns:
-      - Kimi-K2-Thinking: "<think>I need to think about this...</think>The answer is 42."
-
-    Args:
-        stream_reasoning (bool): If False, accumulates reasoning content until the end tag.
-            If True, streams reasoning content as it arrives.
-    """
-
-    def __init__(
-        self,
-        stream_reasoning: bool = True,
-        force_reasoning: bool = True,
-        continue_final_message: bool = False,
-        previous_content: str = "",
-        **kwargs,
-    ):
-        # Kimi-K2-Thinking is assumed to be reasoning until `</think>` token
-        think_excluded_tokens = [
-            "<think>",
-            "<|tool_calls_section_begin|>",
-            "<|tool_call_begin|>",
-            "<|tool_call_argument_begin|>",
-            "<|tool_call_section_end|>",
-            "<|tool_call_end|>",
-            "[EOS]",
-            "<|im_end|>",
-            "<|end_header_id|>",
-            "[EOT]",
-        ]
-        super().__init__(
-            "<think>",
-            "</think>",
-            think_excluded_tokens=think_excluded_tokens,
-            strict_reasoning_format=True,
-            force_reasoning=force_reasoning,
-            stream_reasoning=stream_reasoning,
-            tool_start_token="<|tool_calls_section_begin|>",
-            continue_final_message=continue_final_message,
-            previous_content=previous_content,
-            reasoning_default="thinking",
-        )
-
-
-class GLM45StrictDetector(BaseReasoningFormatDetector):
-    """
-    Strict Detector for glm4.5 series models (e.g., zai-org/GLM-4.5, zai-org/GLM-4.6).
-    Assumes reasoning format:
-      (<think>)*(.*)</think>
-
-    glm4.5 models supports switching between thinking mode and normal
-    mode using `enable_thinking` parameter in the chat_template_kwargs parameter.
-      - enable_thinking=True: "<think>reasoning content</think>The answer is 42."
-      - enable_thinking=False: "The answer is 42." (no thinking tokens)
-
-    Args:
-        stream_reasoning (bool): If False, accumulates reasoning content until the end tag.
-            If True, streams reasoning content as it arrives.
-    """
-
-    def __init__(
-        self,
-        stream_reasoning: bool = True,
-        force_reasoning: bool = False,
-        continue_final_message: bool = False,
-        previous_content: str = "",
-        **kwargs,
-    ):
-        # The "<think>" token can present 0 or any times
-        think_excluded_tokens = [
-            "<tool_call>",
-            "</tool_call>",
-            "<eop>",
-            "<|user|>",
-            "<|endoftext|>",
-        ]
-        super().__init__(
-            "<think>",
-            "</think>",
-            think_excluded_tokens=think_excluded_tokens,
-            strict_reasoning_format=True,
-            force_reasoning=force_reasoning,
-            stream_reasoning=stream_reasoning,
-            tool_start_token="<tool_call>",
-            continue_final_message=continue_final_message,
-            previous_content=previous_content,
-            thinks_internally=True,
-            reasoning_default="enable_thinking",
-        )
-
-
-class Qwen3StrictDetector(BaseReasoningFormatDetector):
-    """
-    Detector for Qwen3 models (e.g., Qwen/Qwen3-235B-A22B).
-    Assumes reasoning format:
-      (<think>)*(.*)</think>
-
-    Qwen3 models released before 07/2025 supports switching between thinking mode and normal
-    mode using `enable_thinking` parameter in the request parameter.
-      - enable_thinking=True: "<think>reasoning content</think>The answer is 42."
-      - enable_thinking=False: "The answer is 42." (no thinking tokens)
-
-    Args:
-        stream_reasoning (bool): If False, accumulates reasoning content until the end tag.
-            If True, streams reasoning content as it arrives.
-    """
-
-    def __init__(
-        self,
-        stream_reasoning: bool = True,
-        force_reasoning: bool = False,
-        continue_final_message: bool = False,
-        previous_content: str = "",
-        **kwargs,
-    ):
-        # The "<think>" token can present 0 or any times
-        think_excluded_tokens = [
-            "<tool_call>",
-            "</tool_call>",
-            "<|im_end|>",
-            "<|endoftext|>",
-        ]
-        super().__init__(
-            "<think>",
-            "</think>",
-            think_excluded_tokens=think_excluded_tokens,
-            strict_reasoning_format=True,
-            force_reasoning=force_reasoning,
-            stream_reasoning=stream_reasoning,
-            tool_start_token="<tool_call>",
-            continue_final_message=continue_final_message,
-            previous_content=previous_content,
-            thinks_internally=True,
-            reasoning_default="enable_thinking",
-        )
-
-
 class Qwen3Detector(BaseReasoningFormatDetector):
     """
     Detector for Qwen3 models (e.g., Qwen/Qwen3-235B-A22B).
@@ -393,9 +244,16 @@ class Qwen3Detector(BaseReasoningFormatDetector):
         continue_final_message: bool = False,
         previous_content: str = "",
     ):
+        think_excluded_tokens = [
+            "<tool_call>",
+            "</tool_call>",
+            "<|im_end|>",
+            "<|endoftext|>",
+        ]
         super().__init__(
             "<think>",
             "</think>",
+            think_excluded_tokens=think_excluded_tokens,
             force_reasoning=force_reasoning,
             stream_reasoning=stream_reasoning,
             continue_final_message=continue_final_message,
@@ -448,9 +306,22 @@ class KimiK2Detector(BaseReasoningFormatDetector):
         continue_final_message: bool = False,
         previous_content: str = "",
     ):
+        think_excluded_tokens = [
+            "<think>",
+            "<|tool_calls_section_begin|>",
+            "<|tool_call_begin|>",
+            "<|tool_call_argument_begin|>",
+            "<|tool_call_section_end|>",
+            "<|tool_call_end|>",
+            "[EOS]",
+            "<|im_end|>",
+            "<|end_header_id|>",
+            "[EOT]",
+        ]
         super().__init__(
             "<think>",
             "</think>",
+            think_excluded_tokens=think_excluded_tokens,
             force_reasoning=force_reasoning,
             stream_reasoning=stream_reasoning,
             tool_start_token="<|tool_calls_section_begin|>",
@@ -474,9 +345,17 @@ class Glm45Detector(BaseReasoningFormatDetector):
     """
 
     def __init__(self, stream_reasoning: bool = True, force_reasoning: bool = False):
+        think_excluded_tokens = [
+            "<tool_call>",
+            "</tool_call>",
+            "<eop>",
+            "<|user|>",
+            "<|endoftext|>",
+        ]
         super().__init__(
             "<think>",
             "</think>",
+            think_excluded_tokens=think_excluded_tokens,
             force_reasoning=force_reasoning,
             stream_reasoning=stream_reasoning,
             tool_start_token="<tool_call>",
@@ -682,15 +561,12 @@ class ReasoningParser:
         "deepseek-r1": DeepSeekR1Detector,
         "deepseek-v3": Qwen3Detector,
         "glm45": Glm45Detector,
-        "glm45-strict": GLM45StrictDetector,
         "gpt-oss": GptOssDetector,
         "kimi": KimiDetector,
         "kimi_k2": KimiK2Detector,
-        "kimi_k2-strict": KimiK2ThinkingDetector,
         "mimo": Qwen3Detector,
         "qwen3": Qwen3Detector,
         "qwen3-thinking": Qwen3Detector,
-        "qwen3-thinking-strict": Qwen3StrictDetector,
         "minimax": Qwen3Detector,
         "minimax-append-think": MiniMaxAppendThinkDetector,
         "step3": DeepSeekR1Detector,
@@ -718,7 +594,6 @@ class ReasoningParser:
         # Special cases where we override force_reasoning
         if model_type.lower() in {
             "qwen3-thinking",
-            "qwen3-thinking-strict",
             "gpt-oss",
             "minimax",
         }:

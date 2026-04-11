@@ -21,10 +21,14 @@ and code completion templates, eliminating global state and improving modularity
 import json
 import logging
 import os
-import re
-from dataclasses import dataclass
-from typing import Callable, Dict, Optional
+from typing import Dict, Optional
 
+from sglang.srt.managers.template_detection import (
+    ReasoningToggleConfig,
+    detect_reasoning_parser,
+    detect_reasoning_pattern,
+    detect_tool_call_parser,
+)
 from sglang.srt.managers.tokenizer_manager import TokenizerManager
 from sglang.srt.parser.code_completion_parser import (
     CompletionTemplate,
@@ -45,214 +49,6 @@ from sglang.srt.parser.jinja_template_utils import detect_jinja_template_content
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class TemplateDetectionContext:
-    template: str
-    reasoning_config: Optional["ReasoningToggleConfig"]
-    force_reasoning: bool
-    vocab: set[str]
-
-    def has_text(self, needle: str) -> bool:
-        return needle in self.template
-
-    def has_vocab(self, token: str) -> bool:
-        return token in self.vocab
-
-    def has_pattern(self, pattern: str, flags: int = 0) -> bool:
-        return re.search(pattern, self.template, flags) is not None
-
-
-@dataclass(frozen=True)
-class DetectionRule:
-    name: str
-    value: object
-    predicate: Callable[[TemplateDetectionContext], bool]
-
-
-@dataclass(frozen=True)
-class ReasoningToggleConfig:
-    toggle_param: Optional[str] = None
-    default_enabled: Optional[bool] = None
-    special_case: Optional[str] = None
-
-    @property
-    def always_on(self) -> bool:
-        return self.special_case == "always"
-
-
-REASONING_MODE_RULES = (
-    DetectionRule(
-        name="gpt_oss_channel_markers",
-        value=ReasoningToggleConfig(special_case="always"),
-        predicate=lambda ctx: ctx.has_text("<|channel|>"),
-    ),
-    DetectionRule(
-        name="force_reasoning_pattern",
-        value=ReasoningToggleConfig(special_case="always"),
-        predicate=lambda ctx: ctx.has_pattern(r"<\|im_start\|>assistant\\n<think>\\n")
-        and not ctx.has_text("enable_thinking")
-        and not ctx.has_text("thinking"),
-    ),
-    DetectionRule(
-        name="mistral_reasoning_effort",
-        value=ReasoningToggleConfig(special_case="mistral"),
-        predicate=lambda ctx: ctx.has_text("reasoning_effort")
-        and ctx.has_text("[THINK]"),
-    ),
-    DetectionRule(
-        name="explicit_enable_thinking_default_false",
-        value=ReasoningToggleConfig(
-            toggle_param="enable_thinking", default_enabled=False
-        ),
-        predicate=lambda ctx: ctx.has_pattern(
-            r"{%\s*if\s+not\s+enable_thinking\s+is\s+defined\s*%}.*?"
-            r"{%\s*set\s+enable_thinking\s*=\s*(?:false|False)\s*%}",
-            re.DOTALL,
-        ),
-    ),
-    DetectionRule(
-        name="enable_thinking_default_true",
-        value=ReasoningToggleConfig(
-            toggle_param="enable_thinking", default_enabled=True
-        ),
-        predicate=lambda ctx: ctx.has_pattern(
-            r"{%\s*if\s+not\s+enable_thinking\s+is\s+defined\s*%}.*?"
-            r"{%\s*set\s+enable_thinking\s*=\s*(?:true|True)\s*%}",
-            re.DOTALL,
-        )
-        or ctx.has_pattern(
-            r"set\s+enable_thinking\s*=\s*enable_thinking\s+if\s+enable_thinking\s+is\s+defined\s+else\s+(?:true|True)"
-        )
-        or ctx.has_pattern(
-            r"enable_thinking\s+is\s+defined\s+and\s+(?:enable_thinking\s+is\s+false|not\s+enable_thinking)"
-        )
-        or ctx.has_pattern(
-            r"enable_thinking\s+is\s+not\s+defined\s+or\s+enable_thinking"
-        )
-        or ctx.has_pattern(r"namespace\([^)]*enable_thinking\s*=\s*true"),
-    ),
-    DetectionRule(
-        name="explicit_thinking_default_false",
-        value=ReasoningToggleConfig(toggle_param="thinking", default_enabled=False),
-        predicate=lambda ctx: ctx.has_pattern(
-            r"{%\s*if\s+not\s+thinking\s+is\s+defined\s*%}.*?"
-            r"{%\s*set\s+thinking\s*=\s*(?:false|False)\s*%}",
-            re.DOTALL,
-        ),
-    ),
-    DetectionRule(
-        name="thinking_default_true",
-        value=ReasoningToggleConfig(toggle_param="thinking", default_enabled=True),
-        predicate=lambda ctx: ctx.has_pattern(
-            r"{%\s*if\s+not\s+thinking\s+is\s+defined\s*%}.*?"
-            r"{%\s*set\s+thinking\s*=\s*(?:true|True)\s*%}",
-            re.DOTALL,
-        )
-        or ctx.has_pattern(
-            r"set\s+thinking\s*=\s*thinking\s+if\s+thinking\s+is\s+defined\s+else\s+(?:true|True)"
-        )
-        or ctx.has_pattern(
-            r"thinking\s+is\s+defined\s+and\s+(?:thinking\s+is\s+false|not\s+thinking)"
-        )
-        or ctx.has_pattern(r"thinking\s+is\s+not\s+defined\s+or\s+thinking")
-        or ctx.has_pattern(r"namespace\([^)]*thinking\s*=\s*true"),
-    ),
-)
-
-
-REASONING_PARSER_RULES = (
-    DetectionRule(
-        name="gemma4",
-        value="gemma4",
-        predicate=lambda ctx: ctx.has_text("<|channel>"),
-    ),
-    DetectionRule(
-        name="kimi",
-        value="kimi",
-        predicate=lambda ctx: ctx.has_text("\u25c1think\u25b7")
-        or ctx.has_text("◁think▷"),
-    ),
-    DetectionRule(
-        name="interns1",
-        value="interns1",
-        predicate=lambda ctx: ctx.has_text("default_thinking_sys")
-        and ctx.reasoning_config
-        == ReasoningToggleConfig(toggle_param="enable_thinking", default_enabled=True),
-    ),
-    DetectionRule(
-        name="mistral",
-        value="mistral",
-        predicate=lambda ctx: (
-            ctx.reasoning_config is not None
-            and ctx.reasoning_config.special_case == "mistral"
-        ),
-    ),
-    DetectionRule(
-        name="gpt_oss",
-        value="gpt-oss",
-        predicate=lambda ctx: ctx.has_text("<|channel|>"),
-    ),
-    DetectionRule(
-        name="kimi_k2",
-        value="kimi_k2",
-        predicate=lambda ctx: ctx.has_vocab("<|tool_calls_section_begin|>"),
-    ),
-    DetectionRule(
-        name="nemotron_3",
-        value="nemotron_3",
-        predicate=lambda ctx: ctx.has_text("truncate_history_thinking")
-        and ctx.reasoning_config
-        == ReasoningToggleConfig(toggle_param="enable_thinking", default_enabled=True),
-    ),
-    DetectionRule(
-        name="glm45",
-        value="glm45",
-        predicate=lambda ctx: (
-            ctx.has_text("[gMASK]<sop>")
-            or ctx.has_pattern(r"(?<!<)/nothink")
-            or ctx.has_pattern(r"(?<!<)/think")
-        )
-        and ctx.has_vocab("<tool_call>")
-        and ctx.reasoning_config
-        == ReasoningToggleConfig(toggle_param="enable_thinking", default_enabled=True)
-        and (ctx.has_vocab("<|user|>") or ctx.has_vocab("<|endoftext|>")),
-    ),
-    DetectionRule(
-        name="mimo",
-        value="mimo",
-        predicate=lambda ctx: ctx.reasoning_config
-        == ReasoningToggleConfig(toggle_param="enable_thinking", default_enabled=False),
-    ),
-    DetectionRule(
-        name="minimax",
-        value="minimax",
-        predicate=lambda ctx: ctx.has_text("<minimax:tool_call>"),
-    ),
-    DetectionRule(
-        name="qwen3",
-        value="qwen3",
-        predicate=lambda ctx: ctx.reasoning_config
-        == ReasoningToggleConfig(toggle_param="enable_thinking", default_enabled=True),
-    ),
-    DetectionRule(
-        name="deepseek_v3",
-        value="deepseek-v3",
-        predicate=lambda ctx: ctx.reasoning_config
-        == ReasoningToggleConfig(toggle_param="thinking", default_enabled=False),
-    ),
-    DetectionRule(
-        name="deepseek_r1_force",
-        value="deepseek-r1",
-        predicate=lambda ctx: ctx.force_reasoning,
-    ),
-    DetectionRule(
-        name="deepseek_r1_think_tags",
-        value="deepseek-r1",
-        predicate=lambda ctx: ctx.has_text("<think>") or ctx.has_text("</think>"),
-    ),
-)
-
-
 class TemplateManager:
     """
     Centralized manager for chat and completion templates.
@@ -269,6 +65,7 @@ class TemplateManager:
         self._force_reasoning: bool = False
         self._reasoning_config: Optional[ReasoningToggleConfig] = None
         self._suggested_reasoning_parser: Optional[str] = None
+        self._suggested_tool_call_parser: Optional[str] = None
 
     @property
     def chat_template_name(self) -> Optional[str]:
@@ -305,99 +102,25 @@ class TemplateManager:
         """Get the auto-detected reasoning parser name, or None."""
         return self._suggested_reasoning_parser
 
-    def resolve_auto_reasoning_parser(self, server_args) -> None:
-        """Resolve --reasoning-parser=auto using a lightweight tokenizer load."""
-        if server_args.reasoning_parser != "auto":
-            return
-        from transformers import AutoTokenizer
+    @property
+    def suggested_tool_call_parser(self) -> Optional[str]:
+        """Get the auto-detected tool-call parser name, or None."""
+        return self._suggested_tool_call_parser
 
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(
-                server_args.model_path, trust_remote_code=True
-            )
-            template = getattr(tokenizer, "chat_template", None)
-            if template:
-                self._force_reasoning, self._reasoning_config = (
-                    self._detect_reasoning_pattern(template)
-                )
-                self._suggested_reasoning_parser = self._detect_reasoning_parser(
-                    template, tokenizer
-                )
-        except Exception as e:
-            logger.warning(f"Failed to load tokenizer for auto-detection: {e}")
-
-        if self._suggested_reasoning_parser:
-            server_args.reasoning_parser = self._suggested_reasoning_parser
-            logger.info(
-                f"Auto-detected --reasoning-parser as '{server_args.reasoning_parser}' "
-                f"from chat template"
-            )
-        else:
-            logger.warning(
-                "--reasoning-parser=auto specified but could not detect reasoning "
-                "format from chat template. Disabling reasoning parser."
-            )
-            server_args.reasoning_parser = None
-
-    def _detect_reasoning_pattern(
-        self, template: str
-    ) -> tuple[bool, Optional[ReasoningToggleConfig]]:
-        """
-        Detect if the chat template contains reasoning/thinking patterns.
-        """
-        if template is None:
-            return False, None
-
-        ctx = TemplateDetectionContext(
-            template=template,
-            reasoning_config=None,
-            force_reasoning=False,
-            vocab=set(),
+    def _run_template_detection(self, template, tokenizer) -> None:
+        """Run reasoning pattern and parser detection on a template."""
+        self._force_reasoning, self._reasoning_config = detect_reasoning_pattern(
+            template
         )
-        for rule in REASONING_MODE_RULES:
-            if rule.predicate(ctx):
-                logger.info(
-                    "Detected reasoning config '%s' from template rule '%s'.",
-                    rule.value,
-                    rule.name,
-                )
-                return rule.value.always_on, rule.value
-
-        return False, None
-
-    def _detect_reasoning_parser(
-        self, template: Optional[str], tokenizer
-    ) -> Optional[str]:
-        """
-        Auto-detect which reasoning parser to use from the chat template and tokenizer.
-
-        Uses template markers, Jinja variables, and tokenizer vocab to identify the
-        model family and return the appropriate parser name.
-        """
-        if template is None:
-            return None
-
-        vocab = set()
-        if tokenizer is not None:
-            try:
-                vocab = set(tokenizer.get_vocab().keys())
-            except Exception:
-                pass
-        ctx = TemplateDetectionContext(
-            template=template,
+        self._suggested_reasoning_parser = detect_reasoning_parser(
+            template, tokenizer, self._reasoning_config, self._force_reasoning
+        )
+        self._suggested_tool_call_parser = detect_tool_call_parser(
+            template,
+            tokenizer,
             reasoning_config=self._reasoning_config,
             force_reasoning=self._force_reasoning,
-            vocab=vocab,
         )
-        for rule in REASONING_PARSER_RULES:
-            if rule.predicate(ctx):
-                logger.info(
-                    "Detected reasoning parser '%s' from template rule '%s'.",
-                    rule.value,
-                    rule.name,
-                )
-                return rule.value
-        return None
 
     def load_chat_template(
         self,
@@ -443,15 +166,14 @@ class TemplateManager:
         # Detect reasoning pattern and suggest parser from chat template
         if tokenizer_manager.tokenizer:
             template = tokenizer_manager.tokenizer.chat_template
-            self._force_reasoning, self._reasoning_config = (
-                self._detect_reasoning_pattern(template)
-            )
-            self._suggested_reasoning_parser = self._detect_reasoning_parser(
-                template, tokenizer_manager.tokenizer
-            )
+            self._run_template_detection(template, tokenizer_manager.tokenizer)
             if self._suggested_reasoning_parser:
                 logger.info(
                     f"Auto-detected reasoning parser: {self._suggested_reasoning_parser}"
+                )
+            if self._suggested_tool_call_parser:
+                logger.info(
+                    f"Auto-detected tool-call parser: {self._suggested_tool_call_parser}"
                 )
 
     def _load_explicit_chat_template(

@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
+from sglang.srt.parser.reasoning_parser import ReasoningParser
 from sglang.srt.server_args import ServerArgs
 
 logger = logging.getLogger(__name__)
@@ -253,19 +254,13 @@ def create_grammar_backend(
                 any_whitespace=not server_args.constrained_json_disable_any_whitespace,
             )
         except TokenizerNotSupportedError as e:
-            if server_args.reasoning_parser:
-                from sglang.srt.parser.reasoning_parser import ReasoningParser
-
-                rp = ReasoningParser(
-                    model_type=server_args.reasoning_parser, stream_reasoning=False
-                )
-                if rp.detector.strict_reasoning_format:
-                    raise ValueError(
-                        f"Strict reasoning parser '{server_args.reasoning_parser}' "
-                        f"requires a grammar backend with token filtering support, "
-                        f"but XGrammar failed to initialize: {e}. Cannot fall back to "
-                        f"grammar_backend='none' with strict reasoning."
-                    ) from e
+            if server_args.enable_strict_thinking:
+                raise ValueError(
+                    f"--enable-strict-thinking requires a grammar backend with "
+                    f"token filtering support, but XGrammar failed to initialize: "
+                    f"{e}. Cannot fall back to grammar_backend='none' with strict "
+                    f"thinking enabled."
+                ) from e
             logger.warning(
                 f"Grammar backend disabled because tokenizer is not supported by XGrammar: {e}. "
                 "Falling back to grammar_backend='none'. "
@@ -282,19 +277,13 @@ def create_grammar_backend(
             whitespace_pattern=server_args.constrained_json_whitespace_pattern,
         )
     elif name == "none":
-        if server_args.reasoning_parser:
-            from sglang.srt.parser.reasoning_parser import ReasoningParser
-
-            reasoning_parser = ReasoningParser(
-                model_type=server_args.reasoning_parser, stream_reasoning=False
+        if server_args.enable_strict_thinking:
+            raise ValueError(
+                "--enable-strict-thinking requires a grammar backend that supports "
+                "token filtering, but grammar_backend='none' was specified. Use "
+                "--grammar-backend xgrammar or another backend that supports token "
+                "filtering."
             )
-            if reasoning_parser.detector.strict_reasoning_format:
-                raise ValueError(
-                    f"Strict reasoning parser '{server_args.reasoning_parser}' requires "
-                    f"a grammar backend that supports token filtering, but "
-                    f"grammar_backend='none' was specified. Use --grammar-backend xgrammar "
-                    f"or another backend that supports token filtering."
-                )
         return None
     else:
         raise ValueError(f"Invalid grammar backend: {name}")
@@ -303,14 +292,16 @@ def create_grammar_backend(
         from sglang.srt.constrained.reasoner_grammar_backend import (
             ReasonerGrammarBackend,
         )
-        from sglang.srt.parser.reasoning_parser import ReasoningParser
 
         reasoning_parser = ReasoningParser(
             model_type=server_args.reasoning_parser, stream_reasoning=False
         )
 
         grammar_backend = ReasonerGrammarBackend(
-            grammar_backend, reasoning_parser, tokenizer
+            grammar_backend,
+            reasoning_parser,
+            tokenizer,
+            enable_strict_thinking=server_args.enable_strict_thinking,
         )
 
     return grammar_backend

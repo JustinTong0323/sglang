@@ -440,6 +440,7 @@ class ServerArgs:
     file_storage_path: str = "sglang_storage"
     enable_cache_report: bool = False
     reasoning_parser: Optional[str] = None
+    enable_strict_thinking: bool = False
     tool_call_parser: Optional[str] = None
     tool_server: Optional[str] = None
     sampling_defaults: str = "model"
@@ -4753,20 +4754,33 @@ class ServerArgs:
             action="store_true",
             help="Return number of cached tokens in usage.prompt_tokens_details for each openai request.",
         )
+        reasoning_parser_choices = list(ReasoningParser.DetectorMap.keys())
         parser.add_argument(
             "--reasoning-parser",
             type=str,
-            choices=["auto"] + list(ReasoningParser.DetectorMap.keys()),
+            choices=["auto"] + reasoning_parser_choices,
             default=ServerArgs.reasoning_parser,
-            help="Specify the parser for reasoning models. Use 'auto' to detect from chat template.",
+            help=f"Specify the parser for reasoning models. "
+            f"Use 'auto' to detect from chat template. "
+            f"Options include: {reasoning_parser_choices}.",
+        )
+        parser.add_argument(
+            "--enable-strict-thinking",
+            action="store_true",
+            default=ServerArgs.enable_strict_thinking,
+            help="Enable strict token filtering during the thinking phase. "
+            "Blocks model-specific excluded tokens (e.g., tool call markers) "
+            "during reasoning. Requires a grammar backend that supports token filtering.",
         )
         tool_call_parser_choices = list(FunctionCallParser.ToolCallParserEnum.keys())
         parser.add_argument(
             "--tool-call-parser",
             type=str,
-            choices=tool_call_parser_choices,
+            choices=["auto"] + tool_call_parser_choices,
             default=ServerArgs.tool_call_parser,
-            help=f"Specify the parser for handling tool-call interactions. Options include: {tool_call_parser_choices}.",
+            help=f"Specify the parser for handling tool-call interactions. "
+            f"Use 'auto' to detect from chat template. "
+            f"Options include: {tool_call_parser_choices}.",
         )
         parser.add_argument(
             "--tool-server",

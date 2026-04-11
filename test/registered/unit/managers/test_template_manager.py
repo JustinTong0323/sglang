@@ -1,8 +1,12 @@
 import unittest
+from types import SimpleNamespace
 
-from sglang.srt.managers.template_manager import (
+from sglang.srt.managers.template_detection import (
     ReasoningToggleConfig,
-    TemplateManager,
+    detect_reasoning_parser,
+    detect_reasoning_pattern,
+    detect_tool_call_parser,
+    resolve_auto_parsers,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
 
@@ -18,14 +22,12 @@ class _DummyTokenizer:
 
 
 class TestTemplateManagerReasoningDetection(unittest.TestCase):
-    def setUp(self):
-        self.manager = TemplateManager()
 
     def _detect(self, template, vocab):
-        force, config = self.manager._detect_reasoning_pattern(template)
-        self.manager._force_reasoning = force
-        self.manager._reasoning_config = config
-        parser = self.manager._detect_reasoning_parser(template, _DummyTokenizer(vocab))
+        force, config = detect_reasoning_pattern(template)
+        parser = detect_reasoning_parser(
+            template, _DummyTokenizer(vocab), config, force
+        )
         return force, config, parser
 
     def test_qwen3_template_not_misclassified_as_glm45(self):
@@ -100,16 +102,13 @@ class TestTemplateManagerReasoningDetection(unittest.TestCase):
 class TestTemplateDetectionRuleMatrix(unittest.TestCase):
     """Table-driven tests for REASONING_PARSER_RULES and REASONING_MODE_RULES."""
 
-    def setUp(self):
-        self.manager = TemplateManager()
-
     def _detect(self, template, vocab=None):
         if vocab is None:
             vocab = []
-        force, config = self.manager._detect_reasoning_pattern(template)
-        self.manager._force_reasoning = force
-        self.manager._reasoning_config = config
-        parser = self.manager._detect_reasoning_parser(template, _DummyTokenizer(vocab))
+        force, config = detect_reasoning_pattern(template)
+        parser = detect_reasoning_parser(
+            template, _DummyTokenizer(vocab), config, force
+        )
         return force, config, parser
 
     PARSER_RULES_MATRIX = [
@@ -221,6 +220,112 @@ class TestTemplateDetectionRuleMatrix(unittest.TestCase):
         self.assertEqual(parser, "qwen3")
         self.assertEqual(config.toggle_param, "enable_thinking")
         self.assertTrue(config.default_enabled)
+
+
+class TestToolCallParserDetection(unittest.TestCase):
+    """Tests for detect_tool_call_parser() using real model tokenizers."""
+
+    def _detect_all(self, model_name):
+        from transformers import AutoTokenizer
+
+        tok = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        template = tok.chat_template
+        force, config = detect_reasoning_pattern(template)
+        rp = detect_reasoning_parser(template, tok, config, force)
+        tcp = detect_tool_call_parser(template, tok, config, force)
+        return rp, tcp
+
+    def test_qwen3_detects_qwen_tool_call_parser(self):
+        rp, tcp = self._detect_all("Qwen/Qwen3-0.6B")
+        self.assertEqual(rp, "qwen3")
+        self.assertEqual(tcp, "qwen")
+
+    def test_tool_call_parser_rule_values_via_snippets(self):
+        """Table-driven: verify tool-call rule values differ from reasoning where expected."""
+        cases = [
+            # (name, template, vocab, expected_tool_call)
+            (
+                "qwen_maps_from_qwen3_config",
+                "{% set enable_thinking = enable_thinking if enable_thinking is defined else true %}",
+                [],
+                "qwen",
+            ),
+            ("gpt_oss", "<|channel|>analysis<|message|>", [], "gpt-oss"),
+            ("gemma4", "<|channel>content", [], "gemma4"),
+            ("minimax_maps_to_m2", "<minimax:tool_call>", [], "minimax-m2"),
+            (
+                "deepseekv3",
+                "{% if not thinking is defined %}{% set thinking = false %}{% endif %}",
+                [],
+                "deepseekv3",
+            ),
+            (
+                "kimi_k2",
+                "{% set thinking = thinking if thinking is defined else true %}\n<think>",
+                ["<|tool_calls_section_begin|>"],
+                "kimi_k2",
+            ),
+        ]
+        for name, template, vocab, expected in cases:
+            with self.subTest(name=name):
+                force, config = detect_reasoning_pattern(template)
+                result = detect_tool_call_parser(
+                    template, _DummyTokenizer(vocab), config, force
+                )
+                self.assertEqual(result, expected)
+
+    def test_none_template_returns_none(self):
+        self.assertIsNone(detect_tool_call_parser(None, None))
+
+    def test_unrecognized_template_returns_none(self):
+        force, config = detect_reasoning_pattern("Hello {{ user }}")
+        result = detect_tool_call_parser("Hello {{ user }}", None, config, force)
+        self.assertIsNone(result)
+
+
+class TestResolveAutoParsers(unittest.TestCase):
+    """Tests for resolve_auto_parsers() using real model tokenizers."""
+
+    def _make_server_args(self, reasoning_parser=None, tool_call_parser=None):
+        return SimpleNamespace(
+            reasoning_parser=reasoning_parser,
+            tool_call_parser=tool_call_parser,
+            model_path="Qwen/Qwen3-0.6B",
+        )
+
+    def test_resolves_both_parsers_with_real_model(self):
+        args = self._make_server_args(reasoning_parser="auto", tool_call_parser="auto")
+        resolve_auto_parsers(args)
+        self.assertEqual(args.reasoning_parser, "qwen3")
+        self.assertEqual(args.tool_call_parser, "qwen")
+
+    def test_resolves_reasoning_parser_only(self):
+        args = self._make_server_args(reasoning_parser="auto", tool_call_parser=None)
+        resolve_auto_parsers(args)
+        self.assertEqual(args.reasoning_parser, "qwen3")
+        self.assertIsNone(args.tool_call_parser)
+
+    def test_resolves_tool_call_parser_only(self):
+        args = self._make_server_args(reasoning_parser="qwen3", tool_call_parser="auto")
+        resolve_auto_parsers(args)
+        self.assertEqual(args.reasoning_parser, "qwen3")
+        self.assertEqual(args.tool_call_parser, "qwen")
+
+    def test_neither_auto_is_noop(self):
+        args = self._make_server_args(reasoning_parser="qwen3", tool_call_parser="qwen")
+        resolve_auto_parsers(args)
+        self.assertEqual(args.reasoning_parser, "qwen3")
+        self.assertEqual(args.tool_call_parser, "qwen")
+
+    def test_nonexistent_model_sets_none(self):
+        args = SimpleNamespace(
+            reasoning_parser="auto",
+            tool_call_parser="auto",
+            model_path="nonexistent/model-does-not-exist-xyz",
+        )
+        resolve_auto_parsers(args)
+        self.assertIsNone(args.reasoning_parser)
+        self.assertIsNone(args.tool_call_parser)
 
 
 if __name__ == "__main__":

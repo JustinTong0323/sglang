@@ -37,8 +37,8 @@ class GrammarManager:
         else:
             self.grammar_backend = None
 
-        self._strict_reasoning_format = getattr(
-            self.grammar_backend, "strict_reasoning_format", False
+        self._enable_strict_thinking = getattr(
+            self.grammar_backend, "enable_strict_thinking", False
         )
 
         self.grammar_sync_group = scheduler.dp_tp_cpu_group
@@ -127,7 +127,7 @@ class GrammarManager:
                         req.set_finish_with_abort(error_msg)
                     else:
                         self._apply_request_reasoning_budget(req)
-        elif self._strict_reasoning_format and self.grammar_backend is not None:
+        elif self._enable_strict_thinking and self.grammar_backend is not None:
             grammar_obj = self.grammar_backend.init_strict_reasoning_grammar(
                 req.require_reasoning
             )

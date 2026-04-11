@@ -882,9 +882,9 @@ class ServingChatTestCase(unittest.TestCase):
         req.reasoning_effort = "medium"
         self.assertTrue(self.chat._get_reasoning_from_request(req))
 
-    def test_build_chat_response_qwen3_strict_forces_reasoning(self):
-        self.tm.server_args.reasoning_parser = "qwen3-thinking-strict"
-        self.chat.reasoning_parser = "qwen3-thinking-strict"
+    def test_build_chat_response_qwen3_thinking_forces_reasoning(self):
+        self.tm.server_args.reasoning_parser = "qwen3-thinking"
+        self.chat.reasoning_parser = "qwen3-thinking"
         self.template_manager.reasoning_config = ReasoningToggleConfig(
             toggle_param="enable_thinking", default_enabled=True
         )
