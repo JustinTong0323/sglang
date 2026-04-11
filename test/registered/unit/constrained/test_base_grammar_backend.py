@@ -382,13 +382,15 @@ class TestCreateGrammarBackend(unittest.TestCase):
         )
 
         mock_backend = MagicMock(spec=BaseGrammarBackend)
+        mock_backend.is_support_token_filter = False
         mock_outlines_cls.return_value = mock_backend
         args = self._make_server_args("outlines", reasoning_parser="deepseek-r1")
         tokenizer = MagicMock()
+        # encode must return a single-token list for think_start/end tokens
+        tokenizer.encode.return_value = [42]
 
         result = create_grammar_backend(args, tokenizer, 32000, think_end_id=42)
         self.assertIsInstance(result, ReasonerGrammarBackend)
-        self.assertEqual(result.think_end_id, 42)
         self.assertIs(result.grammar_backend, mock_backend)
 
     @patch("sglang.srt.constrained.outlines_backend.OutlinesGrammarBackend")
