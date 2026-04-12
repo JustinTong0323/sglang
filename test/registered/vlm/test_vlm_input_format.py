@@ -425,11 +425,13 @@ class TestInternVLUnderstandsImage(VLMInputTestBase, unittest.IsolatedAsyncioTes
                 torch_dtype=torch.bfloat16,
                 low_cpu_mem_usage=False,
             )
-        except RuntimeError as e:
-            if "meta" not in str(e):
+        except (RuntimeError, AttributeError) as e:
+            if isinstance(e, RuntimeError) and "meta" not in str(e):
                 raise
             # Transformers v5 always uses meta tensors for init, which breaks
             # models calling .item() in __init__ (e.g. InternVL's drop_path_rate).
+            # Transformers v5.5.3 may also raise AttributeError for remote-code
+            # models missing new internal attributes (e.g. all_tied_weights_keys).
             # Fall back to from_config + manual weight loading.
             import gc
             import glob
