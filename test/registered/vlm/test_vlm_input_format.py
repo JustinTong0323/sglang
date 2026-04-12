@@ -596,6 +596,13 @@ class TestMiniCPMVUnderstandsImage(VLMInputTestBase, unittest.IsolatedAsyncioTes
         cls.processor = AutoProcessor.from_pretrained(
             cls.model_path, trust_remote_code=True
         )
+        # In transformers v5.5.3, AutoTokenizer may return TokenizersBackend
+        # which lacks model-specific attributes (e.g. im_start_id for MiniCPM-V).
+        # Replace with sglang's tokenizer which handles this via declared-class
+        # fallback, then fix added tokens encoding.
+        from sglang.srt.utils.hf_transformers import get_tokenizer
+
+        cls.processor.tokenizer = get_tokenizer(cls.model_path, trust_remote_code=True)
         _fix_added_tokens_encoding(cls.processor.tokenizer)
         cls._init_visual()
 
