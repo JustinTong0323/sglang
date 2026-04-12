@@ -71,7 +71,7 @@ dependencies = [
   "av ; sys_platform == 'linux' and (platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'armv7l')",
   "torchvision",
   "tqdm",
-  "mistral_common>=1.9.0",
+  "mistral_common>=1.11.0",
   "transformers==5.5.3",
   "uvicorn",
   "uvloop",
