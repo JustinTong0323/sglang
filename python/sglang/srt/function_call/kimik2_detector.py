@@ -68,6 +68,7 @@ class KimiK2Detector(BaseFormatDetector):
         )
 
         self._last_arguments = ""
+        self._current_stream_function_name: str | None = None
 
         # Standard ID: "functions.search:0", "search:0"
         self.tool_call_id_regex = re.compile(
@@ -218,9 +219,14 @@ class KimiK2Detector(BaseFormatDetector):
                 function_id = match.group("tool_call_id")
                 function_args = match.group("function_arguments")
 
-                function_name, _ = self._parse_tool_call_id(
-                    function_id, tools, function_args
-                )
+                # Reuse cached name for current tool call to avoid repeated
+                # json.loads on partial JSON in _infer_tool_name.
+                if self._current_stream_function_name is not None:
+                    function_name = self._current_stream_function_name
+                else:
+                    function_name, _ = self._parse_tool_call_id(
+                        function_id, tools, function_args
+                    )
                 if function_name is None:
                     return StreamingParseResult(normal_text="", calls=calls)
 
@@ -245,6 +251,7 @@ class KimiK2Detector(BaseFormatDetector):
                         )
                     )
                     self.current_tool_name_sent = True
+                    self._current_stream_function_name = function_name
                     self.prev_tool_call_arr[self.current_tool_id] = {
                         "name": function_name,
                         "arguments": {},
@@ -299,6 +306,7 @@ class KimiK2Detector(BaseFormatDetector):
                         self.current_tool_id += 1
                         self._last_arguments = ""
                         self.current_tool_name_sent = False
+                        self._current_stream_function_name = None
                         return result
 
             return StreamingParseResult(normal_text="", calls=calls)

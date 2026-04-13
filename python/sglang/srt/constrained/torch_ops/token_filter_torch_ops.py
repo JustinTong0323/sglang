@@ -11,18 +11,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Torch impl for token filter operations."""
+"""Torch fallback for token filter operations (CPU and HIP).
 
+Sets or clears specific bits in an int32 bitmask by token ID.  The token list
+is typically tiny (< 10 entries), so a simple Python loop is both correct and
+efficient enough for this fallback path.
+"""
+
+import ctypes
 from typing import List
 
 import torch
-
-
-def _to_int32(value: int) -> int:
-    value &= 0xFFFFFFFF
-    if value >= (1 << 31):
-        value -= 1 << 32
-    return value
 
 
 def set_token_filter_torch(
@@ -33,28 +32,26 @@ def set_token_filter_torch(
     reset_vocab_mask: bool = True,
 ):
     if reset_vocab_mask:
-        mask_val = -1 if (not is_allowed) else 0
-        vocab_mask[batch_idx].fill_(mask_val)
+        vocab_mask[batch_idx].fill_(-1 if (not is_allowed) else 0)
 
     if not token_ids:
         return
 
-    aggregated_masks = {}
+    # Aggregate bit masks per int32 element to handle duplicate indices.
+    aggregated: dict[int, int] = {}
     for token_id in token_ids:
         element_idx = token_id // 32
         bit_idx = token_id % 32
-        aggregated_masks[element_idx] = aggregated_masks.get(element_idx, 0) | (
-            1 << bit_idx
-        )
+        aggregated[element_idx] = aggregated.get(element_idx, 0) | (1 << bit_idx)
 
     row = vocab_mask[batch_idx]
     element_indices = torch.tensor(
-        list(aggregated_masks.keys()), dtype=torch.long, device=row.device
+        list(aggregated.keys()), dtype=torch.long, device=row.device
     )
     bitmasks = torch.tensor(
         [
-            _to_int32(mask if is_allowed else ~mask)
-            for mask in aggregated_masks.values()
+            ctypes.c_int32(mask if is_allowed else ~mask).value
+            for mask in aggregated.values()
         ],
         dtype=row.dtype,
         device=row.device,
