@@ -1313,7 +1313,37 @@ class OpenAIServingChat(OpenAIServingBase):
 
         config = self.template_manager.reasoning_config
         if config is None:
-            return False
+            # Fallback to parser-level defaults when template toggle config
+            # cannot be inferred (e.g., parser-only <think> templates).
+            mode = (
+                self._reasoning_detector.reasoning_default
+                if self._reasoning_detector is not None
+                else None
+            )
+            if mode is None:
+                return False
+            if mode == "always":
+                return True
+            if mode == "mistral":
+                return (
+                    request.reasoning_effort is not None
+                    and request.reasoning_effort != "none"
+                )
+            if mode in ("thinking", "enable_thinking"):
+                return (
+                    not request.chat_template_kwargs
+                    or request.chat_template_kwargs.get(mode) is not False
+                )
+            if mode in ("explicit_thinking", "explicit_enable_thinking"):
+                toggle = mode.replace("explicit_", "")
+                return (
+                    request.chat_template_kwargs is not None
+                    and request.chat_template_kwargs.get(toggle) is True
+                )
+            logger.warning(
+                f"Unknown reasoning_default mode: {mode}, defaulting to always-on"
+            )
+            return True
 
         if config.special_case == "always":
             return True
