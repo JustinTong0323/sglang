@@ -137,35 +137,22 @@ def init_tokenizer_manager(
         completion_template=server_args.completion_template,
     )
 
-    # Auto-detect reasoning parser from chat template (fallback if not resolved earlier)
-    if server_args.reasoning_parser == "auto":
-        if template_manager.suggested_reasoning_parser is not None:
-            server_args.reasoning_parser = template_manager.suggested_reasoning_parser
-            logger.info(
-                f"Auto-detected --reasoning-parser as '{server_args.reasoning_parser}' "
-                f"from chat template"
-            )
+    # Resolve any remaining auto parsers using template manager's detection results
+    for attr, suggested, label in (
+        ("reasoning_parser", template_manager.suggested_reasoning_parser, "reasoning parser"),
+        ("tool_call_parser", template_manager.suggested_tool_call_parser, "tool-call parser"),
+    ):
+        if getattr(server_args, attr) != "auto":
+            continue
+        if suggested is not None:
+            setattr(server_args, attr, suggested)
+            logger.info(f"Auto-detected --{attr.replace('_', '-')} as '{suggested}' from chat template")
         else:
             logger.warning(
-                "--reasoning-parser=auto specified but could not detect reasoning "
-                "format from chat template. Disabling reasoning parser."
+                f"--{attr.replace('_', '-')}=auto specified but could not detect "
+                f"{label} from chat template. Disabling {label}."
             )
-            server_args.reasoning_parser = None
-
-    # Auto-detect tool-call parser from chat template (fallback if not resolved earlier)
-    if server_args.tool_call_parser == "auto":
-        if template_manager.suggested_tool_call_parser is not None:
-            server_args.tool_call_parser = template_manager.suggested_tool_call_parser
-            logger.info(
-                f"Auto-detected --tool-call-parser as '{server_args.tool_call_parser}' "
-                f"from chat template"
-            )
-        else:
-            logger.warning(
-                "--tool-call-parser=auto specified but could not detect tool-call "
-                "parser from chat template. Disabling tool-call parser."
-            )
-            server_args.tool_call_parser = None
+            setattr(server_args, attr, None)
 
     return tokenizer_manager, template_manager
 
@@ -702,8 +689,6 @@ class Engine(EngineScoreMixin, EngineBase):
                 host=server_args.host, port=bootstrap_port
             )
 
-        # Resolve --reasoning-parser=auto and --tool-call-parser=auto before
-        # spawning scheduler subprocesses, which serialize server_args.
         if (
             server_args.reasoning_parser == "auto"
             or server_args.tool_call_parser == "auto"

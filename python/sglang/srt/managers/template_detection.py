@@ -374,6 +374,33 @@ def detect_tool_call_parser(
     return _match_rules(ctx, TOOL_CALL_PARSER_RULES, "tool-call parser")
 
 
+def _resolve_auto_parser(
+    server_args,
+    attr: str,
+    ctx: TemplateDetectionContext,
+    rules: Tuple[DetectionRule, ...],
+    label: str,
+    fallback_to_none: bool = True,
+) -> None:
+    """Resolve a single auto parser, updating server_args in place."""
+    detected = _match_rules(ctx, rules, label)
+    if detected:
+        setattr(server_args, attr, detected)
+        logger.info(f"Auto-detected --{attr.replace('_', '-')} as '{detected}' from chat template")
+    elif fallback_to_none:
+        logger.warning(
+            f"--{attr.replace('_', '-')}=auto specified but could not detect "
+            f"{label} from chat template. Disabling {label}."
+        )
+        setattr(server_args, attr, None)
+    else:
+        logger.warning(
+            f"--{attr.replace('_', '-')}=auto specified but could not detect "
+            f"{label} from chat template in early detection. Keeping 'auto' "
+            f"for template-manager fallback."
+        )
+
+
 def resolve_auto_parsers(server_args) -> None:
     """Resolve --reasoning-parser=auto and --tool-call-parser=auto before scheduler.
 
@@ -386,59 +413,43 @@ def resolve_auto_parsers(server_args) -> None:
     if not needs_reasoning and not needs_tool_call:
         return
 
-    from transformers import AutoTokenizer
+    from sglang.srt.utils.hf_transformers_utils import get_tokenizer
 
     try:
-        tokenizer = AutoTokenizer.from_pretrained(
-            server_args.model_path, trust_remote_code=True
+        tokenizer = get_tokenizer(
+            server_args.model_path,
+            trust_remote_code=server_args.trust_remote_code,
         )
         template = getattr(tokenizer, "chat_template", None)
     except Exception as e:
         logger.warning(f"Failed to load tokenizer for auto-detection: {e}")
         if needs_reasoning:
             logger.warning(
-                "--reasoning-parser=auto specified but could not detect reasoning "
-                "format from chat template. Disabling reasoning parser."
+                "--reasoning-parser=auto specified but could not detect "
+                "reasoning parser from chat template in early detection. "
+                "Keeping 'auto' for template-manager fallback."
             )
-            server_args.reasoning_parser = None
         if needs_tool_call:
             logger.warning(
-                "--tool-call-parser=auto specified but could not detect tool-call "
-                "parser from chat template. Disabling tool-call parser."
+                "--tool-call-parser=auto specified but could not detect "
+                "tool-call parser from chat template. Disabling tool-call parser."
             )
             server_args.tool_call_parser = None
         return
 
     force_reasoning, reasoning_config = detect_reasoning_pattern(template)
+    ctx = _build_context(template, tokenizer, reasoning_config, force_reasoning)
+    if ctx is None:
+        return
 
     if needs_reasoning:
-        detected = detect_reasoning_parser(
-            template, tokenizer, reasoning_config, force_reasoning
+        _resolve_auto_parser(
+            server_args, "reasoning_parser", ctx,
+            REASONING_PARSER_RULES, "reasoning parser", fallback_to_none=False,
         )
-        if detected:
-            server_args.reasoning_parser = detected
-            logger.info(
-                f"Auto-detected --reasoning-parser as '{detected}' from chat template"
-            )
-        else:
-            logger.warning(
-                "--reasoning-parser=auto specified but could not detect reasoning "
-                "format from chat template. Disabling reasoning parser."
-            )
-            server_args.reasoning_parser = None
 
     if needs_tool_call:
-        detected = detect_tool_call_parser(
-            template, tokenizer, reasoning_config, force_reasoning
+        _resolve_auto_parser(
+            server_args, "tool_call_parser", ctx,
+            TOOL_CALL_PARSER_RULES, "tool-call parser", fallback_to_none=True,
         )
-        if detected:
-            server_args.tool_call_parser = detected
-            logger.info(
-                f"Auto-detected --tool-call-parser as '{detected}' from chat template"
-            )
-        else:
-            logger.warning(
-                "--tool-call-parser=auto specified but could not detect tool-call "
-                "parser from chat template. Disabling tool-call parser."
-            )
-            server_args.tool_call_parser = None

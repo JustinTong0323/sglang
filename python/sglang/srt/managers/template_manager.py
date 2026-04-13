@@ -24,10 +24,12 @@ import os
 from typing import Dict, Optional
 
 from sglang.srt.managers.template_detection import (
+    REASONING_PARSER_RULES,
+    TOOL_CALL_PARSER_RULES,
     ReasoningToggleConfig,
-    detect_reasoning_parser,
+    _build_context,
+    _match_rules,
     detect_reasoning_pattern,
-    detect_tool_call_parser,
 )
 from sglang.srt.managers.tokenizer_manager import TokenizerManager
 from sglang.srt.parser.code_completion_parser import (
@@ -112,14 +114,18 @@ class TemplateManager:
         self._force_reasoning, self._reasoning_config = detect_reasoning_pattern(
             template
         )
-        self._suggested_reasoning_parser = detect_reasoning_parser(
+        # Build context once, reuse for both parser detections (avoids
+        # duplicate tokenizer.get_vocab() calls).
+        ctx = _build_context(
             template, tokenizer, self._reasoning_config, self._force_reasoning
         )
-        self._suggested_tool_call_parser = detect_tool_call_parser(
-            template,
-            tokenizer,
-            reasoning_config=self._reasoning_config,
-            force_reasoning=self._force_reasoning,
+        if ctx is None:
+            return
+        self._suggested_reasoning_parser = _match_rules(
+            ctx, REASONING_PARSER_RULES, "reasoning parser"
+        )
+        self._suggested_tool_call_parser = _match_rules(
+            ctx, TOOL_CALL_PARSER_RULES, "tool-call parser"
         )
 
     def load_chat_template(
