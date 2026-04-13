@@ -386,7 +386,9 @@ def _resolve_auto_parser(
     detected = _match_rules(ctx, rules, label)
     if detected:
         setattr(server_args, attr, detected)
-        logger.info(f"Auto-detected --{attr.replace('_', '-')} as '{detected}' from chat template")
+        logger.info(
+            f"Auto-detected --{attr.replace('_', '-')} as '{detected}' from chat template"
+        )
     elif fallback_to_none:
         logger.warning(
             f"--{attr.replace('_', '-')}=auto specified but could not detect "
@@ -444,12 +446,20 @@ def resolve_auto_parsers(server_args) -> None:
 
     if needs_reasoning:
         _resolve_auto_parser(
-            server_args, "reasoning_parser", ctx,
-            REASONING_PARSER_RULES, "reasoning parser", fallback_to_none=False,
+            server_args,
+            "reasoning_parser",
+            ctx,
+            REASONING_PARSER_RULES,
+            "reasoning parser",
+            fallback_to_none=False,
         )
 
     if needs_tool_call:
         _resolve_auto_parser(
-            server_args, "tool_call_parser", ctx,
-            TOOL_CALL_PARSER_RULES, "tool-call parser", fallback_to_none=True,
+            server_args,
+            "tool_call_parser",
+            ctx,
+            TOOL_CALL_PARSER_RULES,
+            "tool-call parser",
+            fallback_to_none=True,
         )

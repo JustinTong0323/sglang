@@ -139,14 +139,24 @@ def init_tokenizer_manager(
 
     # Resolve any remaining auto parsers using template manager's detection results
     for attr, suggested, label in (
-        ("reasoning_parser", template_manager.suggested_reasoning_parser, "reasoning parser"),
-        ("tool_call_parser", template_manager.suggested_tool_call_parser, "tool-call parser"),
+        (
+            "reasoning_parser",
+            template_manager.suggested_reasoning_parser,
+            "reasoning parser",
+        ),
+        (
+            "tool_call_parser",
+            template_manager.suggested_tool_call_parser,
+            "tool-call parser",
+        ),
     ):
         if getattr(server_args, attr) != "auto":
             continue
         if suggested is not None:
             setattr(server_args, attr, suggested)
-            logger.info(f"Auto-detected --{attr.replace('_', '-')} as '{suggested}' from chat template")
+            logger.info(
+                f"Auto-detected --{attr.replace('_', '-')} as '{suggested}' from chat template"
+            )
         else:
             logger.warning(
                 f"--{attr.replace('_', '-')}=auto specified but could not detect "
