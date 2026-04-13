@@ -247,7 +247,6 @@ class XGrammarGrammarBackend(BaseGrammarBackend):
         is_allowed: bool = True,
         reset_vocab_mask: bool = True,
     ):
-        # The Xgrammar vocab_mask use CPU tensor by default
         if _is_hip or (vocab_mask.device.type != "cuda"):
             set_token_filter_torch(
                 vocab_mask,

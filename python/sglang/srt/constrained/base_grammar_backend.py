@@ -138,6 +138,10 @@ class BaseGrammarBackend:
         return InvalidGrammarObject()
 
     @property
+    def enable_strict_thinking(self):
+        return getattr(self, "_enable_strict_thinking", False)
+
+    @property
     def is_support_token_filter(self):
         return False
 

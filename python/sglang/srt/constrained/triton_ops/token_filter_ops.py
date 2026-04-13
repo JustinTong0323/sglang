@@ -49,7 +49,6 @@ def reset_vocab_mask_kernel(
     pid = tl.program_id(0)
     num_threads = tl.num_programs(0)
 
-    # Each thread processes multiple elements in a strided loop
     for i in tl.range(pid, num_elements, num_threads):
         offset = batch_idx * num_elements + i
         tl.store(vocab_mask_ptr + offset, reset_value)
@@ -93,7 +92,6 @@ def set_token_filter_batch_kernel(
     pid = tl.program_id(0)
     num_threads = tl.num_programs(0)
 
-    # Each thread processes multiple tokens in a strided loop
     for i in tl.range(pid, num_tokens, num_threads):
         token_id = tl.load(token_ids_ptr + i)
         element_idx = token_id // 32
@@ -102,10 +100,8 @@ def set_token_filter_batch_kernel(
         offset = batch_idx * num_elements + element_idx
 
         if is_allowed:
-            # Set the bit to 1 using atomic OR operation
             tl.atomic_or(vocab_mask_ptr + offset, 1 << bit_idx)
         else:
-            # Clear the bit to 0 using atomic AND operation
             tl.atomic_and(vocab_mask_ptr + offset, ~(1 << bit_idx))
 
 

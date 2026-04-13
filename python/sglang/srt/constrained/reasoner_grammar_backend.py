@@ -234,7 +234,7 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
                 "must encode to exactly one token for constrained reasoning."
             )
         self.think_end_id = think_end_ids[0]
-        self.enable_strict_thinking = enable_strict_thinking
+        self._enable_strict_thinking = enable_strict_thinking
         self.think_excluded_token_ids = self._get_think_excluded_token_ids(
             reasoning_parser, tokenizer
         )

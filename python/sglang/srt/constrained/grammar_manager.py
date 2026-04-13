@@ -37,8 +37,10 @@ class GrammarManager:
         else:
             self.grammar_backend = None
 
-        self._enable_strict_thinking = getattr(
-            self.grammar_backend, "enable_strict_thinking", False
+        self._enable_strict_thinking = (
+            self.grammar_backend.enable_strict_thinking
+            if self.grammar_backend is not None
+            else False
         )
 
         self.grammar_sync_group = scheduler.dp_tp_cpu_group
@@ -70,14 +72,11 @@ class GrammarManager:
                 req.set_finish_with_abort("Aborted by AbortReq.")
 
     def _get_request_thinking_budget(self, req: Req) -> int | None:
-        custom_params = getattr(req.sampling_params, "custom_params", None)
+        custom_params = req.sampling_params.custom_params
         if not isinstance(custom_params, dict):
             return None
-
         thinking_budget = custom_params.get("thinking_budget")
-        if isinstance(thinking_budget, int):
-            return thinking_budget
-        return None
+        return thinking_budget if isinstance(thinking_budget, int) else None
 
     def _apply_request_reasoning_budget(self, req: Req) -> None:
         grammar = getattr(req, "grammar", None)
