@@ -318,14 +318,15 @@ class TestResolveAutoParsers(unittest.TestCase):
         self.assertEqual(args.reasoning_parser, "qwen3")
         self.assertEqual(args.tool_call_parser, "qwen")
 
-    def test_nonexistent_model_keeps_reasoning_auto_for_late_fallback(self):
+    def test_nonexistent_model_disables_both_parsers(self):
         args = SimpleNamespace(
             reasoning_parser="auto",
             tool_call_parser="auto",
             model_path="nonexistent/model-does-not-exist-xyz",
+            trust_remote_code=False,
         )
         resolve_auto_parsers(args)
-        self.assertEqual(args.reasoning_parser, "auto")
+        self.assertIsNone(args.reasoning_parser)
         self.assertIsNone(args.tool_call_parser)
 
 

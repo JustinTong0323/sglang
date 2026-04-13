@@ -107,8 +107,12 @@ class OpenAIServingChat(OpenAIServingBase):
                     model_type=self.reasoning_parser, stream_reasoning=True
                 )
                 self._reasoning_detector = rp.detector
-            except ValueError:
-                pass
+            except ValueError as e:
+                logger.warning(
+                    "Failed to initialize reasoning detector for parser '%s': %s",
+                    self.reasoning_parser,
+                    e,
+                )
 
         # Get default sampling parameters from model's generation config
         self.default_sampling_params = (

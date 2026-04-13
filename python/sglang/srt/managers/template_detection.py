@@ -155,7 +155,7 @@ def _is_gemma4(ctx):
 
 
 def _is_kimi(ctx):
-    return ctx.has_text("\u25c1think\u25b7") or ctx.has_text("◁think▷")
+    return ctx.has_text("◁think▷")
 
 
 def _is_interns1(ctx):
@@ -312,19 +312,27 @@ def _match_rules(
     label: str,
 ) -> Optional[str]:
     for rule in rules:
-        if rule.predicate(ctx):
-            logger.info(
-                "Detected %s '%s' from template rule '%s'.",
-                label,
-                rule.value,
+        try:
+            if rule.predicate(ctx):
+                logger.info(
+                    "Detected %s '%s' from template rule '%s'.",
+                    label,
+                    rule.value,
+                    rule.name,
+                )
+                return rule.value
+        except Exception as e:
+            logger.warning(
+                "Detection rule '%s' for %s raised an exception: %s. Skipping.",
                 rule.name,
+                label,
+                e,
             )
-            return rule.value
     return None
 
 
 def detect_reasoning_pattern(
-    template: str,
+    template: Optional[str],
 ) -> Tuple[bool, Optional[ReasoningToggleConfig]]:
     """Detect if the chat template contains reasoning/thinking patterns."""
     if template is None:
@@ -380,7 +388,6 @@ def _resolve_auto_parser(
     ctx: TemplateDetectionContext,
     rules: Tuple[DetectionRule, ...],
     label: str,
-    fallback_to_none: bool = True,
 ) -> None:
     """Resolve a single auto parser, updating server_args in place."""
     detected = _match_rules(ctx, rules, label)
@@ -389,18 +396,12 @@ def _resolve_auto_parser(
         logger.info(
             f"Auto-detected --{attr.replace('_', '-')} as '{detected}' from chat template"
         )
-    elif fallback_to_none:
+    else:
         logger.warning(
             f"--{attr.replace('_', '-')}=auto specified but could not detect "
             f"{label} from chat template. Disabling {label}."
         )
         setattr(server_args, attr, None)
-    else:
-        logger.warning(
-            f"--{attr.replace('_', '-')}=auto specified but could not detect "
-            f"{label} from chat template in early detection. Keeping 'auto' "
-            f"for template-manager fallback."
-        )
 
 
 def resolve_auto_parsers(server_args) -> None:
@@ -428,9 +429,9 @@ def resolve_auto_parsers(server_args) -> None:
         if needs_reasoning:
             logger.warning(
                 "--reasoning-parser=auto specified but could not detect "
-                "reasoning parser from chat template in early detection. "
-                "Keeping 'auto' for template-manager fallback."
+                "reasoning parser from chat template. Disabling reasoning parser."
             )
+            server_args.reasoning_parser = None
         if needs_tool_call:
             logger.warning(
                 "--tool-call-parser=auto specified but could not detect "
@@ -451,7 +452,6 @@ def resolve_auto_parsers(server_args) -> None:
             ctx,
             REASONING_PARSER_RULES,
             "reasoning parser",
-            fallback_to_none=False,
         )
 
     if needs_tool_call:
@@ -461,5 +461,4 @@ def resolve_auto_parsers(server_args) -> None:
             ctx,
             TOOL_CALL_PARSER_RULES,
             "tool-call parser",
-            fallback_to_none=True,
         )

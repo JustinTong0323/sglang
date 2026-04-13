@@ -186,12 +186,14 @@ class ReasonerGrammarObject(BaseGrammarObject):
     def finished(self):
         if self.grammar is not None:
             return self.grammar.finished
-        return False
+        return self._finished
 
     @finished.setter
     def finished(self, finished):
         if self.grammar is not None:
             self.grammar.finished = finished
+        else:
+            self._finished = finished
 
     def try_jump_forward(self, tokenizer):
         if self.grammar is not None:

@@ -115,11 +115,20 @@ class KimiK2Detector(BaseFormatDetector):
             return tools[0].function.name
 
         if not function_args:
+            logger.debug(
+                "No function_args for tool name inference, defaulting to: %s",
+                tools[0].function.name,
+            )
             return tools[0].function.name
 
         try:
             arg_keys = set(json.loads(function_args).keys())
         except (json.JSONDecodeError, TypeError):
+            logger.debug(
+                "Could not parse function_args for tool name inference "
+                "(may be partial JSON in streaming), defaulting to: %s",
+                tools[0].function.name,
+            )
             return tools[0].function.name
 
         # Pick the tool whose properties best match the argument keys.
@@ -150,15 +159,11 @@ class KimiK2Detector(BaseFormatDetector):
 
         :param text: The complete text to parse.
         :param tools: List of available tools.
-        :return: ParseResult indicating success or failure, consumed text, leftover text, and parsed calls.
+        :return: StreamingParseResult with normal_text (content before tool calls) and calls (parsed items).
         """
         if self.bot_token not in text:
             return StreamingParseResult(normal_text=text, calls=[])
         try:
-            # there are two possible captures - between tags, or between a
-            # tag and end-of-string so the result of
-            # findall is an array of tuples where one is a function call and
-            # the other is None
             function_call_tuples = self.tool_call_regex.findall(text)
 
             logger.debug("function_call_tuples: %s", function_call_tuples)
