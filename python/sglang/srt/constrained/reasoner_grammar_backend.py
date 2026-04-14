@@ -182,6 +182,7 @@ class ReasonerGrammarObject(BaseGrammarObject):
         )
         new_obj.tokens_in_think = self.tokens_in_think
         new_obj.tokens_after_end = self.tokens_after_end
+        new_obj._finished = self._finished
         return new_obj
 
     @property
