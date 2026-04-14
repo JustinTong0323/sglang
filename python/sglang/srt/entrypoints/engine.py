@@ -81,6 +81,7 @@ from sglang.srt.managers.io_struct import (
 )
 from sglang.srt.managers.multi_tokenizer_mixin import MultiTokenizerRouter
 from sglang.srt.managers.scheduler import run_scheduler_process
+from sglang.srt.managers.template_detection import resolve_auto_parsers
 from sglang.srt.managers.template_manager import TemplateManager
 from sglang.srt.managers.tokenizer_manager import TokenizerManager
 from sglang.srt.observability.trace import process_tracing_init, trace_set_thread_info
@@ -703,8 +704,6 @@ class Engine(EngineScoreMixin, EngineBase):
             server_args.reasoning_parser == "auto"
             or server_args.tool_call_parser == "auto"
         ):
-            from sglang.srt.managers.template_detection import resolve_auto_parsers
-
             resolve_auto_parsers(server_args)
 
         # Launch scheduler processes

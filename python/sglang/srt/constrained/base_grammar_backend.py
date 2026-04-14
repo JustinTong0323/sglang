@@ -129,6 +129,8 @@ class InvalidGrammarObject(BaseGrammarObject):
 
 
 class BaseGrammarBackend:
+    _enable_strict_thinking: bool = False
+
     def __init__(self):
         self.executor = ThreadPoolExecutor()
         self.cache: Dict[Tuple[str, str], BaseGrammarObject] = {}
@@ -139,7 +141,7 @@ class BaseGrammarBackend:
 
     @property
     def enable_strict_thinking(self):
-        return getattr(self, "_enable_strict_thinking", False)
+        return self._enable_strict_thinking
 
     @property
     def is_support_token_filter(self):
