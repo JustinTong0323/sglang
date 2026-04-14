@@ -11,6 +11,7 @@ from sglang.srt.constrained.base_grammar_backend import (
     InvalidGrammarObject,
     create_grammar_backend,
 )
+from sglang.srt.constrained.reasoner_grammar_backend import ReasonerGrammarObject
 from sglang.srt.environ import envs
 
 if TYPE_CHECKING:
@@ -79,12 +80,11 @@ class GrammarManager:
         return thinking_budget if isinstance(thinking_budget, int) else None
 
     def _apply_request_reasoning_budget(self, req: Req) -> None:
-        grammar = getattr(req, "grammar", None)
         thinking_budget = self._get_request_thinking_budget(req)
-        if grammar is None or thinking_budget is None:
+        if thinking_budget is None:
             return
-        if hasattr(grammar, "max_think_tokens"):
-            grammar.max_think_tokens = thinking_budget
+        if isinstance(req.grammar, ReasonerGrammarObject):
+            req.grammar.max_think_tokens = thinking_budget
 
     def process_req_with_grammar(self, req: Req) -> bool:
         # Init grammar cache for this request
@@ -126,7 +126,7 @@ class GrammarManager:
                         req.set_finish_with_abort(error_msg)
                     else:
                         self._apply_request_reasoning_budget(req)
-        elif self._enable_strict_thinking and self.grammar_backend is not None:
+        elif self._enable_strict_thinking:
             grammar_obj = self.grammar_backend.init_strict_reasoning_grammar(
                 req.require_reasoning
             )

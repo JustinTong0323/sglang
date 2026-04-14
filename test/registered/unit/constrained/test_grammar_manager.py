@@ -16,7 +16,6 @@ Usage:
 
 import unittest
 from concurrent.futures import Future
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from sglang.srt.constrained.base_grammar_backend import (
@@ -25,6 +24,7 @@ from sglang.srt.constrained.base_grammar_backend import (
     InvalidGrammarObject,
 )
 from sglang.srt.constrained.grammar_manager import GrammarManager
+from sglang.srt.constrained.reasoner_grammar_backend import ReasonerGrammarObject
 from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(2.0, "stage-a-test-cpu")
@@ -265,7 +265,9 @@ class TestProcessReqWithGrammar(unittest.TestCase):
 
     def test_cache_hit_applies_request_thinking_budget(self):
         mgr = self._make_mgr()
-        grammar_obj = SimpleNamespace(max_think_tokens=99)
+        grammar_obj = ReasonerGrammarObject(
+            grammar=None, think_end_id=0, max_think_tokens=99
+        )
         mgr.grammar_backend.get_cached_or_future_value.return_value = (
             grammar_obj,
             True,
@@ -282,7 +284,9 @@ class TestProcessReqWithGrammar(unittest.TestCase):
     def test_strict_reasoning_grammar_applies_request_thinking_budget(self):
         mgr = self._make_mgr()
         mgr._enable_strict_thinking = True
-        grammar_obj = SimpleNamespace(max_think_tokens=99)
+        grammar_obj = ReasonerGrammarObject(
+            grammar=None, think_end_id=0, max_think_tokens=99
+        )
         mgr.grammar_backend.init_strict_reasoning_grammar.return_value = grammar_obj
 
         req = _make_req(custom_params={"thinking_budget": 3})
@@ -550,9 +554,9 @@ class TestGetReadyGrammarRequests(unittest.TestCase):
     def test_ready_future_applies_request_budget_without_polluting_cache(self):
         mgr = self._make_mgr()
 
-        cache_copy = SimpleNamespace(max_think_tokens=99)
-        grammar_obj = SimpleNamespace(max_think_tokens=99)
-        grammar_obj.copy = MagicMock(return_value=cache_copy)
+        grammar_obj = ReasonerGrammarObject(
+            grammar=None, think_end_id=0, max_think_tokens=99
+        )
         future = Future()
         future.set_result(grammar_obj)
 
