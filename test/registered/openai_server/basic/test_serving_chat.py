@@ -882,6 +882,87 @@ class ServingChatTestCase(unittest.TestCase):
         req.reasoning_effort = "medium"
         self.assertTrue(self.chat._get_reasoning_from_request(req))
 
+    # --- fallback path tests (config=None, uses reasoning_default) ---
+
+    def _setup_fallback(self, parser_name):
+        """Set up reasoning with config=None to exercise the fallback path."""
+        self.tm.server_args.reasoning_parser = parser_name
+        self.chat = OpenAIServingChat(self.tm, self.template_manager)
+        self.chat.reasoning_parser = parser_name
+        self.template_manager.reasoning_config = None
+
+    def test_fallback_always_mode(self):
+        self._setup_fallback("deepseek-r1")
+        req = ChatCompletionRequest(
+            model="x", messages=[{"role": "user", "content": "Hi?"}]
+        )
+        self.assertTrue(self.chat._get_reasoning_from_request(req))
+
+    def test_fallback_mistral_mode(self):
+        self._setup_fallback("mistral")
+        req_no_effort = ChatCompletionRequest(
+            model="x", messages=[{"role": "user", "content": "Hi?"}]
+        )
+        self.assertFalse(self.chat._get_reasoning_from_request(req_no_effort))
+
+        req_with_effort = ChatCompletionRequest(
+            model="x",
+            messages=[{"role": "user", "content": "Hi?"}],
+            reasoning_effort="high",
+        )
+        self.assertTrue(self.chat._get_reasoning_from_request(req_with_effort))
+
+    def test_fallback_enable_thinking_mode_default_on(self):
+        self._setup_fallback("qwen3")
+        req_default = ChatCompletionRequest(
+            model="x", messages=[{"role": "user", "content": "Hi?"}]
+        )
+        self.assertTrue(self.chat._get_reasoning_from_request(req_default))
+
+        req_disabled = ChatCompletionRequest(
+            model="x",
+            messages=[{"role": "user", "content": "Hi?"}],
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        self.assertFalse(self.chat._get_reasoning_from_request(req_disabled))
+
+    def test_fallback_explicit_thinking_mode_default_off(self):
+        self._setup_fallback("deepseek-v3")
+        req_default = ChatCompletionRequest(
+            model="x", messages=[{"role": "user", "content": "Hi?"}]
+        )
+        self.assertFalse(self.chat._get_reasoning_from_request(req_default))
+
+        req_enabled = ChatCompletionRequest(
+            model="x",
+            messages=[{"role": "user", "content": "Hi?"}],
+            chat_template_kwargs={"thinking": True},
+        )
+        self.assertTrue(self.chat._get_reasoning_from_request(req_enabled))
+
+    def test_fallback_explicit_enable_thinking_mode_default_off(self):
+        self._setup_fallback("mimo")
+        req_default = ChatCompletionRequest(
+            model="x", messages=[{"role": "user", "content": "Hi?"}]
+        )
+        self.assertFalse(self.chat._get_reasoning_from_request(req_default))
+
+        req_enabled = ChatCompletionRequest(
+            model="x",
+            messages=[{"role": "user", "content": "Hi?"}],
+            chat_template_kwargs={"enable_thinking": True},
+        )
+        self.assertTrue(self.chat._get_reasoning_from_request(req_enabled))
+
+    def test_fallback_no_detector_returns_false(self):
+        self.chat.reasoning_parser = "qwen3"
+        self.chat._reasoning_detector = None
+        self.template_manager.reasoning_config = None
+        req = ChatCompletionRequest(
+            model="x", messages=[{"role": "user", "content": "Hi?"}]
+        )
+        self.assertFalse(self.chat._get_reasoning_from_request(req))
+
     def test_build_chat_response_qwen3_thinking_forces_reasoning(self):
         self.tm.server_args.reasoning_parser = "qwen3-thinking"
         self.chat.reasoning_parser = "qwen3-thinking"

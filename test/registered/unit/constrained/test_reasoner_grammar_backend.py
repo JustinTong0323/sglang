@@ -49,8 +49,12 @@ class _DummyGrammarBackend(BaseGrammarBackend):
         return None
 
     @staticmethod
-    def set_token_filter(vocab_mask, token_ids, batch_idx, is_allowed=True):
-        set_token_filter_torch(vocab_mask, token_ids, batch_idx, is_allowed)
+    def set_token_filter(
+        vocab_mask, token_ids, batch_idx, is_allowed=True, reset_vocab_mask=True
+    ):
+        set_token_filter_torch(
+            vocab_mask, token_ids, batch_idx, is_allowed, reset_vocab_mask
+        )
 
     def _init_value_dispatch(self, key, reasoning):
         return self._dispatch_result
