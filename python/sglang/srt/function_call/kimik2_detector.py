@@ -35,11 +35,16 @@ class KimiK2Detector(BaseFormatDetector):
     """
     Detector for Kimi K2 / K2.5 model function call format.
 
-    Format Structure:
+    Format Structure (standard):
     ```
     <|tool_calls_section_begin|>
     <|tool_call_begin|>functions.{func_name}:{index}<|tool_call_argument_begin|>{json_args}<|tool_call_end|>
     <|tool_calls_section_end|>
+    ```
+
+    Format Structure (bare counter — model omits function name):
+    ```
+    <|tool_call_begin|>{counter}<|tool_call_argument_begin|>{json_args}<|tool_call_end|>
     ```
 
     Reference: https://huggingface.co/moonshotai/Kimi-K2-Instruct/blob/main/docs/tool_call_guidance.md
@@ -116,20 +121,18 @@ class KimiK2Detector(BaseFormatDetector):
 
         if not function_args:
             logger.debug(
-                "No function_args for tool name inference, defaulting to: %s",
-                tools[0].function.name,
+                "No function_args for tool name inference with %d tools", len(tools)
             )
-            return tools[0].function.name
+            return None
 
         try:
             arg_keys = set(json.loads(function_args).keys())
         except (json.JSONDecodeError, TypeError):
             logger.debug(
                 "Could not parse function_args for tool name inference "
-                "(may be partial JSON in streaming), defaulting to: %s",
-                tools[0].function.name,
+                "(may be partial JSON in streaming)"
             )
-            return tools[0].function.name
+            return None
 
         # Pick the tool whose properties best match the argument keys.
         best_name = None
@@ -139,7 +142,6 @@ class KimiK2Detector(BaseFormatDetector):
             props = set(params.get("properties", {}).keys())
             if not props:
                 continue
-            # Score: how many properties overlap, penalize for mismatch
             overlap = len(arg_keys & props)
             extra = len(arg_keys - props)
             score = overlap - extra
@@ -147,7 +149,7 @@ class KimiK2Detector(BaseFormatDetector):
                 best_score = score
                 best_name = tool.function.name
 
-        return best_name or tools[0].function.name
+        return best_name
 
     def has_tool_call(self, text: str) -> bool:
         """Check if the text contains a KimiK2 format tool call."""
@@ -191,8 +193,7 @@ class KimiK2Detector(BaseFormatDetector):
             return StreamingParseResult(normal_text=content, calls=tool_calls)
 
         except Exception as e:
-            logger.error(f"Error in detect_and_parse: {e}")
-            # return the normal text if parsing fails
+            logger.error("Error in detect_and_parse: %s", e, exc_info=True)
             return StreamingParseResult(normal_text=text)
 
     def parse_streaming_increment(
@@ -317,7 +318,7 @@ class KimiK2Detector(BaseFormatDetector):
             return StreamingParseResult(normal_text="", calls=calls)
 
         except Exception as e:
-            logger.error(f"Error in parse_streaming_increment: {e}")
+            logger.error("Error in parse_streaming_increment: %s", e, exc_info=True)
             return StreamingParseResult(normal_text=_strip_special_tokens(current_text))
 
     def structure_info(self) -> _GetInfoFunc:

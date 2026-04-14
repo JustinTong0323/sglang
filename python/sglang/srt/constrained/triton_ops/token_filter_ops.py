@@ -65,8 +65,8 @@ def set_token_filter_batch_kernel(
 ):
     """Set or clear specific tokens in the vocab mask for a batch.
 
-    This kernel handles the case where num_elements may be different from
-    num_tokens // 32.
+    Each token ID maps to a specific bit in the int32 bitmask array.
+    The kernel sets or clears those bits using atomic operations.
 
     Parameters
     ----------

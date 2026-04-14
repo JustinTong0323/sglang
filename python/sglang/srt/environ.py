@@ -488,7 +488,7 @@ class Envs:
     # Tool-Call behavior
     SGLANG_TOOL_STRICT_LEVEL = EnvInt(ToolStrictLevel.OFF)
 
-    # Think tokens budget: -1 means unlimited, >= 0 caps thinking tokens
+    # Think tokens budget: negative means unlimited, >= 0 caps thinking tokens
     SGLANG_MAX_THINK_TOKENS = EnvInt(-1)
 
     # Ngram

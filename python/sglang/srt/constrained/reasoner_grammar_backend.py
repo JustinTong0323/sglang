@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 class ReasonerGrammarObject(BaseGrammarObject):
     """Wraps a grammar object to handle reasoning (think/generation) phases.
 
-    Two-state machine:
+    State machine (must call maybe_init_reasoning before use):
       THINKING (tokens_in_think >= 0, tokens_after_end == -1)
         -> grammar not consulted, optional token filtering
       GENERATION (tokens_after_end >= 0)
@@ -42,6 +42,8 @@ class ReasonerGrammarObject(BaseGrammarObject):
 
     When enable_token_filter=True (strict mode), fill_vocab_mask filters
     excluded tokens during THINKING and enforces max_think_tokens budget.
+    When the budget is exhausted, only think_end_id is allowed, forcing the
+    model to exit the thinking phase.
     When enable_token_filter=False (non-strict mode), fill_vocab_mask is
     a no-op during THINKING.
     """

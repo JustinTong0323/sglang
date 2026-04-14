@@ -11,11 +11,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Torch fallback for token filter operations (CPU and HIP).
+"""Torch fallback for token filter operations (non-CUDA devices and HIP).
 
 Sets or clears specific bits in an int32 bitmask by token ID.  The token list
-is typically tiny (< 10 entries), so a simple Python loop is both correct and
-efficient enough for this fallback path.
+is typically tiny (< 10 entries); aggregation is done in Python with the actual
+bitmask operations using torch tensor indexing.
 """
 
 import ctypes

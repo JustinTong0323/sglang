@@ -27,9 +27,9 @@ from sglang.srt.managers.template_detection import (
     REASONING_PARSER_RULES,
     TOOL_CALL_PARSER_RULES,
     ReasoningToggleConfig,
-    _build_context,
-    _match_rules,
+    build_detection_context,
     detect_reasoning_pattern,
+    match_rules,
 )
 from sglang.srt.managers.tokenizer_manager import TokenizerManager
 from sglang.srt.parser.code_completion_parser import (
@@ -116,15 +116,15 @@ class TemplateManager:
         )
         # Build context once, reuse for both parser detections (avoids
         # duplicate tokenizer.get_vocab() calls).
-        ctx = _build_context(
+        ctx = build_detection_context(
             template, tokenizer, self._reasoning_config, self._force_reasoning
         )
         if ctx is None:
             return
-        self._suggested_reasoning_parser = _match_rules(
+        self._suggested_reasoning_parser = match_rules(
             ctx, REASONING_PARSER_RULES, "reasoning parser"
         )
-        self._suggested_tool_call_parser = _match_rules(
+        self._suggested_tool_call_parser = match_rules(
             ctx, TOOL_CALL_PARSER_RULES, "tool-call parser"
         )
 

@@ -594,7 +594,7 @@ class OpenAIServingChat(OpenAIServingBase):
                 self._reasoning_detector is None
                 or not self._reasoning_detector.thinks_internally
             ):
-                # qwen3 and glm4 think internally without a leading <think> token
+                # Models with thinks_internally=True think without a leading <think> token
                 prompt += "<think>"  # Note(Xinyuan): hard code thinking token
 
         image_data = conv.image_data if conv.image_data else None
@@ -1345,9 +1345,10 @@ class OpenAIServingChat(OpenAIServingBase):
                     and request.chat_template_kwargs.get(toggle) is True
                 )
             logger.warning(
-                f"Unknown reasoning_default mode: {mode}, defaulting to always-on"
+                "Unknown reasoning_default mode '%s', defaulting to reasoning disabled",
+                mode,
             )
-            return True
+            return False
 
         if config.special_case == "always":
             return True

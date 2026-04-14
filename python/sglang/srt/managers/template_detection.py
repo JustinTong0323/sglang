@@ -280,7 +280,7 @@ TOOL_CALL_PARSER_RULES = (
 # ---------------------------------------------------------------------------
 
 
-def _build_context(
+def build_detection_context(
     template: Optional[str],
     tokenizer,
     reasoning_config: Optional[ReasoningToggleConfig] = None,
@@ -306,7 +306,7 @@ def _build_context(
     )
 
 
-def _match_rules(
+def match_rules(
     ctx: TemplateDetectionContext,
     rules: Tuple[DetectionRule, ...],
     label: str,
@@ -327,6 +327,7 @@ def _match_rules(
                 rule.name,
                 label,
                 e,
+                exc_info=True,
             )
     return None
 
@@ -363,10 +364,12 @@ def detect_reasoning_parser(
     force_reasoning: bool = False,
 ) -> Optional[str]:
     """Auto-detect which reasoning parser to use from the chat template."""
-    ctx = _build_context(template, tokenizer, reasoning_config, force_reasoning)
+    ctx = build_detection_context(
+        template, tokenizer, reasoning_config, force_reasoning
+    )
     if ctx is None:
         return None
-    return _match_rules(ctx, REASONING_PARSER_RULES, "reasoning parser")
+    return match_rules(ctx, REASONING_PARSER_RULES, "reasoning parser")
 
 
 def detect_tool_call_parser(
@@ -376,10 +379,12 @@ def detect_tool_call_parser(
     force_reasoning: bool = False,
 ) -> Optional[str]:
     """Auto-detect which tool-call parser to use from the chat template."""
-    ctx = _build_context(template, tokenizer, reasoning_config, force_reasoning)
+    ctx = build_detection_context(
+        template, tokenizer, reasoning_config, force_reasoning
+    )
     if ctx is None:
         return None
-    return _match_rules(ctx, TOOL_CALL_PARSER_RULES, "tool-call parser")
+    return match_rules(ctx, TOOL_CALL_PARSER_RULES, "tool-call parser")
 
 
 def _resolve_auto_parser(
@@ -390,7 +395,7 @@ def _resolve_auto_parser(
     label: str,
 ) -> None:
     """Resolve a single auto parser, updating server_args in place."""
-    detected = _match_rules(ctx, rules, label)
+    detected = match_rules(ctx, rules, label)
     if detected:
         setattr(server_args, attr, detected)
         logger.info(
@@ -441,7 +446,9 @@ def resolve_auto_parsers(server_args) -> None:
         return
 
     force_reasoning, reasoning_config = detect_reasoning_pattern(template)
-    ctx = _build_context(template, tokenizer, reasoning_config, force_reasoning)
+    ctx = build_detection_context(
+        template, tokenizer, reasoning_config, force_reasoning
+    )
     if ctx is None:
         return
 
