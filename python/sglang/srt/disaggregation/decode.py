@@ -438,7 +438,10 @@ class DecodePreallocQueue:
         if prefill_info.dp_size == 1:
             return 0
 
-        if prefill_info.follow_bootstrap_room:
+        if (
+            prefill_info.follow_bootstrap_room
+            and not envs.SGLANG_DISAGGREGATION_FORCE_QUERY_PREFILL_DP_RANK.get()
+        ):
             return req.bootstrap_room % prefill_info.dp_size
 
         return None
@@ -1178,8 +1181,9 @@ class SchedulerDisaggregationDecodeMixin:
             # Receive requests
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
-            # polling and allocating kv cache
             self.process_decode_queue()
+            if self._engine_paused:
+                continue
 
             # Get the next batch to run
             batch = self.get_next_disagg_decode_batch_to_run()
@@ -1191,7 +1195,7 @@ class SchedulerDisaggregationDecodeMixin:
                 self.process_batch_result(batch, result)
             else:
                 # When the server is idle, do self-check and re-init some states
-                self.self_check_during_idle()
+                self.on_idle()
 
             # Update last_batch
             self.last_batch = batch
@@ -1205,8 +1209,9 @@ class SchedulerDisaggregationDecodeMixin:
             # Receive requests
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
-            # polling and allocating kv cache
             self.process_decode_queue()
+            if self._engine_paused:
+                continue
 
             # Get the next batch to run
             batch = self.get_next_disagg_decode_batch_to_run()
@@ -1224,7 +1229,7 @@ class SchedulerDisaggregationDecodeMixin:
                 tmp_batch, tmp_result = self.result_queue.popleft()
                 self.process_batch_result(tmp_batch, tmp_result)
             elif batch is None:
-                self.self_check_during_idle()
+                self.on_idle()
 
             # Run sample of the current batch
             # It depends on the result of the last batch (e.g., grammar), so we run it after the last batch is processed.
