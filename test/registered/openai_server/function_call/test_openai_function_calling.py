@@ -480,7 +480,9 @@ class TestOpenAIServerFunctionCalling(CustomTestCase):
         )
 
         tool_calls = response.choices[0].message.tool_calls
-        self.assertIsNotNone(tool_calls, "tool_choice='required' must produce tool_calls")
+        self.assertIsNotNone(
+            tool_calls, "tool_choice='required' must produce tool_calls"
+        )
         self.assertGreater(len(tool_calls), 0, "tool_calls list should be non-empty")
 
         function_name = tool_calls[0].function.name
@@ -493,7 +495,9 @@ class TestOpenAIServerFunctionCalling(CustomTestCase):
         # Verify the arguments are parseable JSON
         arguments = tool_calls[0].function.arguments
         args_obj = json.loads(arguments)
-        self.assertIsInstance(args_obj, dict, "Function arguments should be a JSON object")
+        self.assertIsInstance(
+            args_obj, dict, "Function arguments should be a JSON object"
+        )
 
     def test_function_call_specific(self):
         """
