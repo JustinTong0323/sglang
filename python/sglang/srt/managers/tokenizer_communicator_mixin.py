@@ -1075,27 +1075,20 @@ class TokenizerCommunicatorMixin:
                     "Streaming sessions are disabled. "
                     "Please relaunch with --enable-streaming-session."
                 )
-            if (
-                self.server_args.speculative_algorithm is not None
-                and not self.server_args.disable_overlap_schedule
-            ):
-                raise ValueError(
-                    "Streaming sessions are incompatible with speculative decoding v2 "
-                    "(overlap + speculative). Use --disable-overlap-schedule or "
-                    "disable speculative decoding."
-                )
 
         if obj.session_id is None:
             obj.session_id = uuid.uuid4().hex
         elif obj.session_id in self.session_futures:
             return None
 
+        future = asyncio.Future()
+        self.session_futures[obj.session_id] = future
         self.send_to_scheduler.send_pyobj(obj)
 
-        self.session_futures[obj.session_id] = asyncio.Future()
-        session_id = await self.session_futures[obj.session_id]
-        del self.session_futures[obj.session_id]
-        return session_id
+        try:
+            return await future
+        finally:
+            self.session_futures.pop(obj.session_id, None)
 
     async def close_session(
         self: TokenizerManager,
