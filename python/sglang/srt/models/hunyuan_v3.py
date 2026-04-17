@@ -104,7 +104,7 @@ class HYV3MoEFused(nn.Module):
         self.alt_stream = alt_stream
         self.n_routed_experts = config.num_experts
         top_k = config.num_experts_per_tok
-        intermediate_size = config.expert_hidden_dim
+        intermediate_size = config.moe_intermediate_size
 
         self.expert_bias = nn.Parameter(torch.empty(config.num_experts, dtype=torch.float32))
         self.expert_bias.weight_loader = (
@@ -136,10 +136,10 @@ class HYV3MoEFused(nn.Module):
         if getattr(config, "num_shared_experts", 0) > 0:
             self.shared_mlp = HYV3FeedForward(
                 hidden_size=config.hidden_size,
-                intermediate_size=config.expert_hidden_dim * config.num_shared_experts,
+                intermediate_size=config.moe_intermediate_size * config.num_shared_experts,
                 hidden_act=config.hidden_act,
                 quant_config=quant_config,
-                prefix=f"{prefix}",
+                prefix=f"{prefix}.shared_mlp",
                 reduce_results=False,
             )
         else:
@@ -258,7 +258,7 @@ class HYV3Attention(nn.Module):
         self.q_size = self.num_heads * self.head_dim
         self.kv_size = self.num_kv_heads * self.head_dim
         self.scaling = self.head_dim**-0.5
-        self.use_qk_norm = getattr(config, "qk_norm", False)
+        self.use_qk_norm = getattr(config, "use_qk_norm", getattr(config, "qk_norm", False))
 
         self.qkv_proj = QKVParallelLinear(
             hidden_size,
