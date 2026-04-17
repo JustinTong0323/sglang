@@ -1,7 +1,6 @@
 from typing import List, Union
 
 from sglang.srt.layers.rotary_embedding import MRotaryEmbedding
-from sglang.srt.managers.schedule_batch import MultimodalProcessorOutput
 from sglang.srt.models.glm4v import Glm4vForConditionalGeneration
 from sglang.srt.models.glm4v_moe import Glm4vMoeForConditionalGeneration
 from sglang.srt.multimodal.processors.base_processor import (
@@ -113,11 +112,13 @@ class Glm4vImageProcessor(SGLangBaseProcessor):
         )
         mrope_positions = mrope_positions.squeeze(1)
 
-        return MultimodalProcessorOutput(
-            input_ids=input_ids.tolist(),
-            mm_items=mm_items,
-            im_token_id=self.mm_tokens.image_token_id,
-            video_token_id=self.mm_tokens.video_token_id,
-            mrope_positions=mrope_positions,
-            mrope_position_delta=mrope_position_delta,
-        )
+        mm_inputs = {
+            "input_ids": input_ids.tolist(),
+            "mm_items": mm_items,
+            "im_token_id": self.mm_tokens.image_token_id,
+            "video_token_id": self.mm_tokens.video_token_id,
+            "mrope_positions": mrope_positions,
+            "mrope_position_delta": mrope_position_delta,
+        }
+
+        return mm_inputs

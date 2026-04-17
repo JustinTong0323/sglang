@@ -3,10 +3,7 @@ from typing import Dict, List, Tuple, Union
 
 import torch
 
-from sglang.srt.managers.schedule_batch import (
-    MultimodalDataItem,
-    MultimodalProcessorOutput,
-)
+from sglang.srt.managers.schedule_batch import MultimodalDataItem
 from sglang.srt.models.kimi_k25 import KimiK25ForConditionalGeneration
 from sglang.srt.multimodal.processors.base_processor import (
     BaseMultimodalProcessor as SGLangBaseProcessor,
@@ -19,7 +16,6 @@ from sglang.srt.multimodal.processors.base_processor import (
 # Compatible with KimiVLForConditionalGeneration
 class KimiK2_5VLImageProcessor(SGLangBaseProcessor):
     models = [KimiK25ForConditionalGeneration]
-    gpu_image_decode = False  # KimiK2.5VL HF processor does not support tensor inputs
 
     def __init__(self, hf_config, server_args, _processor, *args, **kwargs):
         super().__init__(hf_config, server_args, _processor, *args, **kwargs)
@@ -49,11 +45,11 @@ class KimiK2_5VLImageProcessor(SGLangBaseProcessor):
             base_output, self.mm_tokens
         )
 
-        return MultimodalProcessorOutput(
-            input_ids=input_ids.tolist(),
-            mm_items=mm_items,
-            im_token_id=self.mm_tokens.image_token_id,
-        )
+        return {
+            "input_ids": input_ids.tolist(),
+            "mm_items": mm_items,
+            "im_token_id": self.mm_tokens.image_token_id,
+        }
 
     def _process_and_collect_mm_items(
         self, input_text: str, images=None, audios=None, videos=None, **kwargs

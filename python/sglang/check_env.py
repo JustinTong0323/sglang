@@ -194,12 +194,22 @@ class GPUEnv(BaseEnv):
         """
         Get CUDA driver version.
         """
-        from sglang.srt.utils.common import get_nvidia_driver_version_str
-
-        ver = get_nvidia_driver_version_str()
-        if ver is None:
+        versions = set()
+        try:
+            output = subprocess.check_output(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=driver_version",
+                    "--format=csv,noheader,nounits",
+                ]
+            )
+            versions = set(output.decode().strip().split("\n"))
+            if len(versions) == 1:
+                return {"CUDA Driver Version": versions.pop()}
+            else:
+                return {"CUDA Driver Versions": ", ".join(sorted(versions))}
+        except subprocess.SubprocessError:
             return {"CUDA Driver Version": "Not Available"}
-        return {"CUDA Driver Version": ver}
 
     def get_topology(self):
         """

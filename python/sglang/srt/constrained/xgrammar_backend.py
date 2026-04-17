@@ -313,7 +313,6 @@ class XGrammarGrammarBackend(BaseGrammarBackend):
         )
 
     def reset(self):
-        super().reset()
         self.grammar_compiler.clear_cache()
 
 

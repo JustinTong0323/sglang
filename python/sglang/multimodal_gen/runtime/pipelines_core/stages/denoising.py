@@ -21,10 +21,6 @@ from tqdm.auto import tqdm
 
 from sglang.multimodal_gen import envs
 from sglang.multimodal_gen.configs.pipeline_configs.base import ModelTaskType, STA_Mode
-from sglang.multimodal_gen.configs.pipeline_configs.flux import (
-    Flux2PipelineConfig,
-    FluxPipelineConfig,
-)
 from sglang.multimodal_gen.configs.pipeline_configs.wan import (
     Wan2_2_TI2V_5B_Config,
 )
@@ -357,15 +353,14 @@ class DenoisingStage(PipelineStage):
     @lru_cache(maxsize=8)
     def _build_guidance(self, batch_size, target_dtype, device, guidance_val):
         """Builds a guidance tensor. This method is cached."""
-        if isinstance(
-            self.server_args.pipeline_config, FluxPipelineConfig
-        ) and not isinstance(self.server_args.pipeline_config, Flux2PipelineConfig):
-            guidance_val = guidance_val * 1000.0
-        return torch.full(
-            (batch_size,),
-            guidance_val,
-            dtype=target_dtype,
-            device=device,
+        return (
+            torch.full(
+                (batch_size,),
+                guidance_val,
+                dtype=target_dtype,
+                device=device,
+            )
+            * 1000.0
         )
 
     def get_or_build_guidance(self, bsz: int, dtype, device):
@@ -715,8 +710,6 @@ class DenoisingStage(PipelineStage):
         trajectory_timesteps: list,
         server_args: ServerArgs,
         is_warmup: bool = False,
-        *args,
-        **kwargs,
     ):
         # Gather results if using sequence parallelism
         if trajectory_latents:
@@ -1032,7 +1025,6 @@ class DenoisingStage(PipelineStage):
                         logger=logger,
                         metrics=batch.metrics,
                         perf_dump_path_provided=batch.perf_dump_path is not None,
-                        record_as_step=True,
                     ):
                         t_int = int(t_host.item())
                         t_device = timesteps[i]

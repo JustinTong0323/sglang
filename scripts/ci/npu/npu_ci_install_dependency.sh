@@ -19,8 +19,6 @@ apt update -y && apt install -y \
     clang \
     locales \
     ccache \
-    libgl1-mesa-glx \
-    libgl1-mesa-dri \
     ca-certificates \
     libgl1 \
     libglib2.0-0

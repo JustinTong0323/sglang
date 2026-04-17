@@ -51,11 +51,8 @@ def make_inputs(
         b = torch.randn(B, HV, device=device, dtype=dtype)
 
         # prefill params for chunk_kda must keep batch dim = 1
-        # chunk_kda requires g, beta, v to have the same head count as k (H),
-        # matching the real KimiLinear model where num_heads == num_kv_heads.
-        prefill_v = torch.randn(1, B, H, V, device=device, dtype=dtype)
-        prefill_g = torch.randn(1, B, H, K, device=device, dtype=dtype)
-        prefill_beta = torch.sigmoid(torch.randn(1, B, H, device=device, dtype=dtype))
+        prefill_g = torch.randn(1, B, HV, K, device=device, dtype=dtype)
+        prefill_beta = torch.sigmoid(torch.randn(1, B, HV, device=device, dtype=dtype))
 
         cu_seqlens = torch.arange(B + 1, device=device, dtype=torch.int32)
 
@@ -69,11 +66,8 @@ def make_inputs(
         b = torch.randn(B, 1, HV, device=device, dtype=dtype)
 
         # prefill params for chunk_kda dense path
-        # chunk_kda requires g, beta, v to have the same head count as k (H),
-        # matching the real KimiLinear model where num_heads == num_kv_heads.
-        prefill_v = torch.randn(B, 1, H, V, device=device, dtype=dtype)
-        prefill_g = torch.randn(B, 1, H, K, device=device, dtype=dtype)
-        prefill_beta = torch.sigmoid(torch.randn(B, 1, H, device=device, dtype=dtype))
+        prefill_g = torch.randn(B, 1, HV, K, device=device, dtype=dtype)
+        prefill_beta = torch.sigmoid(torch.randn(B, 1, HV, device=device, dtype=dtype))
 
         cu_seqlens = torch.arange(B + 1, device=device, dtype=torch.int32)
     else:
@@ -100,7 +94,6 @@ def make_inputs(
         v=v,
         a=a,
         b=b,
-        prefill_v=prefill_v,
         prefill_g=prefill_g,
         prefill_beta=prefill_beta,
         A_log=A_log,
@@ -154,13 +147,12 @@ def run_cutedsl(inp):
 
 def run_prefill_then_decode_baseline(inp):
     ssm_states = inp["ssm_states"].clone()
-    prefill_v_clone = inp["prefill_v"].clone()
     v_clone = inp["v"].clone()
 
     _ = chunk_kda(
         q=inp["q"],
         k=inp["k"],
-        v=prefill_v_clone,
+        v=v_clone,
         g=inp["prefill_g"],
         beta=inp["prefill_beta"],
         initial_state=ssm_states,
@@ -190,13 +182,12 @@ def run_prefill_then_decode_baseline(inp):
 
 def run_prefill_then_decode_cutedsl(inp):
     ssm_states = inp["ssm_states"].clone()
-    prefill_v_clone = inp["prefill_v"].clone()
     v_clone = inp["v"].clone()
 
     _ = chunk_kda(
         q=inp["q"],
         k=inp["k"],
-        v=prefill_v_clone,
+        v=v_clone,
         g=inp["prefill_g"],
         beta=inp["prefill_beta"],
         initial_state=ssm_states,

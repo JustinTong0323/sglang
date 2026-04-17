@@ -1,7 +1,6 @@
 import re
 from typing import Dict, List, Union
 
-from sglang.srt.managers.schedule_batch import MultimodalProcessorOutput
 from sglang.srt.models.kimi_vl import KimiVLForConditionalGeneration
 from sglang.srt.multimodal.processors.base_processor import (
     BaseMultimodalProcessor as SGLangBaseProcessor,
@@ -14,7 +13,6 @@ from sglang.srt.multimodal.processors.base_processor import (
 # Compatible with KimiVLForConditionalGeneration
 class KimiVLImageProcessor(SGLangBaseProcessor):
     models = [KimiVLForConditionalGeneration]
-    gpu_image_decode = False  # KimiVL HF processor does not support tensor inputs
 
     def __init__(self, hf_config, server_args, _processor, *args, **kwargs):
         super().__init__(hf_config, server_args, _processor, *args, **kwargs)
@@ -43,8 +41,8 @@ class KimiVLImageProcessor(SGLangBaseProcessor):
             base_output, self.mm_tokens
         )
 
-        return MultimodalProcessorOutput(
-            input_ids=input_ids.tolist(),
-            mm_items=mm_items,
-            im_token_id=self.mm_tokens.image_token_id,
-        )
+        return {
+            "input_ids": input_ids.tolist(),
+            "mm_items": mm_items,
+            "im_token_id": self.mm_tokens.image_token_id,
+        }

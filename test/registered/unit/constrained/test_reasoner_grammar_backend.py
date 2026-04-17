@@ -26,7 +26,7 @@ from sglang.srt.constrained.reasoner_grammar_backend import (
 )
 from sglang.test.ci.ci_register import register_cpu_ci
 
-register_cpu_ci(2.0, "stage-a-test-cpu")
+register_cpu_ci(2.0, "stage-a-cpu-only")
 
 THINK_END_ID = 99
 

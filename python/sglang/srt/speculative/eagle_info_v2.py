@@ -234,12 +234,14 @@ class EagleVerifyInputV2Mixin:
 
             # Set mamba_track_indices for mamba prefix-cache state tracking
             if get_global_server_args().enable_mamba_extra_buffer():
-                batch.mamba_track_indices = torch.stack(
+                batch.mamba_track_indices = torch.tensor(
                     [
                         req.mamba_ping_pong_track_buffer[req.mamba_next_track_idx]
                         for req in batch.reqs
-                    ]
-                ).to(torch.int64)
+                    ],
+                    dtype=torch.int64,
+                    device=device,
+                )
                 batch.mamba_track_mask = None
                 batch.mamba_track_seqlens = None
 

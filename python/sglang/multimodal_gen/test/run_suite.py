@@ -28,21 +28,15 @@ _UPDATE_WEIGHTS_MODEL_PAIR_IDS = (
     "Qwen-Image",
 )
 
-
-def _discover_unit_tests() -> list[str]:
-    """Auto-discover all test_*.py files in the unit/ directory."""
-    unit_dir = Path(__file__).resolve().parent / "unit"
-    if not unit_dir.is_dir():
-        return []
-    return sorted(
-        f"../unit/{f.name}" for f in unit_dir.glob("test_*.py") if f.is_file()
-    )
-
-
 SUITES = {
     # no GPU required; safe to run on any CPU-only runner
-    # Auto-discovered from test/unit/test_*.py
-    "unit": _discover_unit_tests(),
+    "unit": [
+        "../unit/test_sampling_params.py",
+        "../unit/test_storage.py",
+        "../unit/test_lora_format_adapter.py",
+        "../unit/test_server_args.py",
+        # add new unit tests here
+    ],
     "1-gpu": [
         "test_server_a.py",
         "test_server_b.py",
@@ -55,9 +49,6 @@ SUITES = {
         "test_server_2_gpu_a.py",
         "test_server_2_gpu_b.py",
         # add new 2-gpu test files here
-    ],
-    "1-gpu-b200": [
-        "test_server_c.py",
     ],
 }
 
@@ -87,7 +78,7 @@ def parse_args():
         type=str,
         required=True,
         choices=list(SUITES.keys()),
-        help="The test suite to run (valid names are defined in SUITES)",
+        help="The test suite to run (e.g., 1-gpu, 2-gpu)",
     )
     parser.add_argument(
         "--partition-id",
@@ -174,14 +165,12 @@ def collect_test_items(files, filter_expr=None):
     return test_items
 
 
-def run_pytest(files, filter_expr=None, exitfirst=False):
+def run_pytest(files, filter_expr=None):
     if not files:
         print("No files to run.")
         return 0
 
     base_cmd = [sys.executable, "-m", "pytest", "-s", "-v"]
-    if exitfirst:
-        base_cmd.append("-x")
 
     # Add pytest -k filter if provided
     if filter_expr:
@@ -244,9 +233,7 @@ def run_pytest(files, filter_expr=None, exitfirst=False):
         )
 
         is_flaky_ci_assertion = (
-            "SafetensorError" in full_output
-            or "FileNotFoundError" in full_output
-            or "TimeoutError" in full_output
+            "SafetensorError" in full_output or "FileNotFoundError" in full_output
         )
 
         is_oom_error = (
@@ -351,8 +338,7 @@ def main():
     print(f"Running {len(my_items)} items in this shard: {', '.join(my_items)}")
 
     # 4. execute with the specific test items
-    # Fast-fail: stop on first failure unless --continue-on-error is set
-    exit_code = run_pytest(my_items, exitfirst=not args.continue_on_error)
+    exit_code = run_pytest(my_items)
 
     # Print tests again at the end for visibility
     msg = "\n" + tabulate.tabulate(rows, headers=headers, tablefmt="psql") + "\n"

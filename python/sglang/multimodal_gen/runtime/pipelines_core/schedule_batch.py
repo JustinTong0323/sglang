@@ -135,7 +135,7 @@ class Req:
     trajectory_latents: torch.Tensor | None = None
     trajectory_audio_latents: torch.Tensor | None = None
 
-    # Extra parameters that might be needed by specific pipeline implementations (e.g., LTX2.3 DenoisingAVStage)
+    # Extra parameters that might be needed by specific pipeline implementations
     extra: dict[str, Any] = field(default_factory=dict)
 
     is_warmup: bool = False

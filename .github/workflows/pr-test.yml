@@ -88,8 +88,6 @@ jobs:
       jit_kernel: ${{ steps.filter-api.outputs.jit_kernel || steps.filter.outputs.jit_kernel || steps.run-mode.outputs.run_all_tests }}
       multimodal_gen: ${{ steps.filter-api.outputs.multimodal_gen || steps.filter.outputs.multimodal_gen || steps.run-mode.outputs.run_all_tests }}
       max_parallel: ${{ steps.set-parallel.outputs.max_parallel }}
-      max_parallel_small: ${{ steps.set-parallel.outputs.max_parallel_small }}
-      max_parallel_2gpu: ${{ steps.set-parallel.outputs.max_parallel_2gpu }}
       b200_runner: ${{ steps.set-runner.outputs.b200_runner }}
       enable_retry: ${{ steps.set-retry.outputs.enable_retry }}
       continue_on_error: ${{ steps.set-continue-on-error.outputs.continue_on_error }}
@@ -127,10 +125,10 @@ jobs:
               - ".github/workflows/pr-gate.yml"
               - ".github/actions/**"
               - "python/pyproject.toml"
-              - "python/sglang/!(multimodal_gen)/**/!(*.md)"
+              - "python/sglang/!(multimodal_gen)/**"
               - "scripts/ci/cuda/*"
               - "scripts/ci/utils/*"
-              - "test/**/!(*.md)"
+              - "test/**"
             multimodal_gen:
               - ".github/workflows/pr-test.yml"
               - ".github/workflows/pr-test-multimodal-gen.yml"
@@ -147,7 +145,7 @@ jobs:
               - "python/sglang/jit_kernel/**"
             sgl_kernel:
               - ".github/workflows/pr-test-sgl-kernel.yml"
-              - "sgl-kernel/**/*.!(md|txt)"
+              - "sgl-kernel/**"
 
       # For /rerun-stage (workflow_dispatch with target_stage), dorny/paths-filter doesn't work
       # correctly because it falls back to "last commit" detection which breaks for merge commits.
@@ -218,14 +216,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Determine if this run gets full parallelism (scheduled / high priority)
-          FULL=false
+          # Scheduled runs and high-priority PRs get full parallelism
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            FULL=true
-            echo "Scheduled run detected, using full parallelism"
+            echo "max_parallel=14" >> $GITHUB_OUTPUT
+            echo "Scheduled run detected, setting max_parallel to 14"
           elif [[ "${{ github.event_name }}" == "pull_request" && "${{ contains(github.event.pull_request.labels.*.name, 'high priority') }}" == "true" ]]; then
-            FULL=true
-            echo "High priority PR detected, using full parallelism"
+            echo "max_parallel=14" >> $GITHUB_OUTPUT
+            echo "High priority PR detected, setting max_parallel to 14"
           elif [[ -n "${{ inputs.target_stage }}" ]]; then
             # /rerun-stage (workflow_dispatch): query PR labels via GitHub API
             # Try SHA lookup first (fork PRs), fallback to branch name (non-fork PRs)
@@ -241,26 +238,16 @@ jobs:
             fi
             echo "PR labels: ${LABELS:-"(none)"}"
             if echo "$LABELS" | grep -Fxq "high priority"; then
-              FULL=true
-              echo "High priority PR detected via API (/rerun-stage), using full parallelism"
+              echo "max_parallel=14" >> $GITHUB_OUTPUT
+              echo "High priority PR detected via API (/rerun-stage), setting max_parallel to 14"
+            else
+              echo "max_parallel=3" >> $GITHUB_OUTPUT
+              echo "Using default max_parallel of 3 (/rerun-stage, no high priority label)"
             fi
-          fi
-
-          # Set max-parallel for each runner type
-          #   1-gpu-h100: 14 partitions, 1-gpu-5090: 8 partitions, 2-gpu-h100: 4 partitions
-          if [[ "$FULL" == "true" ]]; then
-            LEVEL=full
-            echo "max_parallel=14" >> $GITHUB_OUTPUT
-            echo "max_parallel_small=8" >> $GITHUB_OUTPUT
-            echo "max_parallel_2gpu=4" >> $GITHUB_OUTPUT
           else
-            LEVEL=low
             echo "max_parallel=3" >> $GITHUB_OUTPUT
-            echo "max_parallel_small=3" >> $GITHUB_OUTPUT
-            echo "max_parallel_2gpu=2" >> $GITHUB_OUTPUT
+            echo "Using default max_parallel of 3"
           fi
-          echo "parallel_level=$LEVEL" >> $GITHUB_OUTPUT
-          echo "Parallelism level: $LEVEL"
 
       - name: Set B200 runner tag
         id: set-runner
@@ -327,7 +314,7 @@ jobs:
             echo "| multimodal_gen    | ${{ steps.filter-api.outputs.multimodal_gen || steps.filter.outputs.multimodal_gen || steps.run-mode.outputs.run_all_tests }} |"
             echo "| target_stage      | ${{ inputs.target_stage || '(none)' }} |"
             echo "| detection_method  | ${{ inputs.target_stage && 'GitHub API' || 'dorny/paths-filter' }} |"
-            echo "| max_parallel      | ${{ steps.set-parallel.outputs.parallel_level }} (h100=${{ steps.set-parallel.outputs.max_parallel }}, 5090=${{ steps.set-parallel.outputs.max_parallel_small }}, 2gpu=${{ steps.set-parallel.outputs.max_parallel_2gpu }}) |"
+            echo "| max_parallel      | ${{ steps.set-parallel.outputs.max_parallel }} |"
             echo "| b200_runner       | ${{ steps.set-runner.outputs.b200_runner }} |"
             echo "| enable_retry      | ${{ steps.set-retry.outputs.enable_retry }} |"
             echo "| continue_on_error | ${{ steps.set-continue-on-error.outputs.continue_on_error }} |"
@@ -602,7 +589,7 @@ jobs:
           python3 run_suite.py --hw cuda --suite stage-a-test-1-gpu-small $CONTINUE_ON_ERROR_FLAG
 
       - uses: ./.github/actions/upload-cuda-coredumps
-        if: failure()
+        if: always()
 
   stage-a-test-cpu:
     needs: [check-changes, call-gate]
@@ -674,7 +661,7 @@ jobs:
     timeout-minutes: 240
     strategy:
       fail-fast: false
-      max-parallel: ${{ fromJson(needs.check-changes.outputs.max_parallel_small) }}
+      max-parallel: 8
       matrix:
         partition: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
@@ -700,6 +687,9 @@ jobs:
         run: |
           source /etc/profile.d/sglang-ci.sh
           CUSTOM_BUILD_SGL_KERNEL=${{needs.check-changes.outputs.sgl_kernel}} bash scripts/ci/cuda/ci_install_dependency.sh
+          git clone https://github.com/merrymercy/human-eval.git
+          cd human-eval
+          pip install -e . --no-build-isolation
 
       - name: Run test
         timeout-minutes: 30
@@ -711,7 +701,7 @@ jobs:
           python3 run_suite.py --hw cuda --suite stage-b-test-1-gpu-small --auto-partition-id ${{ matrix.partition }} --auto-partition-size 8 $CONTINUE_ON_ERROR_FLAG
 
       - uses: ./.github/actions/upload-cuda-coredumps
-        if: failure()
+        if: always()
         with:
           artifact-suffix: ${{ matrix.partition }}
 
@@ -767,7 +757,7 @@ jobs:
           python3 run_suite.py --hw cuda --suite stage-b-test-1-gpu-large --auto-partition-id ${{ matrix.partition }} --auto-partition-size 14 --timeout-per-file 1800 $CONTINUE_ON_ERROR_FLAG
 
       - uses: ./.github/actions/upload-cuda-coredumps
-        if: failure()
+        if: always()
         with:
           artifact-suffix: ${{ matrix.partition }}
 
@@ -787,7 +777,6 @@ jobs:
     timeout-minutes: 240
     strategy:
       fail-fast: false
-      max-parallel: ${{ fromJson(needs.check-changes.outputs.max_parallel_2gpu) }}
       matrix:
         partition: [0, 1, 2, 3]
     steps:
@@ -812,6 +801,9 @@ jobs:
         timeout-minutes: 20
         run: |
           CUSTOM_BUILD_SGL_KERNEL=${{needs.check-changes.outputs.sgl_kernel}} bash scripts/ci/cuda/ci_install_dependency.sh
+          git clone https://github.com/merrymercy/human-eval.git
+          cd human-eval
+          pip install -e . --no-build-isolation
 
       - name: Run test
         timeout-minutes: 30
@@ -822,7 +814,7 @@ jobs:
           python3 run_suite.py --hw cuda --suite stage-b-test-2-gpu-large --auto-partition-id ${{ matrix.partition }} --auto-partition-size 4 $CONTINUE_ON_ERROR_FLAG
 
       - uses: ./.github/actions/upload-cuda-coredumps
-        if: failure()
+        if: always()
         with:
           artifact-suffix: ${{ matrix.partition }}
 
@@ -880,7 +872,7 @@ jobs:
           python3 -m pytest -q python/sglang/jit_kernel/tests/test_flash_attention_4.py
 
       - uses: ./.github/actions/upload-cuda-coredumps
-        if: failure()
+        if: always()
 
   call-multimodal-gen-tests:
     needs: [check-changes, call-gate, sgl-kernel-build-wheels]
@@ -890,7 +882,6 @@ jobs:
       (
         inputs.target_stage == 'multimodal-gen-test-1-gpu' ||
         inputs.target_stage == 'multimodal-gen-test-2-gpu' ||
-        inputs.target_stage == 'multimodal-gen-test-1-b200' ||
         inputs.target_stage == 'multimodal-gen-unit-test' ||
         (
           !inputs.target_stage &&
@@ -902,7 +893,6 @@ jobs:
     with:
       multimodal_gen: ${{ needs.check-changes.outputs.multimodal_gen }}
       sgl_kernel: ${{ needs.check-changes.outputs.sgl_kernel }}
-      b200_runner: ${{ needs.check-changes.outputs.b200_runner }}
       continue_on_error: ${{ needs.check-changes.outputs.continue_on_error }}
       pr_head_sha: ${{ inputs.pr_head_sha || '' }}
       git_ref: ${{ inputs.git_ref || '' }}
@@ -962,7 +952,7 @@ jobs:
           python3 run_suite.py --hw cuda --suite stage-c-test-4-gpu-h100 --auto-partition-id ${{ matrix.part }} --auto-partition-size 3 $CONTINUE_ON_ERROR_FLAG
 
       - uses: ./.github/actions/upload-cuda-coredumps
-        if: failure()
+        if: always()
         with:
           artifact-suffix: ${{ matrix.part }}
 
@@ -1030,7 +1020,7 @@ jobs:
           python3 run_suite.py --hw cuda --suite stage-c-test-8-gpu-h200 --auto-partition-id ${{ matrix.part }} --auto-partition-size 4 $CONTINUE_ON_ERROR_FLAG
 
       - uses: ./.github/actions/upload-cuda-coredumps
-        if: failure()
+        if: always()
         with:
           artifact-suffix: ${{ matrix.part }}
 
@@ -1086,7 +1076,7 @@ jobs:
           python3 run_suite.py --hw cuda --suite stage-c-test-8-gpu-h20 --auto-partition-id ${{ matrix.part }} --auto-partition-size 2 $CONTINUE_ON_ERROR_FLAG
 
       - uses: ./.github/actions/upload-cuda-coredumps
-        if: failure()
+        if: always()
         with:
           artifact-suffix: ${{ matrix.part }}
 
@@ -1148,7 +1138,7 @@ jobs:
           python3 run_suite.py --hw cuda --suite stage-c-test-deepep-4-gpu-h100 $CONTINUE_ON_ERROR_FLAG
 
       - uses: ./.github/actions/upload-cuda-coredumps
-        if: failure()
+        if: always()
 
   stage-c-test-deepep-8-gpu-h200:
     needs: [check-changes, call-gate, wait-for-stage-b]
@@ -1162,7 +1152,7 @@ jobs:
           ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
         )
       )
-    runs-on: 8-gpu-h200-deepep
+    runs-on: 8-gpu-h200
     timeout-minutes: 240
     steps:
       - name: Checkout code
@@ -1209,7 +1199,7 @@ jobs:
           python3 run_suite.py --hw cuda --suite stage-c-test-deepep-8-gpu-h200 $CONTINUE_ON_ERROR_FLAG
 
       - uses: ./.github/actions/upload-cuda-coredumps
-        if: failure()
+        if: always()
 
   stage-c-test-4-gpu-b200:
     needs: [check-changes, call-gate, wait-for-stage-b]
@@ -1262,7 +1252,7 @@ jobs:
           python3 run_suite.py --hw cuda --suite stage-c-test-4-gpu-b200 --auto-partition-id ${{ matrix.part }} --auto-partition-size 4 --timeout-per-file 1800 $CONTINUE_ON_ERROR_FLAG
 
       - uses: ./.github/actions/upload-cuda-coredumps
-        if: failure()
+        if: always()
         with:
           artifact-suffix: ${{ matrix.part }}
 
@@ -1316,7 +1306,7 @@ jobs:
   #         python3 run_suite.py --hw cuda --suite stage-c-test-4-gpu-gb200 --timeout-per-file 3600 $CONTINUE_ON_ERROR_FLAG
   #
   #     - uses: ./.github/actions/upload-cuda-coredumps
-  #       if: failure()
+  #       if: always()
 
   pr-test-finish:
     needs:

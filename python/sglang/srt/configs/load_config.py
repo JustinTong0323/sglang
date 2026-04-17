@@ -31,7 +31,6 @@ class LoadFormat(str, enum.Enum):
     LOCAL_CACHED = "local_cached"
     FASTSAFETENSORS = "fastsafetensors"
     PRIVATE = "private"
-    RUNAI_STREAMER = "runai_streamer"
 
 
 @dataclass

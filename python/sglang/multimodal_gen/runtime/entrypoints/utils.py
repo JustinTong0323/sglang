@@ -270,6 +270,7 @@ def _maybe_mux_audio_into_mp4(
             sample_rate=selected_sr,
             ffmpeg_exe=ffmpeg_exe,
         )
+        logger.info(f"Merged video saved to {CYAN}{save_file_path}{RESET}")
     except Exception as e:
         logger.warning(
             "Failed to mux audio into mp4 (saved silent video): %s",
@@ -288,7 +289,12 @@ def prepare_request(
         sampling_params=sampling_params,
         VSA_sparsity=server_args.attention_backend_config.VSA_sparsity,
     )
-    sampling_params.apply_request_extra(req)
+    try:
+        diffusers_kwargs = sampling_params.diffusers_kwargs
+    except AttributeError:
+        diffusers_kwargs = None
+    if diffusers_kwargs:
+        req.extra["diffusers_kwargs"] = diffusers_kwargs
 
     req.adjust_size(server_args)
 

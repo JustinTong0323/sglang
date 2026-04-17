@@ -248,7 +248,6 @@ class DiffusionTestCase:
     server_args: DiffusionServerArgs
     sampling_params: DiffusionSamplingParams
     run_perf_check: bool = True
-    run_consistency_check: bool = True
     run_models_api_check: bool = True
     run_t2v_input_reference_check: bool = True
     run_lora_basic_api_check: bool = False
@@ -385,10 +384,6 @@ MULTI_FRAME_I2I_sampling_params = DiffusionSamplingParams(
 
 T2V_PROMPT = "A curious raccoon"
 
-T2V_sampling_params = DiffusionSamplingParams(
-    prompt=T2V_PROMPT,
-)
-
 TI2V_sampling_params = DiffusionSamplingParams(
     prompt="The man in the picture slowly turns his head, his expression enigmatic and otherworldly. The camera performs a slow, cinematic dolly out, focusing on his face. Moody lighting, neon signs glowing in the background, shallow depth of field.",
     image_path="https://is1-ssl.mzstatic.com/image/thumb/Music114/v4/5f/fa/56/5ffa56c2-ea1f-7a17-6bad-192ff9b6476d/825646124206.jpg/600x600bb.jpg",
@@ -403,6 +398,7 @@ TURBOWAN_I2V_sampling_params = DiffusionSamplingParams(
     num_frames=4,
     fps=4,
 )
+
 
 # All test cases with clean default values
 # To test different models, simply add more DiffusionCase entries
@@ -500,6 +496,15 @@ ONE_GPU_CASES_A: list[DiffusionTestCase] = [
         run_lora_dynamic_switch_check=True,
         run_multi_lora_api_check=True,
     ),
+    DiffusionTestCase(
+        "sana_image_t2i",
+        DiffusionServerArgs(
+            model_path="Efficient-Large-Model/Sana_600M_1024px_diffusers",
+            modality="image",
+        ),
+        T2I_sampling_params,
+        run_perf_check=False,
+    ),
     # === Text and Image to Image (TI2I) ===
     DiffusionTestCase(
         "qwen_image_edit_ti2i",
@@ -572,7 +577,9 @@ ONE_GPU_CASES_B: list[DiffusionTestCase] = [
             modality="video",
             custom_validator="video",
         ),
-        T2V_sampling_params,
+        DiffusionSamplingParams(
+            prompt=T2V_PROMPT,
+        ),
     ),
     DiffusionTestCase(
         "wan2_1_t2v_1.3b_text_encoder_cpu_offload",
@@ -582,7 +589,9 @@ ONE_GPU_CASES_B: list[DiffusionTestCase] = [
             custom_validator="video",
             text_encoder_cpu_offload=True,
         ),
-        T2V_sampling_params,
+        DiffusionSamplingParams(
+            prompt=T2V_PROMPT,
+        ),
     ),
     # TeaCache acceleration test for Wan video model
     DiffusionTestCase(
@@ -697,7 +706,9 @@ ONE_GPU_CASES_B: list[DiffusionTestCase] = [
             modality="video",
             custom_validator="video",
         ),
-        T2V_sampling_params,
+        DiffusionSamplingParams(
+            prompt=T2V_PROMPT,
+        ),
     ),
     # === Text and Image to Video (TI2V) ===
     DiffusionTestCase(
@@ -769,7 +780,6 @@ if not current_platform.is_hip():
                 enable_warmup=False,
             ),
             HUNYUAN3D_SHAPE_sampling_params,
-            run_consistency_check=False,
         ),
     )
 # Skip turbowan on AMD: Triton requires 81920 shared memory, but AMD only has 65536.
@@ -782,11 +792,13 @@ if not current_platform.is_hip():
                 modality="video",
                 custom_validator="video",
             ),
-            T2V_sampling_params,
+            DiffusionSamplingParams(
+                prompt=T2V_PROMPT,
+            ),
         )
     )
 
-# TODO: enable on 4090/5090
+# TODO: enable on 4090/5090/b200
 ONE_GPU_CASES_C = [
     DiffusionTestCase(
         "flux_2_nvfp4_t2i",
@@ -816,7 +828,9 @@ TWO_GPU_CASES_A = [
             custom_validator="video",
             num_gpus=2,
         ),
-        T2V_sampling_params,
+        DiffusionSamplingParams(
+            prompt=T2V_PROMPT,
+        ),
     ),
     # TeaCache smoke test for Wan2.2 T2V A14B — verifies enable_teacache=True
     # doesn't crash. Perf check disabled because Wan2.2-specific TeaCache
@@ -844,10 +858,6 @@ TWO_GPU_CASES_A = [
             custom_validator="video",
             num_gpus=2,
             lora_path="Cseti/wan2.2-14B-Arcane_Jinx-lora-v1",
-            extras=[
-                "--lora-weight-name",
-                "985347-wan22_14B-low-Nfj1nx-e65.safetensors",
-            ],
         ),
         DiffusionSamplingParams(
             prompt="Nfj1nx with blue hair, a woman walking in a cyberpunk city at night",
@@ -876,7 +886,9 @@ TWO_GPU_CASES_A = [
             num_gpus=2,
             cfg_parallel=True,
         ),
-        T2V_sampling_params,
+        DiffusionSamplingParams(
+            prompt=T2V_PROMPT,
+        ),
     ),
     DiffusionTestCase(
         "fsdp-inference",
@@ -925,16 +937,6 @@ TWO_GPU_CASES_A = [
         ),
         TI2V_sampling_params,
         run_perf_check=False,
-    ),
-    DiffusionTestCase(
-        "ltx_2_two_stage_t2v",
-        DiffusionServerArgs(
-            model_path="Lightricks/LTX-2",
-            modality="video",
-            num_gpus=2,
-            extras=["--pipeline-class-name LTX2TwoStagePipeline"],
-        ),
-        T2V_sampling_params,
     ),
 ]
 
@@ -1036,15 +1038,6 @@ TWO_GPU_CASES_B = [
         ),
         TI2I_sampling_params,
     ),
-    DiffusionTestCase(
-        "ltx_2.3_one_stage_ti2v",
-        DiffusionServerArgs(
-            model_path="Lightricks/LTX-2.3",
-            modality="video",
-            num_gpus=2,
-        ),
-        TI2V_sampling_params,
-    ),
 ]
 
 if not current_platform.is_hip():
@@ -1060,6 +1053,7 @@ if not current_platform.is_hip():
             MULTI_IMAGE_TI2I_UPLOAD_sampling_params,
         )
     )
+
 
 # Load global configuration
 BASELINE_CONFIG = BaselineConfig.load(

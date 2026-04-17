@@ -22,7 +22,6 @@ from sglang.multimodal_gen.runtime.pipelines_core.stages.decoding_av import (
 from sglang.multimodal_gen.runtime.pipelines_core.stages.denoising import DenoisingStage
 from sglang.multimodal_gen.runtime.pipelines_core.stages.denoising_av import (
     LTX2AVDenoisingStage,
-    LTX2RefinementStage,
 )
 from sglang.multimodal_gen.runtime.pipelines_core.stages.denoising_dmd import (
     DmdDenoisingStage,
@@ -65,11 +64,6 @@ from sglang.multimodal_gen.runtime.pipelines_core.stages.text_encoding import (
 from sglang.multimodal_gen.runtime.pipelines_core.stages.timestep_preparation import (
     TimestepPreparationStage,
 )
-from sglang.multimodal_gen.runtime.pipelines_core.stages.upsampling import (
-    LTX2HalveResolutionStage,
-    LTX2LoRASwitchStage,
-    LTX2UpsampleStage,
-)
 
 __all__ = [
     "PipelineStage",
@@ -98,9 +92,4 @@ __all__ = [
     "Hunyuan3DPaintPreprocessStage",
     "Hunyuan3DPaintTexGenStage",
     "Hunyuan3DPaintPostprocessStage",
-    # LTX-2 two-stage
-    "LTX2RefinementStage",
-    "LTX2HalveResolutionStage",
-    "LTX2LoRASwitchStage",
-    "LTX2UpsampleStage",
 ]

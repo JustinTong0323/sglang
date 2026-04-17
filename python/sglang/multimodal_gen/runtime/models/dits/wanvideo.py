@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 
 from sglang.multimodal_gen.configs.models.dits import WanVideoConfig
+from sglang.multimodal_gen.configs.sample.wan import WanTeaCacheParams
 from sglang.multimodal_gen.runtime.distributed import (
     divide,
     get_sp_group,
@@ -915,9 +916,9 @@ class WanTransformer3DModel(CachableDiT, OffloadableDiTMixin):
             rope_dim_list=self.rope_dim_list,
             rope_theta=10000,
             dtype=(
-                torch.float64
-                if current_platform.is_float64_supported()
-                else torch.float32
+                torch.float32
+                if current_platform.is_mps() or current_platform.is_musa()
+                else torch.float64
             ),
         )
 
@@ -1090,7 +1091,7 @@ class WanTransformer3DModel(CachableDiT, OffloadableDiTMixin):
             encoder_hidden_states.to(orig_dtype)
             if not current_platform.is_amp_supported()
             else encoder_hidden_states
-        )  # cast to orig_dtype if amp is not supported
+        )  # cast to orig_dtype for MPS
 
         assert encoder_hidden_states.dtype == orig_dtype
 
@@ -1169,21 +1170,31 @@ class WanTransformer3DModel(CachableDiT, OffloadableDiTMixin):
         if ctx is None:
             return False
 
-        # Initialize Wan-specific parameters
+        # Wan uses WanTeaCacheParams with additional fields
         teacache_params = ctx.teacache_params
-        use_ret_steps = teacache_params.use_ret_steps
-        start_skipping, end_skipping = teacache_params.get_skip_boundaries(
-            ctx.num_inference_steps, ctx.do_cfg
-        )
+        assert isinstance(
+            teacache_params, WanTeaCacheParams
+        ), "teacache_params is not a WanTeaCacheParams"
 
-        # Determine boundary step
-        is_boundary_step = self.cnt < start_skipping or self.cnt >= end_skipping
+        # Initialize Wan-specific parameters
+        use_ret_steps = teacache_params.use_ret_steps
+        cutoff_steps = teacache_params.get_cutoff_steps(ctx.num_inference_steps)
+        ret_steps = teacache_params.ret_steps
+
+        # Adjust ret_steps and cutoff_steps for non-CFG mode
+        # (WanTeaCacheParams uses *2 factor assuming CFG)
+        if not ctx.do_cfg:
+            ret_steps = ret_steps // 2
+            cutoff_steps = cutoff_steps // 2
 
         timestep_proj = kwargs["timestep_proj"]
         temb = kwargs["temb"]
         modulated_inp = timestep_proj if use_ret_steps else temb
 
         self.is_cfg_negative = ctx.is_cfg_negative
+
+        # Wan uses ret_steps/cutoff_steps for boundary detection
+        is_boundary_step = self.cnt < ret_steps or self.cnt >= cutoff_steps
 
         # Use shared helper to compute cache decision
         should_calc = self._compute_teacache_decision(
