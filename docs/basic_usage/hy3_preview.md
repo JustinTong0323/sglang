@@ -129,40 +129,40 @@ If successful, you will see the following output.
 
 ```shell
 ============ Serving Benchmark Result ============
-Backend:                                 sglang    
-Traffic request rate:                    inf       
-Max request concurrency:                 32        
-Successful requests:                     160       
-Benchmark duration (s):                  560.37    
-Total input tokens:                      655360    
-Total input text tokens:                 655360    
-Total generated tokens:                  655360    
-Total generated tokens (retokenized):    654700    
-Request throughput (req/s):              0.29      
-Input token throughput (tok/s):          1169.50   
-Output token throughput (tok/s):         1169.50   
-Peak output token throughput (tok/s):    1376.00   
-Peak concurrent requests:                64        
-Total token throughput (tok/s):          2339.01   
-Concurrency:                             31.99     
+Backend:                                 sglang
+Traffic request rate:                    inf
+Max request concurrency:                 32
+Successful requests:                     160
+Benchmark duration (s):                  560.37
+Total input tokens:                      655360
+Total input text tokens:                 655360
+Total generated tokens:                  655360
+Total generated tokens (retokenized):    654700
+Request throughput (req/s):              0.29
+Input token throughput (tok/s):          1169.50
+Output token throughput (tok/s):         1169.50
+Peak output token throughput (tok/s):    1376.00
+Peak concurrent requests:                64
+Total token throughput (tok/s):          2339.01
+Concurrency:                             31.99
 ----------------End-to-End Latency----------------
-Mean E2E Latency (ms):                   112055.69 
-Median E2E Latency (ms):                 111967.15 
-P90 E2E Latency (ms):                    112712.63 
-P99 E2E Latency (ms):                    112721.22 
+Mean E2E Latency (ms):                   112055.69
+Median E2E Latency (ms):                 111967.15
+P90 E2E Latency (ms):                    112712.63
+P99 E2E Latency (ms):                    112721.22
 ---------------Time to First Token----------------
-Mean TTFT (ms):                          3828.65   
-Median TTFT (ms):                        3786.40   
-P99 TTFT (ms):                           6531.28   
+Mean TTFT (ms):                          3828.65
+Median TTFT (ms):                        3786.40
+P99 TTFT (ms):                           6531.28
 -----Time per Output Token (excl. 1st token)------
-Mean TPOT (ms):                          26.43     
-Median TPOT (ms):                        26.41     
-P99 TPOT (ms):                           27.29     
+Mean TPOT (ms):                          26.43
+Median TPOT (ms):                        26.41
+P99 TPOT (ms):                           27.29
 ---------------Inter-Token Latency----------------
-Mean ITL (ms):                           26.43     
-Median ITL (ms):                         25.78     
-P95 ITL (ms):                            27.88     
-P99 ITL (ms):                            28.32     
-Max ITL (ms):                            6010.40   
+Mean ITL (ms):                           26.43
+Median ITL (ms):                         25.78
+P95 ITL (ms):                            27.88
+P99 ITL (ms):                            28.32
+Max ITL (ms):                            6010.40
 ==================================================
 ```

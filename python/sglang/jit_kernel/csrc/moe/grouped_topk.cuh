@@ -6,8 +6,9 @@
  * sigmoid scoring, bias correction, renormalization and scaling factor.
  * Supports up to 512 experts and topk up to 8.
  */
-#include <sgl_kernel/tensor.h>   // For TensorMatcher, SymbolicSize, SymbolicDevice
-#include <sgl_kernel/utils.h>    // For RuntimeCheck, div_ceil
+#include <sgl_kernel/tensor.h>  // For TensorMatcher, SymbolicSize, SymbolicDevice
+#include <sgl_kernel/utils.h>   // For RuntimeCheck, div_ceil
+
 #include <sgl_kernel/utils.cuh>  // For LaunchKernel, fp32_t
 
 #include <dlpack/dlpack.h>
@@ -33,8 +34,7 @@ __device__ __forceinline__ uint64_t pack_val_idx(float val, int32_t idx) {
   return (static_cast<uint64_t>(val_bits) << 32) | idx_bits;
 }
 
-__device__ __forceinline__ void unpack_val_idx(uint64_t packed, float& val,
-                                               int32_t& idx) {
+__device__ __forceinline__ void unpack_val_idx(uint64_t packed, float& val, int32_t& idx) {
   uint32_t idx_bits = static_cast<uint32_t>(packed & 0xFFFFFFFF);
   idx = static_cast<int32_t>(65535 - idx_bits);
   uint32_t val_bits = static_cast<uint32_t>(packed >> 32);
@@ -74,9 +74,14 @@ __device__ __forceinline__ float fast_sigmoid(float x) {
 // ─────────────────────────────────────────────────────────────────────────────
 template <int MaxExperts>
 __global__ void grouped_topk_single_group_kernel(
-    const float* __restrict__ scores, float* __restrict__ topk_values,
-    int32_t* __restrict__ topk_indices, const float* __restrict__ bias,
-    int64_t num_tokens, int64_t num_experts, int64_t topk, bool renormalize,
+    const float* __restrict__ scores,
+    float* __restrict__ topk_values,
+    int32_t* __restrict__ topk_indices,
+    const float* __restrict__ bias,
+    int64_t num_tokens,
+    int64_t num_experts,
+    int64_t topk,
+    bool renormalize,
     float scaling_factor) {
   __shared__ float smem_sigmoid[MaxExperts];
   __shared__ float smem_biased[MaxExperts];
@@ -172,11 +177,16 @@ __global__ void grouped_topk_single_group_kernel(
 // ─────────────────────────────────────────────────────────────────────────────
 // Launcher
 // ─────────────────────────────────────────────────────────────────────────────
-void grouped_topk(tvm::ffi::TensorView scores, tvm::ffi::TensorView bias,
-                  tvm::ffi::TensorView topk_values,
-                  tvm::ffi::TensorView topk_indices, int64_t num_expert_group,
-                  int64_t topk_group, int64_t topk, bool renormalize,
-                  double scaling_factor) {
+void grouped_topk(
+    tvm::ffi::TensorView scores,
+    tvm::ffi::TensorView bias,
+    tvm::ffi::TensorView topk_values,
+    tvm::ffi::TensorView topk_indices,
+    int64_t num_expert_group,
+    int64_t topk_group,
+    int64_t topk,
+    bool renormalize,
+    double scaling_factor) {
   using namespace host;
 
   SymbolicSize N{"num_tokens"};
@@ -184,33 +194,20 @@ void grouped_topk(tvm::ffi::TensorView scores, tvm::ffi::TensorView bias,
   SymbolicDevice device_;
   device_.set_options<kDLCUDA>();
 
-  TensorMatcher({N, E})
-      .with_dtype<fp32_t>()
-      .with_device<kDLCUDA>(device_)
-      .verify(scores);
+  TensorMatcher({N, E}).with_dtype<fp32_t>().with_device<kDLCUDA>(device_).verify(scores);
 
-  TensorMatcher({E})
-      .with_dtype<fp32_t>()
-      .with_device<kDLCUDA>(device_)
-      .verify(bias);
+  TensorMatcher({E}).with_dtype<fp32_t>().with_device<kDLCUDA>(device_).verify(bias);
 
   SymbolicSize K{"topk"};
-  TensorMatcher({N, K})
-      .with_dtype<fp32_t>()
-      .with_device<kDLCUDA>(device_)
-      .verify(topk_values);
+  TensorMatcher({N, K}).with_dtype<fp32_t>().with_device<kDLCUDA>(device_).verify(topk_values);
 
-  TensorMatcher({N, K})
-      .with_dtype<int32_t>()
-      .with_device<kDLCUDA>(device_)
-      .verify(topk_indices);
+  TensorMatcher({N, K}).with_dtype<int32_t>().with_device<kDLCUDA>(device_).verify(topk_indices);
 
   int64_t num_tokens = N.unwrap();
   int64_t num_experts = E.unwrap();
   DLDevice device = device_.unwrap();
 
-  RuntimeCheck(num_expert_group == 1 && topk_group == 1,
-               "This kernel only supports num_expert_group=1, topk_group=1");
+  RuntimeCheck(num_expert_group == 1 && topk_group == 1, "This kernel only supports num_expert_group=1, topk_group=1");
   RuntimeCheck(topk <= MAX_TOPK, "topk must be <= ", MAX_TOPK);
   RuntimeCheck(num_experts <= 512, "num_experts must be <= 512");
 
@@ -228,18 +225,42 @@ void grouped_topk(tvm::ffi::TensorView scores, tvm::ffi::TensorView bias,
   if (num_experts <= 128) {
     num_threads = 128;
     LaunchKernel(static_cast<uint32_t>(num_tokens), num_threads, device)(
-        grouped_topk_single_group_kernel<128>, score_ptr, val_ptr, idx_ptr,
-        bias_ptr, num_tokens, num_experts, topk, renormalize, scale_f);
+        grouped_topk_single_group_kernel<128>,
+        score_ptr,
+        val_ptr,
+        idx_ptr,
+        bias_ptr,
+        num_tokens,
+        num_experts,
+        topk,
+        renormalize,
+        scale_f);
   } else if (num_experts <= 256) {
     num_threads = 256;
     LaunchKernel(static_cast<uint32_t>(num_tokens), num_threads, device)(
-        grouped_topk_single_group_kernel<256>, score_ptr, val_ptr, idx_ptr,
-        bias_ptr, num_tokens, num_experts, topk, renormalize, scale_f);
+        grouped_topk_single_group_kernel<256>,
+        score_ptr,
+        val_ptr,
+        idx_ptr,
+        bias_ptr,
+        num_tokens,
+        num_experts,
+        topk,
+        renormalize,
+        scale_f);
   } else {
     num_threads = 512;
     LaunchKernel(static_cast<uint32_t>(num_tokens), num_threads, device)(
-        grouped_topk_single_group_kernel<512>, score_ptr, val_ptr, idx_ptr,
-        bias_ptr, num_tokens, num_experts, topk, renormalize, scale_f);
+        grouped_topk_single_group_kernel<512>,
+        score_ptr,
+        val_ptr,
+        idx_ptr,
+        bias_ptr,
+        num_tokens,
+        num_experts,
+        topk,
+        renormalize,
+        scale_f);
   }
 }
 

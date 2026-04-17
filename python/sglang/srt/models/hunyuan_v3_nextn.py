@@ -56,9 +56,7 @@ class HYV3ModelNextN(nn.Module):
 
         self.enorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.hnorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.eh_proj = nn.Linear(
-            2 * config.hidden_size, config.hidden_size, bias=False
-        )
+        self.eh_proj = nn.Linear(2 * config.hidden_size, config.hidden_size, bias=False)
 
         self.alt_stream = torch.cuda.Stream() if is_cuda() else None
 
@@ -191,7 +189,11 @@ class HYV3ForCausalLMNextN(nn.Module):
                     name = f"model.decoder.{subname}"
             elif name == "model.shared_head.norm.weight":
                 pass
-            elif "embed_tokens" in name or "shared_head.head" in name or "lm_head" in name:
+            elif (
+                "embed_tokens" in name
+                or "shared_head.head" in name
+                or "lm_head" in name
+            ):
                 continue
             else:
                 continue

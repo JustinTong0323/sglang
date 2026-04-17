@@ -1,4 +1,5 @@
 """Fused grouped top-k kernel for MoE routing (single-group, sigmoid scoring)."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Tuple
@@ -35,8 +36,15 @@ def _jit_grouped_topk_op(
 ) -> None:
     module = _jit_grouped_topk_module()
     module.grouped_topk(
-        scores, bias, topk_values, topk_indices,
-        num_expert_group, topk_group, topk, renormalize, scaling_factor,
+        scores,
+        bias,
+        topk_values,
+        topk_indices,
+        num_expert_group,
+        topk_group,
+        topk,
+        renormalize,
+        scaling_factor,
     )
 
 

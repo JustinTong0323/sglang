@@ -12,13 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import typing
 from typing import Iterable, Optional, Tuple
 
 import torch
 from torch import nn
 from transformers import PretrainedConfig
 
+from sglang.srt.distributed import (
+    get_moe_expert_parallel_world_size,
+    get_moe_tensor_parallel_world_size,
+    get_tensor_model_parallel_world_size,
+    moe_expert_parallel_all_reduce,
+    moe_tensor_model_parallel_all_reduce,
+)
 from sglang.srt.layers.activation import SiluAndMul
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.linear import (
@@ -37,17 +43,11 @@ from sglang.srt.layers.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
 )
-from sglang.srt.model_executor.cuda_graph_runner import get_is_capture_mode
 from sglang.srt.managers.schedule_batch import ForwardBatch
+from sglang.srt.model_executor.cuda_graph_runner import get_is_capture_mode
 from sglang.srt.model_loader.weight_utils import default_weight_loader
-from sglang.srt.distributed import (
-    get_moe_expert_parallel_world_size,
-    get_moe_tensor_parallel_world_size,
-    get_tensor_model_parallel_world_size,
-    moe_expert_parallel_all_reduce,
-    moe_tensor_model_parallel_all_reduce,
-)
 from sglang.srt.utils import is_cuda
+
 
 class HYV3FeedForward(nn.Module):
     def __init__(
@@ -106,10 +106,10 @@ class HYV3MoEFused(nn.Module):
         top_k = config.num_experts_per_tok
         intermediate_size = config.moe_intermediate_size
 
-        self.expert_bias = nn.Parameter(torch.empty(config.num_experts, dtype=torch.float32))
-        self.expert_bias.weight_loader = (
-                HYV3MoEFused.ebias_weight_loader
-            )
+        self.expert_bias = nn.Parameter(
+            torch.empty(config.num_experts, dtype=torch.float32)
+        )
+        self.expert_bias.weight_loader = HYV3MoEFused.ebias_weight_loader
         scoring_func = "sigmoid"
         self.e_score_correction_bias = self.expert_bias
         self.router_scaling_factor = getattr(config, "router_scaling_factor", 1.0)
@@ -136,7 +136,8 @@ class HYV3MoEFused(nn.Module):
         if getattr(config, "num_shared_experts", 0) > 0:
             self.shared_mlp = HYV3FeedForward(
                 hidden_size=config.hidden_size,
-                intermediate_size=config.moe_intermediate_size * config.num_shared_experts,
+                intermediate_size=config.moe_intermediate_size
+                * config.num_shared_experts,
                 hidden_act=config.hidden_act,
                 quant_config=quant_config,
                 prefix=f"{prefix}.shared_mlp",
@@ -193,7 +194,9 @@ class HYV3MoEFused(nn.Module):
             final_hidden_states = moe_expert_parallel_all_reduce(final_hidden_states)
 
         if self.tp_size > 1:
-            final_hidden_states = moe_tensor_model_parallel_all_reduce(final_hidden_states)
+            final_hidden_states = moe_tensor_model_parallel_all_reduce(
+                final_hidden_states
+            )
 
         return final_hidden_states.view(orig_shape)
 
@@ -222,7 +225,9 @@ class HYV3MoEFused(nn.Module):
             final_hidden_states = moe_expert_parallel_all_reduce(final_hidden_states)
 
         if self.tp_size > 1:
-            final_hidden_states = moe_tensor_model_parallel_all_reduce(final_hidden_states)
+            final_hidden_states = moe_tensor_model_parallel_all_reduce(
+                final_hidden_states
+            )
 
         return final_hidden_states.view(orig_shape)
 
@@ -253,12 +258,14 @@ class HYV3Attention(nn.Module):
         else:
             assert tp_size % self.total_num_kv_heads == 0
         self.num_kv_heads = max(1, self.total_num_kv_heads // tp_size)
-        
+
         self.head_dim = getattr(config, "head_dim", hidden_size // self.total_num_heads)
         self.q_size = self.num_heads * self.head_dim
         self.kv_size = self.num_kv_heads * self.head_dim
         self.scaling = self.head_dim**-0.5
-        self.use_qk_norm = getattr(config, "use_qk_norm", getattr(config, "qk_norm", False))
+        self.use_qk_norm = getattr(
+            config, "use_qk_norm", getattr(config, "qk_norm", False)
+        )
 
         self.qkv_proj = QKVParallelLinear(
             hidden_size,
@@ -306,7 +313,7 @@ class HYV3Attention(nn.Module):
     ) -> torch.Tensor:
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-        
+
         if self.use_qk_norm:
             q = self.q_norm(q.reshape(-1, self.head_dim))
             q = q.view(-1, self.q_size)
@@ -513,7 +520,9 @@ class HYV3ForCausalLM(nn.Module):
         num_nextn_layers = getattr(self.config, "num_nextn_predict_layers", 0)
 
         for name, loaded_weight in weights:
-            if "lm_head.weight" in name and getattr(self.config, "tie_word_embeddings", False):
+            if "lm_head.weight" in name and getattr(
+                self.config, "tie_word_embeddings", False
+            ):
                 continue
 
             if "rotary_emb.inv_freq" in name:
@@ -572,5 +581,5 @@ class HYV3ForCausalLM(nn.Module):
             weight_loader = getattr(param, "weight_loader", default_weight_loader)
             weight_loader(param, loaded_weight)
 
-EntryClass = [HYV3ForCausalLM]
 
+EntryClass = [HYV3ForCausalLM]

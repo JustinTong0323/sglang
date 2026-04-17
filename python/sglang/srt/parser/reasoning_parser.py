@@ -488,6 +488,7 @@ class HunyuanDetector(BaseReasoningFormatDetector):
 
     Like Glm45Detector but uses ``<tool_calls>`` (plural) as the tool start token.
     """
+
     def __init__(
         self,
         stream_reasoning: bool = True,

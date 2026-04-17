@@ -909,11 +909,11 @@ def biased_grouped_topk_gpu(
             and num_experts <= 512
             and topk <= 8
         ):
-            from sglang.jit_kernel.grouped_topk import (
-                grouped_topk as jit_grouped_topk,
-            )
+            from sglang.jit_kernel.grouped_topk import grouped_topk as jit_grouped_topk
 
-            scaling = routed_scaling_factor if routed_scaling_factor is not None else 1.0
+            scaling = (
+                routed_scaling_factor if routed_scaling_factor is not None else 1.0
+            )
             if not apply_routed_scaling_factor_on_output:
                 scaling = 1.0
             return jit_grouped_topk(
