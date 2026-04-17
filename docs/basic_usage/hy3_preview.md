@@ -47,7 +47,7 @@ python3 -m sglang.launch_server \
   --reasoning-parser hunyuan \
   --speculative-num-steps 1 \
   --speculative-eagle-topk 1 \
-  --speculative-algorithm eagle \
+  --speculative-algorithm EAGLE \
   --served-model-name hy-3-fp8
 ```
 
