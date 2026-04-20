@@ -318,6 +318,21 @@ class TestHunyuanDetectorArgDeserialization(CustomTestCase):
         self.assertEqual(args["count"], "not a number")
 
 
+def _collect_streamed_tool_calls(all_calls):
+    """Accumulate streaming ToolCallItems (name + arg-JSON fragments) by tool_index."""
+    tools = {}
+    for c in all_calls:
+        idx = c.tool_index
+        if idx not in tools:
+            tools[idx] = {"name": c.name or "", "parameters": c.parameters or ""}
+        else:
+            if c.name:
+                tools[idx]["name"] += c.name
+            if c.parameters:
+                tools[idx]["parameters"] += c.parameters
+    return [tools[i] for i in sorted(tools.keys())]
+
+
 class TestHunyuanDetectorStreaming(CustomTestCase):
     def setUp(self):
         self.tools = _make_tools()
@@ -341,8 +356,10 @@ class TestHunyuanDetectorStreaming(CustomTestCase):
             "</tool_calls>"
         )
         result = detector.parse_streaming_increment(text, self.tools)
-        self.assertEqual(len(result.calls), 1)
-        self.assertEqual(result.calls[0].name, "get_current_date")
+        collected = _collect_streamed_tool_calls(result.calls)
+        self.assertEqual(len(collected), 1)
+        self.assertEqual(collected[0]["name"], "get_current_date")
+        self.assertEqual(json.loads(collected[0]["parameters"]), {})
 
     def test_chunked_tool_call(self):
         detector = self._new_detector()
@@ -359,9 +376,10 @@ class TestHunyuanDetectorStreaming(CustomTestCase):
             result = detector.parse_streaming_increment(chunk, self.tools)
             all_calls.extend(result.calls)
 
-        self.assertEqual(len(all_calls), 1)
-        self.assertEqual(all_calls[0].name, "get_weather")
-        args = json.loads(all_calls[0].parameters)
+        collected = _collect_streamed_tool_calls(all_calls)
+        self.assertEqual(len(collected), 1)
+        self.assertEqual(collected[0]["name"], "get_weather")
+        args = json.loads(collected[0]["parameters"])
         self.assertEqual(args["city"], "Tokyo")
 
     def test_normal_text_before_tool(self):
@@ -373,8 +391,8 @@ class TestHunyuanDetectorStreaming(CustomTestCase):
             "<tool_calls><tool_call>get_current_date<tool_sep></tool_call></tool_calls>",
             self.tools,
         )
-        names = [c.name for c in r2.calls]
-        self.assertIn("get_current_date", names)
+        collected = _collect_streamed_tool_calls(r2.calls)
+        self.assertEqual([c["name"] for c in collected], ["get_current_date"])
 
     def test_multiple_tool_calls_chunked(self):
         detector = self._new_detector()
@@ -393,7 +411,10 @@ class TestHunyuanDetectorStreaming(CustomTestCase):
             result = detector.parse_streaming_increment(chunk, self.tools)
             all_calls.extend(result.calls)
 
-        self.assertEqual(len(all_calls), 2)
+        collected = _collect_streamed_tool_calls(all_calls)
+        self.assertEqual(len(collected), 2)
+        self.assertEqual(json.loads(collected[0]["parameters"])["city"], "Beijing")
+        self.assertEqual(json.loads(collected[1]["parameters"])["city"], "Tokyo")
 
     def test_partial_bot_token_buffered(self):
         """Partial <tool_calls> at end of chunk should be buffered, not emitted."""
@@ -414,8 +435,10 @@ class TestHunyuanDetectorStreaming(CustomTestCase):
             result = detector.parse_streaming_increment(ch, self.tools)
             all_calls.extend(result.calls)
 
-        self.assertEqual(len(all_calls), 1)
-        self.assertEqual(all_calls[0].name, "get_current_date")
+        collected = _collect_streamed_tool_calls(all_calls)
+        self.assertEqual(len(collected), 1)
+        self.assertEqual(collected[0]["name"], "get_current_date")
+        self.assertEqual(json.loads(collected[0]["parameters"]), {})
 
     def test_streaming_with_args_char_by_char(self):
         detector = self._new_detector()
@@ -429,8 +452,9 @@ class TestHunyuanDetectorStreaming(CustomTestCase):
             result = detector.parse_streaming_increment(ch, self.tools)
             all_calls.extend(result.calls)
 
-        self.assertEqual(len(all_calls), 1)
-        args = json.loads(all_calls[0].parameters)
+        collected = _collect_streamed_tool_calls(all_calls)
+        self.assertEqual(len(collected), 1)
+        args = json.loads(collected[0]["parameters"])
         self.assertEqual(args["city"], "NYC")
 
     def test_streaming_three_tools_sequential(self):
@@ -448,14 +472,13 @@ class TestHunyuanDetectorStreaming(CustomTestCase):
             result = detector.parse_streaming_increment(chunk, self.tools)
             all_calls.extend(result.calls)
 
-        self.assertEqual(len(all_calls), 3)
-        self.assertEqual(all_calls[0].name, "get_current_date")
-        self.assertEqual(all_calls[1].name, "get_weather")
-        self.assertEqual(all_calls[2].name, "search")
+        collected = _collect_streamed_tool_calls(all_calls)
+        self.assertEqual(len(collected), 3)
+        self.assertEqual(collected[0]["name"], "get_current_date")
+        self.assertEqual(collected[1]["name"], "get_weather")
+        self.assertEqual(collected[2]["name"], "search")
         # Streaming uses sequential tool_index (0, 1, 2)
-        self.assertEqual(all_calls[0].tool_index, 0)
-        self.assertEqual(all_calls[1].tool_index, 1)
-        self.assertEqual(all_calls[2].tool_index, 2)
+        self.assertEqual(sorted({c.tool_index for c in all_calls}), [0, 1, 2])
 
     def test_streaming_normal_text_not_lost(self):
         """All normal text before tool_calls should be fully emitted."""
@@ -471,6 +494,97 @@ class TestHunyuanDetectorStreaming(CustomTestCase):
         )
         all_normal += result.normal_text
         self.assertIn("I will check the date now.", all_normal)
+
+    def test_streaming_name_comes_before_args(self):
+        """The name delta must arrive before any arg deltas (two-phase contract)."""
+        detector = self._new_detector()
+        text = (
+            "<tool_calls><tool_call>get_weather<tool_sep>"
+            "<arg_key>city</arg_key><arg_value>Paris</arg_value>"
+            "</tool_call></tool_calls>"
+        )
+        all_calls = []
+        for ch in text:
+            all_calls.extend(detector.parse_streaming_increment(ch, self.tools).calls)
+
+        name_indices = [i for i, c in enumerate(all_calls) if c.name]
+        param_indices = [i for i, c in enumerate(all_calls) if c.parameters]
+        self.assertTrue(name_indices, "expected at least one name delta")
+        self.assertTrue(param_indices, "expected at least one arg delta")
+        self.assertLess(min(name_indices), min(param_indices))
+
+    def test_streaming_typed_args_coerced(self):
+        """Streaming must apply schema-aware type coercion (int/float/bool)."""
+        detector = self._new_detector()
+        chunks = [
+            "<tool_calls>",
+            "<tool_call>search<tool_sep>",
+            "<arg_key>query</arg_key><arg_value>pizza</arg_value>",
+            "<arg_key>count</arg_key><arg_value>7</arg_value>",
+            "</tool_call></tool_calls>",
+        ]
+        all_calls = []
+        for chunk in chunks:
+            all_calls.extend(
+                detector.parse_streaming_increment(chunk, self.tools).calls
+            )
+        collected = _collect_streamed_tool_calls(all_calls)
+        args = json.loads(collected[0]["parameters"])
+        self.assertEqual(args["query"], "pizza")
+        self.assertEqual(args["count"], 7)
+        self.assertIsInstance(args["count"], int)
+
+    def test_streaming_string_arg_holds_back_partial_end_tag(self):
+        """Char-by-char string streaming must not leak `</arg_value>` into the value."""
+        detector = self._new_detector()
+        full = (
+            "<tool_calls><tool_call>get_weather<tool_sep>"
+            "<arg_key>city</arg_key><arg_value>San Francisco</arg_value>"
+            "</tool_call></tool_calls>"
+        )
+        all_calls = []
+        for ch in full:
+            all_calls.extend(detector.parse_streaming_increment(ch, self.tools).calls)
+
+        collected = _collect_streamed_tool_calls(all_calls)
+        args = json.loads(collected[0]["parameters"])
+        self.assertEqual(args["city"], "San Francisco")
+
+    def test_streaming_all_in_one_delta(self):
+        """Entire tool call arriving in a single delta."""
+        detector = self._new_detector()
+        text = (
+            "<tool_calls>\n<tool_call>get_current_date<tool_sep>\n"
+            "</tool_call>\n</tool_calls>"
+        )
+        result = detector.parse_streaming_increment(text, self.tools)
+        collected = _collect_streamed_tool_calls(result.calls)
+        self.assertEqual(len(collected), 1)
+        self.assertEqual(collected[0]["name"], "get_current_date")
+        self.assertEqual(json.loads(collected[0]["parameters"]), {})
+
+    def test_streaming_content_before(self):
+        """Normal text preceding a tool call must be surfaced."""
+        detector = self._new_detector()
+        deltas = [
+            "Checking.",
+            "<tool_calls>",
+            "\n<tool_call>",
+            "get_current_date",
+            "<tool_sep>",
+            "\n</tool_call>",
+            "\n</tool_calls>",
+        ]
+        all_calls = []
+        all_normal = ""
+        for d in deltas:
+            r = detector.parse_streaming_increment(d, self.tools)
+            all_calls.extend(r.calls)
+            all_normal += r.normal_text
+        self.assertIn("Checking.", all_normal)
+        collected = _collect_streamed_tool_calls(all_calls)
+        self.assertEqual(len(collected), 1)
+        self.assertEqual(collected[0]["name"], "get_current_date")
 
 
 class TestHunyuanDetectorStructureInfo(CustomTestCase):
@@ -491,14 +605,13 @@ class TestHunyuanDetectorStructureInfo(CustomTestCase):
 
 
 class TestHunyuanDetectorAccuracy(CustomTestCase):
-    """Accuracy tests using realistic vllm reference output patterns."""
+    """Accuracy tests for realistic HYV3 output patterns."""
 
     def setUp(self):
         self.tools = _make_tools()
         self.detector = HunyuanDetector()
 
-    def test_vllm_reference_zero_arg_inline(self):
-        """Matches vllm test_hy_v3_tool_parser.py::test_zero_arg_inline."""
+    def test_reference_zero_arg_inline(self):
         out = (
             "<tool_calls><tool_call>get_current_date<tool_sep></tool_call></tool_calls>"
         )
@@ -508,15 +621,13 @@ class TestHunyuanDetectorAccuracy(CustomTestCase):
         self.assertEqual(json.loads(r.calls[0].parameters), {})
         self.assertEqual(r.normal_text, "")
 
-    def test_vllm_reference_zero_arg_newline(self):
-        """Matches vllm test_hy_v3_tool_parser.py::test_zero_arg_newline."""
+    def test_reference_zero_arg_newline(self):
         out = "<tool_calls>\n<tool_call>get_current_date<tool_sep>\n</tool_call>\n</tool_calls>"
         r = self.detector.detect_and_parse(out, self.tools)
         self.assertEqual(len(r.calls), 1)
         self.assertEqual(r.calls[0].name, "get_current_date")
 
-    def test_vllm_reference_args_same_line(self):
-        """Matches vllm test_hy_v3_tool_parser.py::test_args_same_line."""
+    def test_reference_args_same_line(self):
         out = (
             "<tool_calls><tool_call>get_weather<tool_sep><arg_key>city</arg_key><arg_value>Beijing"
             "</arg_value><arg_key>date</arg_key><arg_value>2026-03-30</arg_value></tool_call></tool_calls>"
@@ -526,8 +637,7 @@ class TestHunyuanDetectorAccuracy(CustomTestCase):
         args = json.loads(r.calls[0].parameters)
         self.assertEqual(args, {"city": "Beijing", "date": "2026-03-30"})
 
-    def test_vllm_reference_args_with_newlines(self):
-        """Matches vllm test_hy_v3_tool_parser.py::test_args_with_newlines."""
+    def test_reference_args_with_newlines(self):
         out = (
             "<tool_calls>\n<tool_call>get_weather<tool_sep>\n<arg_key>city</arg_key>\n<arg_value>Beijing"
             "</arg_value>\n<arg_key>date</arg_key>\n<arg_value>2026-03-30</arg_value>\n</tool_call>\n</tool_calls>"
@@ -537,15 +647,13 @@ class TestHunyuanDetectorAccuracy(CustomTestCase):
         args = json.loads(r.calls[0].parameters)
         self.assertEqual(args, {"city": "Beijing", "date": "2026-03-30"})
 
-    def test_vllm_reference_content_before(self):
-        """Matches vllm test_hy_v3_tool_parser.py::test_content_before."""
+    def test_reference_content_before(self):
         out = "Checking.<tool_calls>\n<tool_call>get_current_date<tool_sep>\n</tool_call>\n</tool_calls>"
         r = self.detector.detect_and_parse(out, self.tools)
         self.assertEqual(len(r.calls), 1)
         self.assertEqual(r.normal_text, "Checking.")
 
-    def test_vllm_reference_multiple(self):
-        """Matches vllm test_hy_v3_tool_parser.py::test_multiple."""
+    def test_reference_multiple(self):
         out = (
             "<tool_calls>\n<tool_call>get_weather<tool_sep>\n<arg_key>city</arg_key>\n<arg_value>Beijing"
             "</arg_value>\n<arg_key>date</arg_key>\n<arg_value>2026-03-30</arg_value>\n</tool_call>\n"
@@ -555,14 +663,12 @@ class TestHunyuanDetectorAccuracy(CustomTestCase):
         r = self.detector.detect_and_parse(out, self.tools)
         self.assertEqual(len(r.calls), 2)
 
-    def test_vllm_reference_empty_content_none(self):
-        """Matches vllm test_hy_v3_tool_parser.py::test_empty_content_none."""
+    def test_reference_empty_content_none(self):
         out = "<tool_calls>\n<tool_call>get_current_date<tool_sep>\n</tool_call>\n</tool_calls>"
         r = self.detector.detect_and_parse(out, self.tools)
         self.assertEqual(r.normal_text, "")
 
-    def test_vllm_reference_no_tool_call(self):
-        """Matches vllm test_hy_v3_tool_parser.py::test_no_tool_call."""
+    def test_reference_no_tool_call(self):
         out = "This is a plain response."
         r = self.detector.detect_and_parse(out, self.tools)
         self.assertEqual(len(r.calls), 0)
@@ -610,8 +716,10 @@ class TestHunyuanDetectorFunctionCallParser(CustomTestCase):
             normal, calls = parser.parse_stream_chunk(chunk)
             all_calls.extend(calls)
 
-        self.assertEqual(len(all_calls), 1)
-        self.assertEqual(all_calls[0].name, "get_current_date")
+        collected = _collect_streamed_tool_calls(all_calls)
+        self.assertEqual(len(collected), 1)
+        self.assertEqual(collected[0]["name"], "get_current_date")
+        self.assertEqual(json.loads(collected[0]["parameters"]), {})
 
     def test_has_tool_call_through_parser(self):
         from sglang.srt.function_call.function_call_parser import FunctionCallParser
