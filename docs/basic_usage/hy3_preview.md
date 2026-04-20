@@ -108,7 +108,7 @@ curl http://localhost:30000/v1/chat/completions \
 
 For benchmarking, disable prefix caching by adding `--disable-radix-cache` to the server command.
 
-- The following uses H20*8 as an example to demonstrate how to run the benchmark.
+- The following uses H20(96GB)*8 as an example to demonstrate how to run the benchmark.
 
 ```bash
 python3 -m sglang.bench_serving \
@@ -122,7 +122,7 @@ python3 -m sglang.bench_serving \
     --max-concurrency 32 \
     --output-file hy3_preview_h20.jsonl \
     --model tencent/HY3-FP8 \
-    --served-model-name test \
+    --served-model-name hy-3-fp8
 ```
 
 If successful, you will see the following output.
