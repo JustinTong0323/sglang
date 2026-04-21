@@ -1,6 +1,6 @@
-# HY3-Preview Usage
+# Hy3-preview Usage
 
-HY3 Preview is a significantly scaled-up language model (294B parameters, 20B active parameters) provided by Tencent Hunyuan Teams. SGLang has supported HY3-Preview. This guide describes how to run HY3 Preview with native FP8.
+Hy3-preview is a significantly scaled-up language model (294B parameters, 20B active parameters) provided by Tencent Hunyuan Teams. SGLang has supported Hy3-preview. This guide describes how to run Hy3-preview with native FP8.
 
 ## Installation
 
@@ -20,35 +20,35 @@ pip3 install pip --upgrade
 pip3 install -e "python"
 ```
 
-## Launch HY3-Preview with SGLang
+## Launch Hy3-preview with SGLang
 
-To serve [HY3-Preview-FP8](https://huggingface.co/tencent/HY3-FP8) models on 8xH20 GPUs:
+To serve [Hy3-preview-FP8](https://huggingface.co/tencent/Hy3-preview-FP8) models on 8xH20 GPUs:
 ```bash
 python3 -m sglang.launch_server \
-  --model tencent/HY3-FP8 \
+  --model tencent/Hy3-preview-FP8 \
   --tp 8 \
   --tool-call-parser hunyuan \
   --reasoning-parser hunyuan \
-  --served-model-name hy-3-fp8
+  --served-model-name hy3-preview-fp8
 ```
 
 ### EAGLE Speculative Decoding
 
-**Description**: SGLang has supported HY3-Preview models with [EAGLE speculative decoding](https://docs.sglang.io/advanced_features/speculative_decoding.html#EAGLE-Decoding).
+**Description**: SGLang has supported Hy3-preview models with [EAGLE speculative decoding](https://docs.sglang.io/advanced_features/speculative_decoding.html#eagle-decoding).
 
 **Usage**:
 Add arguments `--speculative-algorithm`, `--speculative-num-steps`, `--speculative-eagle-topk` and `--speculative-num-draft-tokens` to enable this feature. For example:
 
 ``` bash
 python3 -m sglang.launch_server \
-  --model tencent/HY3-FP8 \
+  --model tencent/Hy3-preview-FP8 \
   --tp 8 \
   --tool-call-parser hunyuan \
   --reasoning-parser hunyuan \
   --speculative-num-steps 1 \
   --speculative-eagle-topk 1 \
   --speculative-algorithm EAGLE \
-  --served-model-name hy-3-fp8
+  --served-model-name hy3-preview-fp8
 ```
 
 ## OpenAI Client Example
@@ -80,7 +80,7 @@ messages = [
 
 # Thinking ON (default if you omit chat_template_kwargs)
 resp_on = client.chat.completions.create(
-    model="hy-3-fp8",
+    model="hy3-preview-fp8",
     messages=messages,
     temperature=1,
     max_tokens=4096,
@@ -94,7 +94,7 @@ print(resp_on.choices[0].message.content)
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d ' {
-    "model": "hy-3-fp8",
+    "model": "hy3-preview-fp8",
     "messages": [
       {"role": "system", "content": "You are a helpful assistant."},
       {"role": "user", "content": "Hello."}
@@ -121,8 +121,8 @@ python3 -m sglang.bench_serving \
     --num-prompts 160 \
     --max-concurrency 32 \
     --output-file hy3_preview_h20.jsonl \
-    --model tencent/HY3-FP8 \
-    --served-model-name hy-3-fp8
+    --model tencent/Hy3-preview-FP8 \
+    --served-model-name hy3-preview-fp8
 ```
 
 If successful, you will see the following output.
