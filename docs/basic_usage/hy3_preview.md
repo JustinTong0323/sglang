@@ -62,7 +62,7 @@ First, install the OpenAI Python client:
 uv pip install -U openai
 ```
 
-You can use the OpenAI client as follows to verify reasoning-mode responses.
+You can use the OpenAI client as follows to verify thinking-mode responses.
 
 ```python
 from openai import OpenAI
@@ -81,14 +81,34 @@ messages = [
     {"role": "user", "content": "Hello."},
 ]
 
-# Reasoning mode is enabled by default if you omit chat_template_kwargs.
-resp_on = client.chat.completions.create(
+# Thinking mode is disabled by default (no need to pass chat_template_kwargs).
+resp = client.chat.completions.create(
     model="hy3-preview-fp8",
     messages=messages,
     temperature=1,
     max_tokens=4096,
 )
-print(resp_on.choices[0].message.content)
+print(resp.choices[0].message.content)
+
+# Thinking mode is enabled only if 'reasoning_effort' and 'interleaved_thinking' are set in 'chat_template_kwargs'.
+# 'reasoning_effort' supports: 'high', 'low', 'no_think'.
+resp_think = client.chat.completions.create(
+    model="hy3-preview-fp8",
+    messages=messages,
+    temperature=1,
+    max_tokens=4096,
+    extra_body={
+      "chat_template_kwargs": {
+          "reasoning_effort": "high",
+          "interleaved_thinking": True
+      },
+    },
+)
+output_msg = resp_think.choices[0].message
+# thinking content
+print(output_msg.reasoning_content)
+# response content
+print(output_msg.content)
 ```
 
 ### cURL Usage
