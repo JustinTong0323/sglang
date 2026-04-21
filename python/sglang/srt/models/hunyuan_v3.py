@@ -47,7 +47,7 @@ from sglang.srt.managers.schedule_batch import ForwardBatch
 from sglang.srt.model_executor.cuda_graph_runner import get_is_capture_mode
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.utils import is_cuda
-
+from sglang.srt.utils.hf_transformers_utils import get_rope_config
 
 class HYV3FeedForward(nn.Module):
     def __init__(
@@ -339,13 +339,14 @@ class HYV3DecoderLayer(nn.Module):
         self.layer_id = layer_id
         self.hidden_size = config.hidden_size
         max_position_embeddings = getattr(config, "max_position_embeddings", 8192)
+        rope_theta, _ = get_rope_config(config)
         self.self_attn = HYV3Attention(
             config=config,
             hidden_size=self.hidden_size,
             num_heads=config.num_attention_heads,
             num_kv_heads=config.num_key_value_heads,
             layer_id=layer_id,
-            rope_theta=getattr(config, "rope_theta", 10000),
+            rope_theta=rope_theta,
             max_position_embeddings=max_position_embeddings,
             quant_config=quant_config,
             prefix=f"{prefix}.self_attn",
