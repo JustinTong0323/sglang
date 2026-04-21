@@ -1,28 +1,30 @@
 # Hy3-preview Usage
 
-Hy3-preview is a significantly scaled-up language model (294B parameters, 20B active parameters) provided by Tencent Hunyuan Teams. SGLang has supported Hy3-preview. This guide describes how to run Hy3-preview with native FP8.
+Hy3-preview is a large-scale language model (294B parameters, 20B active parameters) from Tencent Hunyuan team. SGLang supports serving Hy3-preview. This guide describes how to run Hy3-preview with native FP8.
 
 ## Installation
 
 ### Docker
 
 ```bash
-
+docker pull lmsysorg/sglang:hy3-preview
 ```
 
-### Build From Source
+### Build from Source
 
 ```bash
 # Install SGLang
 git clone https://github.com/sgl-project/sglang
 cd sglang
 pip3 install pip --upgrade
+pip3 install "transformers>=5.6.0"
 pip3 install -e "python"
 ```
 
 ## Launch Hy3-preview with SGLang
 
-To serve [Hy3-preview-FP8](https://huggingface.co/tencent/Hy3-preview-FP8) models on 8xH20 GPUs:
+To serve the [Hy3-preview-FP8](https://huggingface.co/tencent/Hy3-preview-FP8) model on an 8xH20 GPU machine:
+
 ```bash
 python3 -m sglang.launch_server \
   --model tencent/Hy3-preview-FP8 \
@@ -34,12 +36,12 @@ python3 -m sglang.launch_server \
 
 ### EAGLE Speculative Decoding
 
-**Description**: SGLang has supported Hy3-preview models with [EAGLE speculative decoding](https://docs.sglang.io/advanced_features/speculative_decoding.html#eagle-decoding).
+**Description**: SGLang supports Hy3-preview models with [EAGLE speculative decoding](https://docs.sglang.io/advanced_features/speculative_decoding.html#eagle-decoding).
 
 **Usage**:
-Add arguments `--speculative-algorithm`, `--speculative-num-steps`, `--speculative-eagle-topk` and `--speculative-num-draft-tokens` to enable this feature. For example:
+Add `--speculative-algorithm`, `--speculative-num-steps`, `--speculative-eagle-topk`, and `--speculative-num-draft-tokens` to enable this feature. For example:
 
-``` bash
+```bash
 python3 -m sglang.launch_server \
   --model tencent/Hy3-preview-FP8 \
   --tp 8 \
@@ -47,6 +49,7 @@ python3 -m sglang.launch_server \
   --reasoning-parser hunyuan \
   --speculative-num-steps 1 \
   --speculative-eagle-topk 1 \
+  --speculative-num-draft-tokens 2 \
   --speculative-algorithm EAGLE \
   --served-model-name hy3-preview-fp8
 ```
@@ -59,13 +62,13 @@ First, install the OpenAI Python client:
 uv pip install -U openai
 ```
 
-You can use the OpenAI client as follows to  verify the think mode.
+You can use the OpenAI client as follows to verify reasoning-mode responses.
 
 ```python
 from openai import OpenAI
 
-# If running vLLM locally with its default OpenAI-compatible port:
-#   http://localhost:8000/v1
+# If running SGLang locally with its default OpenAI-compatible port:
+#   http://localhost:30000/v1
 openai_api_key = "EMPTY"
 openai_api_base = "http://localhost:30000/v1"
 
@@ -78,7 +81,7 @@ messages = [
     {"role": "user", "content": "Hello."},
 ]
 
-# Thinking ON (default if you omit chat_template_kwargs)
+# Reasoning mode is enabled by default if you omit chat_template_kwargs.
 resp_on = client.chat.completions.create(
     model="hy3-preview-fp8",
     messages=messages,
@@ -93,7 +96,7 @@ print(resp_on.choices[0].message.content)
 ```bash
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d ' {
+  -d '{
     "model": "hy3-preview-fp8",
     "messages": [
       {"role": "system", "content": "You are a helpful assistant."},
@@ -101,14 +104,14 @@ curl http://localhost:30000/v1/chat/completions \
     ],
     "temperature": 1,
     "max_tokens": 4096
-  } '
+  }'
 ```
 
 ## Benchmarking Results
 
 For benchmarking, disable prefix caching by adding `--disable-radix-cache` to the server command.
 
-- The following uses H20(96GB)*8 as an example to demonstrate how to run the benchmark.
+The following example runs the benchmark on 8 H20 GPUs with 96 GB memory each.
 
 ```bash
 python3 -m sglang.bench_serving \
