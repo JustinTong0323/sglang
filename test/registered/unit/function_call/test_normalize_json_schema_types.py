@@ -87,9 +87,10 @@ class TestNormalizeJsonSchemaTypes(CustomTestCase):
             "type": "object",
             "properties": {
                 "a": {"type": "list[str]"},
-                "b": {"type": "list_of_int"},
+                "b": {"type": "list<int>"},
                 "c": {"type": "dict"},
                 "d": {"type": "dict[str, int]"},
+                "e": {"type": "long long"},
             },
         }
         normalize_json_schema_types(schema)
@@ -98,6 +99,62 @@ class TestNormalizeJsonSchemaTypes(CustomTestCase):
         self.assertEqual(p["b"]["type"], "array")
         self.assertEqual(p["c"]["type"], "object")
         self.assertEqual(p["d"]["type"], "object")
+        self.assertEqual(p["e"]["type"], "integer")
+        self._assert_accepts(schema)
+
+    def test_word_boundary_prevents_false_positives(self):
+        """Prefixes must end at a non-identifier char, so custom type names
+        that merely start with a known prefix are left alone."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "a": {"type": "internal"},
+                "b": {"type": "list_price"},
+                "c": {"type": "integer_enum"},
+                "d": {"type": "dictionary_entry"},
+                "e": {"type": "floating"},
+            },
+        }
+        normalize_json_schema_types(schema)
+        p = schema["properties"]
+        for key, expected in [
+            ("a", "internal"),
+            ("b", "list_price"),
+            ("c", "integer_enum"),
+            ("d", "dictionary_entry"),
+            ("e", "floating"),
+        ]:
+            self.assertEqual(p[key]["type"], expected)
+
+    def test_recurses_into_draft_2020_12_keywords(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "row": {
+                    "dependentSchemas": {
+                        "kind": {
+                            "properties": {"sku": {"type": "varchar"}},
+                        },
+                    },
+                    "propertyNames": {"type": "str"},
+                    "unevaluatedProperties": {"type": "bigint"},
+                },
+                "rows": {
+                    "type": "arr",
+                    "unevaluatedItems": {"type": "int32"},
+                },
+            },
+        }
+        normalize_json_schema_types(schema)
+        row = schema["properties"]["row"]
+        rows = schema["properties"]["rows"]
+        self.assertEqual(
+            row["dependentSchemas"]["kind"]["properties"]["sku"]["type"], "string"
+        )
+        self.assertEqual(row["propertyNames"]["type"], "string")
+        self.assertEqual(row["unevaluatedProperties"]["type"], "integer")
+        self.assertEqual(rows["type"], "array")
+        self.assertEqual(rows["unevaluatedItems"]["type"], "integer")
         self._assert_accepts(schema)
 
     def test_binary_and_arr_aliases(self):

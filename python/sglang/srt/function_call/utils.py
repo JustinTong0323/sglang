@@ -42,6 +42,7 @@ _JSON_SCHEMA_TYPE_ALIASES: Dict[str, str] = {
     "double": "number",
     "decimal": "number",
     "real": "number",
+    "numeric": "number",
     "arr": "array",
     "tuple": "array",
     "set": "array",
@@ -50,14 +51,31 @@ _JSON_SCHEMA_TYPE_ALIASES: Dict[str, str] = {
 
 # Prefix-based matching so that parameterised DB/ORM type names like
 # ``int32`` / ``uint`` / ``float64`` / ``list[str]`` / ``dict[str, int]`` are
-# also accepted.
+# also accepted. A prefix only matches when it spans the entire token or is
+# followed by a non-identifier char (digit, bracket, space) — so "int" does
+# not swallow "internal" and "list" does not swallow "list_price".
 _INTEGER_TYPE_PREFIXES = ("int", "uint", "long", "short", "unsigned")
 _NUMBER_TYPE_PREFIXES = ("num", "float")
 _ARRAY_TYPE_PREFIXES = ("list",)
 _OBJECT_TYPE_PREFIXES = ("dict",)
 
+_PREFIX_BOUNDARY_CHARS = frozenset("0123456789[<( \t")
+
 # Strip parenthesized parameters like ``varchar(255)`` or ``decimal(10,2)``.
 _PAREN_SUFFIX_RE = re.compile(r"\s*\(.*\)\s*$")
+
+
+def _matches_type_prefix(base: str, prefixes: Tuple[str, ...]) -> bool:
+    for p in prefixes:
+        if base == p:
+            return True
+        if (
+            len(base) > len(p)
+            and base.startswith(p)
+            and base[len(p)] in _PREFIX_BOUNDARY_CHARS
+        ):
+            return True
+    return False
 
 
 def _normalize_single_type(raw: Any) -> Any:
@@ -71,13 +89,13 @@ def _normalize_single_type(raw: Any) -> Any:
     mapped = _JSON_SCHEMA_TYPE_ALIASES.get(base)
     if mapped is not None:
         return mapped
-    if any(base.startswith(p) for p in _INTEGER_TYPE_PREFIXES):
+    if _matches_type_prefix(base, _INTEGER_TYPE_PREFIXES):
         return "integer"
-    if any(base.startswith(p) for p in _NUMBER_TYPE_PREFIXES):
+    if _matches_type_prefix(base, _NUMBER_TYPE_PREFIXES):
         return "number"
-    if any(base.startswith(p) for p in _ARRAY_TYPE_PREFIXES):
+    if _matches_type_prefix(base, _ARRAY_TYPE_PREFIXES):
         return "array"
-    if any(base.startswith(p) for p in _OBJECT_TYPE_PREFIXES):
+    if _matches_type_prefix(base, _OBJECT_TYPE_PREFIXES):
         return "object"
     return raw
 
@@ -107,7 +125,13 @@ def normalize_json_schema_types(schema: Any) -> None:
         elif isinstance(t, list):
             schema["type"] = [_normalize_single_type(item) for item in t]
 
-    for key in ("properties", "patternProperties", "$defs", "definitions"):
+    for key in (
+        "properties",
+        "patternProperties",
+        "$defs",
+        "definitions",
+        "dependentSchemas",
+    ):
         nested = schema.get(key)
         if isinstance(nested, dict):
             for v in nested.values():
@@ -127,6 +151,9 @@ def normalize_json_schema_types(schema: Any) -> None:
         "then",
         "else",
         "contains",
+        "propertyNames",
+        "unevaluatedItems",
+        "unevaluatedProperties",
     ):
         if key in schema:
             normalize_json_schema_types(schema[key])
