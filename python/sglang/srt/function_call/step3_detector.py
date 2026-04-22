@@ -273,9 +273,6 @@ class Step3Detector(BaseFormatDetector):
             if name_match:
                 func_name = name_match.group(1)
 
-                # An unknown tool is dropped in skip mode and forwarded in
-                # SGLANG_FORWARD_UNKNOWN_TOOLS mode so agent frameworks can
-                # surface the model's mistake to their own error handling.
                 if func_name not in self._tool_indices and self._handle_unknown_tool(
                     func_name
                 ):

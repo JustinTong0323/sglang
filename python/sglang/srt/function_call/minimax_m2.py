@@ -269,9 +269,6 @@ class MinimaxM2Detector(BaseFormatDetector):
                 if function_match:
                     function_name = function_match.group(1).strip()
 
-                    # An unknown tool is dropped in skip mode and forwarded in
-                    # SGLANG_FORWARD_UNKNOWN_TOOLS mode so agent frameworks can
-                    # surface the model's mistake to their own error handling.
                     if (
                         function_name not in self._tool_indices
                         and self._handle_unknown_tool(function_name)

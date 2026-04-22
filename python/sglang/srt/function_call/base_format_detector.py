@@ -232,7 +232,6 @@ class BaseFormatDetector(ABC):
                         if self.streamed_args_for_tool:
                             self.streamed_args_for_tool.pop()
                         return StreamingParseResult()
-                    # Forward mode: fall through to stream the unknown tool.
 
                 # Handle parameters/arguments consistency
                 # NOTE: we assume here that the obj is always partial of a single tool call
@@ -255,12 +254,10 @@ class BaseFormatDetector(ABC):
             if not self.current_tool_name_sent:
                 function_name = current_tool_call.get("name")
 
-                # Unknown names only reach here in forward mode — the validation
-                # branch above returns early when the env var is off.
-                if function_name and (
-                    function_name in self._tool_indices
-                    or envs.SGLANG_FORWARD_UNKNOWN_TOOLS.get()
-                ):
+                # The validation branch above has already dropped (skip mode) or
+                # waved through (forward mode) any name not in _tool_indices, so
+                # at this point a truthy function_name is always emittable.
+                if function_name:
                     # If this is a new tool (current_tool_id was -1), initialize it
                     if self.current_tool_id == -1:
                         self.current_tool_id = 0
