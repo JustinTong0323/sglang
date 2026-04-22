@@ -76,6 +76,10 @@ class BaseFormatDetector(ABC):
         is enabled and the caller should forward it to the client. All detector
         call sites should route unknown-tool decisions through this helper so the
         env var semantics stay consistent across formats.
+
+        Streaming callers must gate on their own "tool name already sent" flag
+        before invoking this; otherwise each chunk that re-parses the buffered
+        tool call will re-warn for the same name.
         """
         logger.warning(f"Model attempted to call undefined function: {name}")
         return not envs.SGLANG_FORWARD_UNKNOWN_TOOLS.get()
@@ -220,10 +224,8 @@ class BaseFormatDetector(ABC):
                     current_text[start_idx : start_idx + end_idx]
                 )
 
-                # Validate tool name if present. Gate on current_tool_name_sent
-                # so that in forward mode we only warn / decide once per tool
-                # call — obj["name"] stays set across subsequent chunks while
-                # arguments stream in.
+                # obj["name"] persists across chunks while args stream, so
+                # only validate once per tool call.
                 if (
                     not self.current_tool_name_sent
                     and "name" in obj
