@@ -1,4 +1,3 @@
-import re
 from json import JSONDecodeError, JSONDecoder
 from json.decoder import WHITESPACE
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
@@ -49,20 +48,18 @@ _JSON_SCHEMA_TYPE_ALIASES: Dict[str, str] = {
     "map": "object",
 }
 
-# Prefix-based matching so that parameterised DB/ORM type names like
-# ``int32`` / ``uint`` / ``float64`` / ``list[str]`` / ``dict[str, int]`` are
-# also accepted. A prefix only matches when it spans the entire token or is
-# followed by a non-identifier char (digit, bracket, space) — so "int" does
-# not swallow "internal" and "list" does not swallow "list_price".
-_INTEGER_TYPE_PREFIXES = ("int", "uint", "long", "short", "unsigned")
-_NUMBER_TYPE_PREFIXES = ("num", "float")
-_ARRAY_TYPE_PREFIXES = ("list",)
-_OBJECT_TYPE_PREFIXES = ("dict",)
-
+# Prefix-based matching so that parameterised names like ``int32`` /
+# ``float64`` / ``list[str]`` / ``dict[str, int]`` resolve. A prefix only
+# matches when it spans the entire token or is followed by a non-identifier
+# char, so "int" does not swallow "internal" and "list" does not swallow
+# "list_price".
 _PREFIX_BOUNDARY_CHARS = frozenset("0123456789[<( \t")
-
-# Strip parenthesized parameters like ``varchar(255)`` or ``decimal(10,2)``.
-_PAREN_SUFFIX_RE = re.compile(r"\s*\(.*\)\s*$")
+_PREFIX_RULES: Tuple[Tuple[Tuple[str, ...], str], ...] = (
+    (("int", "uint", "long", "short", "unsigned"), "integer"),
+    (("num", "float"), "number"),
+    (("list",), "array"),
+    (("dict",), "object"),
+)
 
 
 def _matches_type_prefix(base: str, prefixes: Tuple[str, ...]) -> bool:
@@ -83,20 +80,17 @@ def _normalize_single_type(raw: Any) -> Any:
         return raw
     if raw in _STANDARD_JSON_SCHEMA_TYPES:
         return raw
-    base = _PAREN_SUFFIX_RE.sub("", raw).strip().lower()
+    # ``split("(", 1)[0]`` strips parenthesized params like ``varchar(255)``
+    # or ``decimal(10,2)`` without the overhead of a regex per call.
+    base = raw.split("(", 1)[0].strip().lower()
     if base in _STANDARD_JSON_SCHEMA_TYPES:
         return base
     mapped = _JSON_SCHEMA_TYPE_ALIASES.get(base)
     if mapped is not None:
         return mapped
-    if _matches_type_prefix(base, _INTEGER_TYPE_PREFIXES):
-        return "integer"
-    if _matches_type_prefix(base, _NUMBER_TYPE_PREFIXES):
-        return "number"
-    if _matches_type_prefix(base, _ARRAY_TYPE_PREFIXES):
-        return "array"
-    if _matches_type_prefix(base, _OBJECT_TYPE_PREFIXES):
-        return "object"
+    for prefixes, target in _PREFIX_RULES:
+        if _matches_type_prefix(base, prefixes):
+            return target
     return raw
 
 
