@@ -161,6 +161,35 @@ def test_streaming_unknown_tool_forwarded(caplog, weather_tools):
         assert '"x"' in merged_args and "1" in merged_args
 
 
+def test_streaming_unknown_tool_forwarded_warns_once(caplog, weather_tools):
+    """Forward mode must not repeat the undefined-function warning every chunk.
+
+    Before the name-sent guard was added, each streaming chunk re-parsed the
+    buffered JSON and re-entered the validation branch, logging the warning
+    once per token chunk while arguments streamed in. That's log spam on the
+    detokenizer hot path for every unknown tool call.
+    """
+    with envs.SGLANG_FORWARD_UNKNOWN_TOOLS.override(True):
+        detector = StreamingDummyDetector()
+        chunks = [
+            "<tool>",
+            '{"name":"unknown_tool"',
+            ',"arguments":{',
+            '"x":1,',
+            '"y":2}}',
+        ]
+        with caplog.at_level(
+            logging.WARNING, logger="sglang.srt.function_call.base_format_detector"
+        ):
+            _run_streaming(detector, chunks, weather_tools)
+        warn_count = sum(
+            1
+            for m in caplog.messages
+            if "Model attempted to call undefined function: unknown_tool" in m
+        )
+        assert warn_count == 1, f"expected one warning, got {warn_count}"
+
+
 def test_streaming_after_unknown_tool_continues(weather_tools):
     """Dropping an unknown tool must not poison subsequent normal text."""
     with envs.SGLANG_FORWARD_UNKNOWN_TOOLS.override(False):

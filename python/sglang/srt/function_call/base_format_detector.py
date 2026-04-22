@@ -220,8 +220,15 @@ class BaseFormatDetector(ABC):
                     current_text[start_idx : start_idx + end_idx]
                 )
 
-                # Validate tool name if present
-                if "name" in obj and obj["name"] not in self._tool_indices:
+                # Validate tool name if present. Gate on current_tool_name_sent
+                # so that in forward mode we only warn / decide once per tool
+                # call — obj["name"] stays set across subsequent chunks while
+                # arguments stream in.
+                if (
+                    not self.current_tool_name_sent
+                    and "name" in obj
+                    and obj["name"] not in self._tool_indices
+                ):
                     if self._handle_unknown_tool(obj["name"]):
                         # Clearing the buffer lets later tool calls or normal
                         # text in the same response still be parsed on
