@@ -1,6 +1,6 @@
 # Hy3-preview Usage
 
-Hy3-preview is a large-scale language model (294B parameters, 20B active parameters) from Tencent Hunyuan team. SGLang supports serving Hy3-preview. This guide describes how to run Hy3-preview with native BF16.
+Hy3-preview is a large-scale language model (295B parameters, 21B active parameters) from Tencent Hunyuan team. SGLang supports serving Hy3-preview. This guide describes how to run Hy3-preview with native BF16.
 
 ## Installation
 
