@@ -69,13 +69,7 @@ class BaseFormatDetector(ABC):
         }
 
     def _handle_unknown_tool(self, name: Optional[str]) -> bool:
-        """Centralize the "model called an undefined tool" decision.
-
-        Always logs a warning, then returns True if the caller should skip this
-        tool call (default legacy behavior) or False if SGLANG_FORWARD_UNKNOWN_TOOLS
-        is enabled and the caller should forward it to the client. All detector
-        call sites should route unknown-tool decisions through this helper so the
-        env var semantics stay consistent across formats.
+        """Log the unknown-tool warning; return True to skip, False to forward.
 
         Streaming callers must gate on their own "tool name already sent" flag
         before invoking this; otherwise each chunk that re-parses the buffered
@@ -263,9 +257,7 @@ class BaseFormatDetector(ABC):
             if not self.current_tool_name_sent:
                 function_name = current_tool_call.get("name")
 
-                # The validation branch above has already dropped (skip mode) or
-                # waved through (forward mode) any name not in _tool_indices, so
-                # at this point a truthy function_name is always emittable.
+                # Unknown names are already filtered by the validation branch above.
                 if function_name:
                     # If this is a new tool (current_tool_id was -1), initialize it
                     if self.current_tool_id == -1:
