@@ -23,7 +23,7 @@ pip3 install -e "python"
 
 ## Launch Hy3-preview with SGLang
 
-To serve the [Hy3-preview](https://huggingface.co/tencent/Hy3-preview) model on an 8xH20 GPU machine:
+To serve the [Hy3-preview](https://huggingface.co/tencent/Hy3-preview) model on 8 GPUs. On 8x96GB H20, SGLang can barely deploy the BF16 model and can only run small batch sizes or short requests. Use larger-memory GPUs such as H20-3e when possible.
 
 ```bash
 python3 -m sglang.launch_server \
