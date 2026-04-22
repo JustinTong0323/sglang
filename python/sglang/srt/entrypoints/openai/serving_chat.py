@@ -48,7 +48,10 @@ from sglang.srt.entrypoints.openai.utils import (
 from sglang.srt.function_call.core_types import ToolCallItem
 from sglang.srt.function_call.function_call_parser import FunctionCallParser
 from sglang.srt.function_call.json_array_parser import JsonArrayParser
-from sglang.srt.function_call.utils import get_json_schema_constraint
+from sglang.srt.function_call.utils import (
+    get_json_schema_constraint,
+    normalize_json_schema_types,
+)
 from sglang.srt.managers.io_struct import GenerateReqInput
 from sglang.srt.parser.conversation import generate_chat_conv
 from sglang.srt.parser.jinja_template_utils import process_content_for_template_format
@@ -312,6 +315,9 @@ class OpenAIServingChat(OpenAIServingBase):
         for i, tool in enumerate(request.tools or []):
             if tool.function.parameters is None:
                 continue
+            # Rewrite DB/ORM-style aliases (e.g. "varchar", "enum", "int")
+            # to standard JSON Schema types before validation.
+            normalize_json_schema_types(tool.function.parameters)
             try:
                 Draft202012Validator.check_schema(tool.function.parameters)
             except SchemaError as e:

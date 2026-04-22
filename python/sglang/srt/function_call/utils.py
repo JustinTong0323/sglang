@@ -1,3 +1,4 @@
+import re
 from json import JSONDecodeError, JSONDecoder
 from json.decoder import WHITESPACE
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
@@ -7,6 +8,128 @@ import partial_json_parser
 from partial_json_parser.core.options import Allow
 
 from sglang.srt.entrypoints.openai.protocol import Tool, ToolChoice
+
+_STANDARD_JSON_SCHEMA_TYPES = {
+    "null",
+    "boolean",
+    "object",
+    "array",
+    "number",
+    "string",
+    "integer",
+}
+
+# Non-standard ``type`` values commonly emitted by DB/ORM-driven tool-schema
+# generators. Mapped to the closest JSON Schema 2020-12 primitive so that
+# ``Draft202012Validator.check_schema`` does not reject an otherwise-usable
+# tool definition.
+_JSON_SCHEMA_TYPE_ALIASES: Dict[str, str] = {
+    "str": "string",
+    "text": "string",
+    "varchar": "string",
+    "char": "string",
+    "enum": "string",
+    "uuid": "string",
+    "date": "string",
+    "datetime": "string",
+    "time": "string",
+    "timestamp": "string",
+    "bool": "boolean",
+    "binary": "boolean",
+    "bigint": "integer",
+    "smallint": "integer",
+    "tinyint": "integer",
+    "double": "number",
+    "decimal": "number",
+    "real": "number",
+    "arr": "array",
+    "tuple": "array",
+    "set": "array",
+    "map": "object",
+}
+
+# Prefix-based matching so that parameterised DB/ORM type names like
+# ``int32`` / ``uint`` / ``float64`` / ``list[str]`` / ``dict[str, int]`` are
+# also accepted.
+_INTEGER_TYPE_PREFIXES = ("int", "uint", "long", "short", "unsigned")
+_NUMBER_TYPE_PREFIXES = ("num", "float")
+_ARRAY_TYPE_PREFIXES = ("list",)
+_OBJECT_TYPE_PREFIXES = ("dict",)
+
+# Strip parenthesized parameters like ``varchar(255)`` or ``decimal(10,2)``.
+_PAREN_SUFFIX_RE = re.compile(r"\s*\(.*\)\s*$")
+
+
+def _normalize_single_type(raw: Any) -> Any:
+    if not isinstance(raw, str):
+        return raw
+    if raw in _STANDARD_JSON_SCHEMA_TYPES:
+        return raw
+    base = _PAREN_SUFFIX_RE.sub("", raw).strip().lower()
+    if base in _STANDARD_JSON_SCHEMA_TYPES:
+        return base
+    mapped = _JSON_SCHEMA_TYPE_ALIASES.get(base)
+    if mapped is not None:
+        return mapped
+    if any(base.startswith(p) for p in _INTEGER_TYPE_PREFIXES):
+        return "integer"
+    if any(base.startswith(p) for p in _NUMBER_TYPE_PREFIXES):
+        return "number"
+    if any(base.startswith(p) for p in _ARRAY_TYPE_PREFIXES):
+        return "array"
+    if any(base.startswith(p) for p in _OBJECT_TYPE_PREFIXES):
+        return "object"
+    return raw
+
+
+def normalize_json_schema_types(schema: Any) -> None:
+    """
+    Walk a JSON Schema in place and rewrite non-standard ``"type"`` values
+    (e.g. ``"varchar"``, ``"enum"``, ``"int"``) to their standard JSON Schema
+    equivalents.
+
+    Acts as a compatibility layer for tool ``parameters`` schemas exported
+    from database / ORM tooling, which often uses DB type names rather than
+    JSON Schema types. Unknown types are left untouched so that downstream
+    validation can still surface genuine errors.
+    """
+    if isinstance(schema, list):
+        for item in schema:
+            normalize_json_schema_types(item)
+        return
+    if not isinstance(schema, dict):
+        return
+
+    if "type" in schema:
+        t = schema["type"]
+        if isinstance(t, str):
+            schema["type"] = _normalize_single_type(t)
+        elif isinstance(t, list):
+            schema["type"] = [_normalize_single_type(item) for item in t]
+
+    for key in ("properties", "patternProperties", "$defs", "definitions"):
+        nested = schema.get(key)
+        if isinstance(nested, dict):
+            for v in nested.values():
+                normalize_json_schema_types(v)
+
+    for key in ("anyOf", "oneOf", "allOf", "prefixItems"):
+        nested = schema.get(key)
+        if isinstance(nested, list):
+            for v in nested:
+                normalize_json_schema_types(v)
+
+    for key in (
+        "items",
+        "additionalProperties",
+        "not",
+        "if",
+        "then",
+        "else",
+        "contains",
+    ):
+        if key in schema:
+            normalize_json_schema_types(schema[key])
 
 
 def _find_common_prefix(s1: str, s2: str) -> str:
