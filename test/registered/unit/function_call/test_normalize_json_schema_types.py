@@ -1,5 +1,6 @@
 """Unit tests for tool-parameter schema alias normalization."""
 
+import json
 import unittest
 
 from jsonschema import Draft202012Validator, SchemaError
@@ -306,6 +307,83 @@ class TestNormalizeJsonSchemaTypes(CustomTestCase):
             "required": ["sql", "mode"],
         }
         normalize_json_schema_types(schema)
+        self._assert_accepts(schema)
+
+    def test_idempotent(self):
+        """Running normalize twice produces the same result as running it once."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "a": {"type": "varchar"},
+                "b": {"type": "int32"},
+                "c": {"type": ["bigint", "null"]},
+                "d": {
+                    "anyOf": [{"type": "enum"}, {"type": "decimal(10,2)"}],
+                },
+            },
+        }
+        normalize_json_schema_types(schema)
+        once = json.loads(json.dumps(schema))
+        normalize_json_schema_types(schema)
+        self.assertEqual(schema, once)
+
+    def test_non_string_type_values_pass_through(self):
+        """``type`` that isn't str/list is left for the real validator to reject."""
+        for bad in (None, 42, {"$ref": "#/$defs/Foo"}, ["string", 1, None]):
+            schema = {"properties": {"x": {"type": bad}}}
+            normalize_json_schema_types(schema)
+            self.assertEqual(schema["properties"]["x"]["type"], bad)
+
+    def test_recurses_into_all_walked_keywords(self):
+        """Every keyword the walker recurses into must actually rewrite nested aliases."""
+        schema = {
+            "patternProperties": {"^x_": {"type": "varchar"}},
+            "definitions": {"Row": {"type": "bigint"}},
+            "prefixItems": [{"type": "int32"}, {"type": "float64"}],
+            "if": {"type": "bool"},
+            "then": {"type": "str"},
+            "else": {"type": "decimal"},
+            "not": {"type": "uuid"},
+            "contains": {"type": "enum"},
+            "additionalProperties": {"type": "binary"},
+        }
+        normalize_json_schema_types(schema)
+        self.assertEqual(schema["patternProperties"]["^x_"]["type"], "string")
+        self.assertEqual(schema["definitions"]["Row"]["type"], "integer")
+        self.assertEqual(schema["prefixItems"][0]["type"], "integer")
+        self.assertEqual(schema["prefixItems"][1]["type"], "number")
+        self.assertEqual(schema["if"]["type"], "boolean")
+        self.assertEqual(schema["then"]["type"], "string")
+        self.assertEqual(schema["else"]["type"], "number")
+        self.assertEqual(schema["not"]["type"], "string")
+        self.assertEqual(schema["contains"]["type"], "string")
+        self.assertEqual(schema["additionalProperties"]["type"], "boolean")
+
+    def test_cyclic_schema_raises_recursion_error(self):
+        """A pathological cyclic schema surfaces as RecursionError — caller
+        (``_validate_request``) converts it to a 400, not a 500."""
+        schema = {"type": "object"}
+        schema["items"] = schema
+        with self.assertRaises(RecursionError):
+            normalize_json_schema_types(schema)
+
+    def test_boolean_subschema_does_not_crash(self):
+        """``additionalProperties: True`` and ``items: false`` are valid 2020-12
+        forms; the walker must pass through without raising."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "a": {"type": "varchar"},
+                "b": {"type": "array", "items": False},
+            },
+            "additionalProperties": True,
+            "unevaluatedProperties": False,
+        }
+        normalize_json_schema_types(schema)
+        self.assertEqual(schema["properties"]["a"]["type"], "string")
+        self.assertIs(schema["properties"]["b"]["items"], False)
+        self.assertIs(schema["additionalProperties"], True)
+        self.assertIs(schema["unevaluatedProperties"], False)
         self._assert_accepts(schema)
 
 

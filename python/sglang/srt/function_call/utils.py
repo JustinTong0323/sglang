@@ -110,6 +110,11 @@ def normalize_json_schema_types(schema: Any) -> None:
     from database / ORM tooling, which often uses DB type names rather than
     JSON Schema types. Unknown types are left untouched so that downstream
     validation can still surface genuine errors.
+
+    Mutates the input dict in place; the rewritten schema is also what gets
+    rendered into the model prompt, so e.g. a user-supplied ``"varchar"``
+    reaches the model as ``"string"``. ``$ref`` values are not resolved —
+    callers pass tree-shaped schemas (HTTP JSON input is always a tree).
     """
     if isinstance(schema, list):
         for item in schema:

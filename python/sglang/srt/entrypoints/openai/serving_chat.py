@@ -315,13 +315,20 @@ class OpenAIServingChat(OpenAIServingBase):
         for i, tool in enumerate(request.tools or []):
             if tool.function.parameters is None:
                 continue
-            # Rewrite DB/ORM-style aliases (e.g. "varchar", "enum", "int")
-            # to standard JSON Schema types before validation.
-            normalize_json_schema_types(tool.function.parameters)
             try:
+                # Rewrite DB/ORM-style aliases (e.g. "varchar", "enum", "int")
+                # to standard JSON Schema types before validation. RecursionError
+                # guards against hand-crafted cyclic schemas so the request gets
+                # a 400 instead of crashing into a 500.
+                normalize_json_schema_types(tool.function.parameters)
                 Draft202012Validator.check_schema(tool.function.parameters)
             except SchemaError as e:
                 return f"Tool {i} function has invalid 'parameters' schema: {str(e)}"
+            except RecursionError:
+                return (
+                    f"Tool {i} function 'parameters' schema is too deeply nested "
+                    "or contains a cycle."
+                )
 
         max_output_tokens = request.max_completion_tokens or request.max_tokens
         server_context_length = self.tokenizer_manager.server_args.context_length
