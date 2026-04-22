@@ -1,6 +1,6 @@
 # Hy3-preview Usage
 
-Hy3-preview is a large-scale language model (294B parameters, 20B active parameters) from Tencent Hunyuan team. SGLang supports serving Hy3-preview. This guide describes how to run Hy3-preview with native FP8.
+Hy3-preview is a large-scale language model (294B parameters, 20B active parameters) from Tencent Hunyuan team. SGLang supports serving Hy3-preview. This guide describes how to run Hy3-preview with native BF16.
 
 ## Installation
 
@@ -23,15 +23,15 @@ pip3 install -e "python"
 
 ## Launch Hy3-preview with SGLang
 
-To serve the [Hy3-preview-FP8](https://huggingface.co/tencent/Hy3-preview-FP8) model on an 8xH20 GPU machine:
+To serve the [Hy3-preview](https://huggingface.co/tencent/Hy3-preview) model on an 8xH20 GPU machine:
 
 ```bash
 python3 -m sglang.launch_server \
-  --model tencent/Hy3-preview-FP8 \
+  --model tencent/Hy3-preview \
   --tp 8 \
   --tool-call-parser hunyuan \
   --reasoning-parser hunyuan \
-  --served-model-name hy3-preview-fp8
+  --served-model-name hy3-preview
 ```
 
 ### EAGLE Speculative Decoding
@@ -43,7 +43,7 @@ Add `--speculative-algorithm`, `--speculative-num-steps`, `--speculative-eagle-t
 
 ```bash
 python3 -m sglang.launch_server \
-  --model tencent/Hy3-preview-FP8 \
+  --model tencent/Hy3-preview \
   --tp 8 \
   --tool-call-parser hunyuan \
   --reasoning-parser hunyuan \
@@ -51,7 +51,7 @@ python3 -m sglang.launch_server \
   --speculative-eagle-topk 1 \
   --speculative-num-draft-tokens 2 \
   --speculative-algorithm EAGLE \
-  --served-model-name hy3-preview-fp8
+  --served-model-name hy3-preview
 ```
 
 ## OpenAI Client Example
@@ -83,7 +83,7 @@ messages = [
 
 # Thinking mode is disabled by default (no need to pass chat_template_kwargs).
 resp = client.chat.completions.create(
-    model="hy3-preview-fp8",
+    model="hy3-preview",
     messages=messages,
     temperature=1,
     max_tokens=4096,
@@ -93,7 +93,7 @@ print(resp.choices[0].message.content)
 # Thinking mode is enabled only if 'reasoning_effort' and 'interleaved_thinking' are set in 'chat_template_kwargs'.
 # 'reasoning_effort' supports: 'high', 'low', 'no_think'.
 resp_think = client.chat.completions.create(
-    model="hy3-preview-fp8",
+    model="hy3-preview",
     messages=messages,
     temperature=1,
     max_tokens=4096,
@@ -117,7 +117,7 @@ print(output_msg.content)
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "hy3-preview-fp8",
+    "model": "hy3-preview",
     "messages": [
       {"role": "system", "content": "You are a helpful assistant."},
       {"role": "user", "content": "Hello."}
@@ -141,11 +141,11 @@ python3 -m sglang.bench_serving \
     --random-range-ratio 1.0 \
     --random-input-len 4096 \
     --random-output-len 4096 \
-    --num-prompts 160 \
-    --max-concurrency 32 \
+    --num-prompts 5 \
+    --max-concurrency 1 \
     --output-file hy3_preview_h20.jsonl \
-    --model tencent/Hy3-preview-FP8 \
-    --served-model-name hy3-preview-fp8
+    --model tencent/Hy3-preview \
+    --served-model-name hy3-preview
 ```
 
 If successful, you will see the following output.
@@ -154,38 +154,38 @@ If successful, you will see the following output.
 ============ Serving Benchmark Result ============
 Backend:                                 sglang
 Traffic request rate:                    inf
-Max request concurrency:                 32
-Successful requests:                     160
-Benchmark duration (s):                  560.37
-Total input tokens:                      655360
-Total input text tokens:                 655360
-Total generated tokens:                  655360
-Total generated tokens (retokenized):    654700
-Request throughput (req/s):              0.29
-Input token throughput (tok/s):          1169.50
-Output token throughput (tok/s):         1169.50
-Peak output token throughput (tok/s):    1376.00
-Peak concurrent requests:                64
-Total token throughput (tok/s):          2339.01
-Concurrency:                             31.99
+Max request concurrency:                 1
+Successful requests:                     5
+Benchmark duration (s):                  176.41
+Total input tokens:                      20480
+Total input text tokens:                 20480
+Total generated tokens:                  20480
+Total generated tokens (retokenized):    20480
+Request throughput (req/s):              0.03
+Input token throughput (tok/s):          116.09
+Output token throughput (tok/s):         116.09
+Peak output token throughput (tok/s):    118.00
+Peak concurrent requests:                2
+Total token throughput (tok/s):          232.19
+Concurrency:                             1.00
 ----------------End-to-End Latency----------------
-Mean E2E Latency (ms):                   112055.69
-Median E2E Latency (ms):                 111967.15
-P90 E2E Latency (ms):                    112712.63
-P99 E2E Latency (ms):                    112721.22
+Mean E2E Latency (ms):                   35279.06
+Median E2E Latency (ms):                 35275.60
+P90 E2E Latency (ms):                    35294.13
+P99 E2E Latency (ms):                    35294.41
 ---------------Time to First Token----------------
-Mean TTFT (ms):                          3828.65
-Median TTFT (ms):                        3786.40
-P99 TTFT (ms):                           6531.28
+Mean TTFT (ms):                          355.93
+Median TTFT (ms):                        309.28
+P99 TTFT (ms):                           518.36
 -----Time per Output Token (excl. 1st token)------
-Mean TPOT (ms):                          26.43
-Median TPOT (ms):                        26.41
-P99 TPOT (ms):                           27.29
+Mean TPOT (ms):                          8.53
+Median TPOT (ms):                        8.54
+P99 TPOT (ms):                           8.54
 ---------------Inter-Token Latency----------------
-Mean ITL (ms):                           26.43
-Median ITL (ms):                         25.78
-P95 ITL (ms):                            27.88
-P99 ITL (ms):                            28.32
-Max ITL (ms):                            6010.40
+Mean ITL (ms):                           8.53
+Median ITL (ms):                         8.54
+P95 ITL (ms):                            8.62
+P99 ITL (ms):                            8.74
+Max ITL (ms):                            31.70
 ==================================================
 ```
