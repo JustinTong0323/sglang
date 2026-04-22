@@ -1,7 +1,7 @@
 import json
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import orjson
 from partial_json_parser.core.exceptions import MalformedJSON
@@ -68,6 +68,18 @@ class BaseFormatDetector(ABC):
             tool.function.name: i for i, tool in enumerate(tools) if tool.function.name
         }
 
+    def _handle_unknown_tool(self, name: Optional[str]) -> bool:
+        """Centralize the "model called an undefined tool" decision.
+
+        Always logs a warning, then returns True if the caller should skip this
+        tool call (default legacy behavior) or False if SGLANG_FORWARD_UNKNOWN_TOOLS
+        is enabled and the caller should forward it to the client. All detector
+        call sites should route unknown-tool decisions through this helper so the
+        env var semantics stay consistent across formats.
+        """
+        logger.warning(f"Model attempted to call undefined function: {name}")
+        return not envs.SGLANG_FORWARD_UNKNOWN_TOOLS.get()
+
     def parse_base_json(self, action: Any, tools: List[Tool]) -> List[ToolCallItem]:
         tool_indices = self._get_tool_indices(tools)
         if not isinstance(action, list):
@@ -77,9 +89,8 @@ class BaseFormatDetector(ABC):
         for act in action:
             name = act.get("name")
             if not (name and name in tool_indices):
-                logger.warning(f"Model attempted to call undefined function: {name}")
-                if not envs.SGLANG_FORWARD_UNKNOWN_TOOLS.get():
-                    continue  # Skip unknown tools (default legacy behavior)
+                if self._handle_unknown_tool(name):
+                    continue
 
             results.append(
                 ToolCallItem(
@@ -211,13 +222,17 @@ class BaseFormatDetector(ABC):
 
                 # Validate tool name if present
                 if "name" in obj and obj["name"] not in self._tool_indices:
-                    # Invalid tool name - reset state
-                    self._buffer = ""
-                    self.current_tool_id = -1
-                    self.current_tool_name_sent = False
-                    if self.streamed_args_for_tool:
-                        self.streamed_args_for_tool.pop()
-                    return StreamingParseResult()
+                    if self._handle_unknown_tool(obj["name"]):
+                        # Clearing the buffer lets later tool calls or normal
+                        # text in the same response still be parsed on
+                        # subsequent chunks.
+                        self._buffer = ""
+                        self.current_tool_id = -1
+                        self.current_tool_name_sent = False
+                        if self.streamed_args_for_tool:
+                            self.streamed_args_for_tool.pop()
+                        return StreamingParseResult()
+                    # Forward mode: fall through to stream the unknown tool.
 
                 # Handle parameters/arguments consistency
                 # NOTE: we assume here that the obj is always partial of a single tool call
@@ -240,7 +255,12 @@ class BaseFormatDetector(ABC):
             if not self.current_tool_name_sent:
                 function_name = current_tool_call.get("name")
 
-                if function_name and function_name in self._tool_indices:
+                # Unknown names only reach here in forward mode — the validation
+                # branch above returns early when the env var is off.
+                if function_name and (
+                    function_name in self._tool_indices
+                    or envs.SGLANG_FORWARD_UNKNOWN_TOOLS.get()
+                ):
                     # If this is a new tool (current_tool_id was -1), initialize it
                     if self.current_tool_id == -1:
                         self.current_tool_id = 0
