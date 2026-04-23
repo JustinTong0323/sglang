@@ -1,7 +1,10 @@
 export const Hunyuan3PreviewDeployment = () => {
-  // Hunyuan 3 Preview (~276B total / ~20B active MoE) — NVIDIA-only single-node TP layout.
-  //   FP8 (~276GB):  A100 tp=8, H100 tp=8, H200 tp=4, B200 tp=4, B300 tp=2, GB300 tp=4
-  //   BF16 (~552GB): H200 tp=8, B200 tp=8, B300 tp=4, GB300 tp=4 (80GB-class GPUs skipped)
+  // Hunyuan 3 Preview (~276B total / ~20B active MoE) — BF16 only.
+  // ~552GB weights; 80GB-class GPUs (A100/H100) cannot fit single-node.
+  //   H200 (141GB): tp=8
+  //   B200 (180GB): tp=8
+  //   B300 (275GB): tp=4
+  //   GB300 (275GB, 4-GPU node): tp=4
   const options = {
     hardware: {
       name: 'hardware',
@@ -10,24 +13,8 @@ export const Hunyuan3PreviewDeployment = () => {
         { id: 'h200',  label: 'H200',  default: true  },
         { id: 'b200',  label: 'B200',  default: false },
         { id: 'b300',  label: 'B300',  default: false },
-        { id: 'gb300', label: 'GB300', default: false },
-        { id: 'h100',  label: 'H100',  default: false },
-        { id: 'a100',  label: 'A100',  default: false }
+        { id: 'gb300', label: 'GB300', default: false }
       ]
-    },
-    quantization: {
-      name: 'quantization',
-      title: 'Quantization',
-      getDynamicItems: (values) => {
-        const hw = values.hardware;
-        const bf16Unsupported = hw === 'a100' || hw === 'h100';
-        return [
-          { id: 'fp8',  label: 'FP8',  subtitle: 'Recommended', default: true },
-          { id: 'bf16', label: 'BF16', subtitle: 'Full Weights', default: false,
-            disabled: bf16Unsupported,
-            disabledReason: bf16Unsupported ? 'BF16 (~552GB) does not fit single-node on 80GB GPUs' : '' }
-        ];
-      }
     },
     reasoning: {
       name: 'reasoning',
@@ -56,12 +43,10 @@ export const Hunyuan3PreviewDeployment = () => {
   };
 
   const modelConfigs = {
-    a100:  { fp8:  { tp: 8, mem: 0.9 } },
-    h100:  { fp8:  { tp: 8, mem: 0.9 } },
-    h200:  { fp8:  { tp: 4, mem: 0.9 }, bf16: { tp: 8, mem: 0.9 } },
-    b200:  { fp8:  { tp: 4, mem: 0.9 }, bf16: { tp: 8, mem: 0.9 } },
-    b300:  { fp8:  { tp: 2, mem: 0.9 }, bf16: { tp: 4, mem: 0.9 } },
-    gb300: { fp8:  { tp: 4, mem: 0.9 }, bf16: { tp: 4, mem: 0.9 } }
+    h200:  { tp: 8, mem: 0.9 },
+    b200:  { tp: 8, mem: 0.9 },
+    b300:  { tp: 4, mem: 0.9 },
+    gb300: { tp: 4, mem: 0.9 }
   };
 
   const resolveItems = (option, values) => {
@@ -96,34 +81,17 @@ export const Hunyuan3PreviewDeployment = () => {
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    setValues(prev => {
-      const next = { ...prev };
-      for (const [key, option] of Object.entries(options)) {
-        if (typeof option.getDynamicItems !== 'function') continue;
-        const items = option.getDynamicItems(next);
-        const current = items.find(i => i.id === next[key]);
-        if (!current || current.disabled) {
-          const fallback = items.find(i => i.default && !i.disabled) || items.find(i => !i.disabled);
-          if (fallback) next[key] = fallback.id;
-        }
-      }
-      return next;
-    });
-  }, [values.hardware]);
-
   const handleRadioChange = (optionName, value) => {
     setValues(prev => ({ ...prev, [optionName]: value }));
   };
 
   const generateCommand = () => {
-    const { hardware, quantization } = values;
+    const { hardware } = values;
     const isBlackwell = hardware === 'b200' || hardware === 'b300' || hardware === 'gb300';
-    const hwConfig = modelConfigs[hardware] && modelConfigs[hardware][quantization];
-    if (!hwConfig) return '# Configuration not available for the selected hardware and quantization.';
+    const hwConfig = modelConfigs[hardware];
+    if (!hwConfig) return '# Configuration not available for the selected hardware.';
 
-    const suffix = quantization === 'fp8' ? '-FP8' : '';
-    const modelName = `tencent/Hy3-preview${suffix}`;
+    const modelName = 'tencent/Hy3-preview';
     const tpValue = hwConfig.tp;
     const memFraction = hwConfig.mem;
     const enableSpec = values.speculative === 'enabled';
