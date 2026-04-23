@@ -49,6 +49,7 @@ from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.utils import is_cuda
 from sglang.srt.utils.hf_transformers_utils import get_rope_config
 
+
 class HYV3FeedForward(nn.Module):
     def __init__(
         self,
