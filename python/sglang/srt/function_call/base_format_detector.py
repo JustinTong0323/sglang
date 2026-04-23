@@ -226,11 +226,9 @@ class BaseFormatDetector(ABC):
                     and obj["name"] not in self._tool_indices
                 ):
                     if self._handle_unknown_tool(obj["name"]):
-                        # Discard the unknown tool's buffered JSON. Leave
-                        # current_tool_id and streamed_args_for_tool alone —
-                        # already-completed tools still own their slots, and
-                        # the next valid tool will advance naturally through
-                        # Case 1.
+                        # Keep current_tool_id and streamed_args_for_tool
+                        # intact — already-completed slots must survive so
+                        # the next valid tool advances via Case 1.
                         self._buffer = ""
                         return StreamingParseResult()
 

@@ -179,13 +179,7 @@ def test_streaming_unknown_tool_forwarded_warns_once(caplog, weather_tools):
 
 
 def test_streaming_unknown_tool_between_known_preserves_state(weather_tools):
-    """Unknown tool mid-stream must not corrupt already-completed tool state.
-
-    The prior reset-on-unknown logic blindly pop()'d streamed_args_for_tool
-    and zeroed current_tool_id; after a first tool had completed, that would
-    discard the first tool's argument string and cause the next known tool
-    to overwrite slot 0 instead of advancing to slot 1.
-    """
+    """Unknown tool mid-stream must not corrupt already-completed tool state."""
     with envs.SGLANG_FORWARD_UNKNOWN_TOOLS.override(False):
         detector = StreamingDummyDetector()
         chunks = [
@@ -198,9 +192,10 @@ def test_streaming_unknown_tool_between_known_preserves_state(weather_tools):
         ]
         _run_streaming(detector, chunks, weather_tools)
         assert detector.streamed_args_for_tool == ['{"x": 1}', '{"y": 2}']
-        assert [
-            entry.get("arguments") for entry in detector.prev_tool_call_arr
-        ] == [{"x": 1}, {"y": 2}]
+        assert [entry.get("arguments") for entry in detector.prev_tool_call_arr] == [
+            {"x": 1},
+            {"y": 2},
+        ]
 
 
 def test_streaming_after_unknown_tool_continues(weather_tools):
