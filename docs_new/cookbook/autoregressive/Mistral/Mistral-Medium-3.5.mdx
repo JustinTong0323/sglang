@@ -1,0 +1,379 @@
+---
+title: Mistral Medium 3.5
+metatags:
+    description: "Deploy Mistral Medium 3.5 with SGLang - 128B dense multimodal model with hybrid reasoning, 256K context, and FP8 quantization."
+---
+
+import { MistralMedium35Deployment } from '/src/snippets/autoregressive/mistral-medium-3-5-deployment.jsx';
+
+## 1. Model Introduction
+
+**Mistral Medium 3.5** is a 128B dense multimodal model from Mistral AI that builds on the Mistral 3 architecture with YARN RoPE for extended context. It supports the same hybrid reasoning interface as **Mistral Small 4** — toggle between instant replies and deep reasoning per request — and accepts both text and image inputs.
+
+**Key Features:**
+
+- **Hybrid Reasoning**: Switch between instant reply mode and deep reasoning/thinking mode — reasoning effort is configurable per request
+- **Vision**: Accepts both text and image inputs, providing insights based on visual content
+- **Function Calling**: Native tool calling and JSON output support
+- **Context Window**: 256K context (YARN scaling, original 4K)
+- **Dense 128B**: Standard GQA attention (96 heads, 8 KV heads, head_dim=128) — no MoE, no MLA
+- **FP8 Native**: Released with FP8 e4m3 static-tensor quantization built in
+- **Multilingual**: Supports dozens of languages
+- Reasoning effort supported: **`"none"` and `"high"`**
+- License: **MIT modified** (same as Devstral 2)
+
+**Architecture:**
+
+- Same general architecture as Mistral 3, with YARN RoPE for 256K context
+- Dense (no MoE), 128B parameters
+- Standard GQA attention (not MLA)
+- Pixtral-style vision encoder (48 layers, patch_size=14, spatial_merge=2, image_size=1540)
+- Multimodal input: text + image
+
+**Models:**
+
+- **[mistralai/Mistral-Medium-3.5-128B](https://huggingface.co/mistralai/Mistral-Medium-3.5-128B)** (FP8)
+
+The HuggingFace repo ships both the mistral native layout (`params.json` + `consolidated-*.safetensors`) and the HF layout (`config.json` + `model-*.safetensors`). SGLang auto-detects the format — the HF layout is preferred when both are present.
+
+---
+
+## 2. SGLang Installation
+
+SGLang offers multiple installation methods. You can choose the most suitable installation method based on your hardware platform and requirements.
+
+Please refer to the [official SGLang installation guide](../../../docs/get-started/install) for installation instructions.
+
+<Info>
+Mistral Medium 3.5 support landed in [JustinTong0323/sglang-private#1](https://github.com/JustinTong0323/sglang-private/pull/1) and is currently being upstreamed to `main`. Once merged, no model-specific Docker image is required — use the standard SGLang installation methods from the [official installation guide](../../../docs/get-started/install).
+</Info>
+
+---
+
+## 3. Model Deployment
+
+### 3.1 Basic Configuration
+
+**Interactive Command Generator**: Use the configuration selector below to generate a launch command for Mistral Medium 3.5.
+
+<MistralMedium35Deployment />
+
+### 3.2 Configuration Tips
+
+- **Tensor Parallelism**: Mistral Medium 3.5 FP8 (~130 GB) requires `--tp 4` on Hopper (H100/H200) and `--tp 2` on Blackwell (B200/B300).
+- **Reasoning effort**: Reasoning depth is configurable per request via `reasoning_effort` (`"none"`, `"high"`). No restart required — toggle per call.
+- **Context length vs memory**: The model has a 256K context window. If you are memory-constrained, lower `--context-length` (e.g. `32768`) and increase once things are stable.
+- **Tool calling**: Enable `--tool-call-parser mistral` to activate native function calling support.
+- **Reasoning parser**: Enable `--reasoning-parser mistral` to separate `reasoning_content` from the main response content.
+- **System prompt**: The model ships with a recommended system prompt in `chat_template.jinja`. If you do not pass a system message yourself, the chat template injects Mistral's default (model identity, current date, tool-use guidelines). Override it by sending your own system message.
+
+---
+
+## 4. Model Invocation
+
+### 4.1 Thinking Mode
+
+Mistral Medium 3.5 is a hybrid reasoning model. By default, it does not produce a reasoning trace. Use `reasoning_effort="high"` to toggle reasoning on.
+
+```python Example
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:30000/v1",
+    api_key="EMPTY",
+)
+
+response = client.chat.completions.create(
+    model="mistralai/Mistral-Medium-3.5-128B",
+    messages=[
+        {"role": "user", "content": "Solve step by step: what is 17 × 23 + 144 / 12?"},
+    ],
+    extra_body={"reasoning_effort": "high"},
+)
+
+print("Reasoning:", response.choices[0].message.reasoning_content)
+print("Answer:", response.choices[0].message.content)
+```
+
+**Output:**
+
+```text Output
+Reasoning: I need to follow the order of operations (PEMDAS/BODMAS): multiplication and
+division before addition, evaluated left to right.
+
+17 × 23: I'll break it as 17 × (20 + 3) = 340 + 51 = 391.
+144 / 12 = 12.
+Finally, 391 + 12 = 403.
+
+Answer: **17 × 23 + 144 / 12 = 403**
+
+Step by step:
+1. 17 × 23 = 391
+2. 144 / 12 = 12
+3. 391 + 12 = 403
+```
+
+### 4.2 Instruct Mode (Reasoning Off)
+
+To skip the reasoning trace and get a fast direct response, set `reasoning_effort` to `"none"`:
+
+```python Example
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:30000/v1",
+    api_key="EMPTY",
+)
+
+response = client.chat.completions.create(
+    model="mistralai/Mistral-Medium-3.5-128B",
+    messages=[
+        {"role": "user", "content": "What is the capital of France?"},
+    ],
+    extra_body={"reasoning_effort": "none"},
+)
+
+print(response.choices[0].message.content)
+```
+
+**Output:**
+
+```text Output
+The capital of France is **Paris**. It is one of the most famous and visited cities in
+the world, known for its rich history, art, culture, and landmarks like the Eiffel Tower,
+Louvre Museum, and Notre-Dame Cathedral.
+```
+
+### 4.3 Streaming with Reasoning
+
+```python Example
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:30000/v1",
+    api_key="EMPTY",
+)
+
+stream = client.chat.completions.create(
+    model="mistralai/Mistral-Medium-3.5-128B",
+    messages=[
+        {"role": "user", "content": "Explain the difference between async and threading in Python."},
+    ],
+    extra_body={"reasoning_effort": "high"},
+    stream=True,
+)
+
+print("=== Reasoning ===")
+for chunk in stream:
+    delta = chunk.choices[0].delta
+    if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+        print(delta.reasoning_content, end="", flush=True)
+    elif delta.content:
+        print("\n=== Response ===")
+        print(delta.content, end="", flush=True)
+print()
+```
+
+### 4.4 Tool Calling
+
+Mistral Medium 3.5 supports native function calling. Enable with `--tool-call-parser mistral`:
+
+```python Example
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:30000/v1",
+    api_key="EMPTY",
+)
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the current weather for a city",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string", "description": "City name"},
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+
+response = client.chat.completions.create(
+    model="mistralai/Mistral-Medium-3.5-128B",
+    messages=[{"role": "user", "content": "What's the weather in Paris?"}],
+    tools=tools,
+    tool_choice="auto",
+)
+
+tool_calls = response.choices[0].message.tool_calls
+for tc in tool_calls:
+    print(f"Tool: {tc.function.name}")
+    print(f"Args: {tc.function.arguments}")
+```
+
+**Output:**
+
+```text Output
+Tool: get_weather
+Args: {"location": "Paris"}
+```
+
+### 4.5 Vision (Image Input)
+
+Mistral Medium 3.5 accepts image inputs alongside text:
+
+```python Example
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:30000/v1",
+    api_key="EMPTY",
+)
+
+response = client.chat.completions.create(
+    model="mistralai/Mistral-Medium-3.5-128B",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe what you see in this image."},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://raw.githubusercontent.com/sgl-project/sglang/main/assets/logo.png"},
+                },
+            ],
+        }
+    ],
+)
+
+print(response.choices[0].message.content)
+```
+
+<Note>
+Mistral has flagged that multimodal performance is currently subpar relative to leading VLMs. Expect competitive text quality but lower MMMU-style benchmarks until the next checkpoint refresh.
+</Note>
+
+---
+
+## 5. Benchmarks
+
+Validation runs on 4× H200 with `--tp 4`, served via the `/v1/chat/completions` endpoint.
+
+### 5.1 Accuracy Benchmarks
+
+#### GSM8K (chat API, 200 questions, temperature=0)
+
+```python Command
+# Drop-in eval against a running server
+import re, time, concurrent.futures
+from openai import OpenAI
+from sglang.utils import download_and_cache_file, read_jsonl
+
+INVALID = -9999999
+client = OpenAI(base_url="http://localhost:30000/v1", api_key="EMPTY")
+url = "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl"
+lines = list(read_jsonl(download_and_cache_file(url)))
+
+def get_answer_value(s):
+    s = s.replace(",", "")
+    nums = re.findall(r"-?\d+\.?\d*", s)
+    if not nums: return INVALID
+    try: return int(float(nums[-1]))
+    except: return INVALID
+
+def extract(text):
+    if "####" in text: return get_answer_value(text.split("####")[-1])
+    boxed = re.findall(r"\\boxed\{([^}]+)\}", text)
+    if boxed: return get_answer_value(boxed[-1])
+    return get_answer_value(text)
+
+def eval_one(i):
+    q = lines[i]["question"]
+    label = get_answer_value(lines[i]["answer"])
+    resp = client.chat.completions.create(
+        model="mistralai/Mistral-Medium-3.5-128B",
+        messages=[
+            {"role": "system", "content": "You are a math problem solver. Solve step by step and give your final numeric answer."},
+            {"role": "user", "content": q},
+        ],
+        max_tokens=1024, temperature=0,
+    )
+    return extract(resp.choices[0].message.content or ""), label
+
+N = 200
+results = [None] * N
+with concurrent.futures.ThreadPoolExecutor(max_workers=64) as ex:
+    futs = {ex.submit(eval_one, i): i for i in range(N)}
+    for f in concurrent.futures.as_completed(futs):
+        results[futs[f]] = f.result()
+
+correct = sum(p == l for p, l in results)
+print(f"Accuracy: {correct/N:.3f} ({correct}/{N})")
+```
+
+**Results:**
+
+```text Output
+Accuracy: 0.940 (188/200)
+```
+
+#### MMMU (vision benchmark, 100 samples)
+
+```bash Command
+python3 -m sglang.test.run_eval \
+  --eval-name mmmu \
+  --num-examples 100 \
+  --num-threads 16 \
+  --max-tokens 30 \
+  --base-url http://localhost:30000
+```
+
+**Results:**
+
+```text Output
+Score: 0.270
+```
+
+### 5.2 Speed Benchmarks
+
+#### Latency (Low Concurrency)
+
+```bash Command
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --num-prompts 10 \
+  --max-concurrency 1 \
+  --random-input-len 1024 \
+  --random-output-len 512 \
+  --port 30000
+```
+
+**Results:**
+
+```text Output
+TODO
+```
+
+#### Throughput (High Concurrency)
+
+```bash Command
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --num-prompts 1000 \
+  --max-concurrency 100 \
+  --random-input-len 1024 \
+  --random-output-len 512 \
+  --port 30000
+```
+
+**Results:**
+
+```text Output
+TODO
+```
