@@ -1123,6 +1123,8 @@ class ReasoningParser:
         if not detector_class:
             raise ValueError(f"Unsupported model type: {model_type}")
 
+        chat_template_kwargs = getattr(request, "chat_template_kwargs", None) or {}
+
         # Special cases where we override force_reasoning
         if model_type.lower() in {
             "qwen3-thinking",
@@ -1130,6 +1132,14 @@ class ReasoningParser:
             "minimax",
         }:
             force_reasoning = True
+
+        # MiniMax-M3 reasons by default: the chat template prefills the opening
+        # <mm:think> tag, so generation starts inside the reasoning block and
+        # never emits the start token. Force reasoning unless the request sets
+        # thinking_mode=disabled, otherwise the whole chain-of-thought leaks into
+        # `content` for callers that don't pass force_reasoning explicitly.
+        if model_type.lower() == "minimax-m3" and force_reasoning is None:
+            force_reasoning = chat_template_kwargs.get("thinking_mode") != "disabled"
 
         # Only pass force_reasoning if explicitly set, let detectors use their defaults
         kwargs = {"stream_reasoning": stream_reasoning}
@@ -1145,7 +1155,6 @@ class ReasoningParser:
             kwargs["continue_final_message"] = True
             kwargs["previous_content"] = request.messages[-1].content
 
-        chat_template_kwargs = getattr(request, "chat_template_kwargs", None) or {}
         if chat_template_kwargs.get("force_nonempty_content") is True:
             kwargs["force_nonempty_content"] = True
 
