@@ -203,6 +203,10 @@ def _forward_with_allreduce_fusion(
                     weight=weight,
                     eps=norm_module.variance_epsilon,
                     max_token_num=max(x.shape[0], 2048),
+                    # fp32 reduction accumulation to stay close to the native
+                    # fp32 AR+RMSNorm path (bf16 accumulation drifts enough to
+                    # break greedy stop-token emission on sensitive models).
+                    fp32_acc=get_global_server_args().flashinfer_allreduce_fusion_fp32_acc,
                     use_attn_tp_group=use_attn_tp_group,
                 )
                 if fused_result[0] is not None:

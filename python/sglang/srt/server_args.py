@@ -658,6 +658,13 @@ class ServerArgs:
     moe_runner_backend: str = "auto"
     flashinfer_mxfp4_moe_precision: Literal["default", "bf16"] = "default"
     enable_flashinfer_allreduce_fusion: bool = False
+    # fp32 accumulation for the fused all-reduce. Default on: the trtllm
+    # one-shot reduction otherwise accumulates partial sums in bf16, which
+    # drifts from the native fp32 AR+RMSNorm path enough to break greedy
+    # stop-token emission on sensitive models (e.g. MiniMax-M3). vLLM always
+    # runs this path with fp32_acc=True; the extra accumulator precision is
+    # effectively free (same data movement).
+    flashinfer_allreduce_fusion_fp32_acc: bool = True
     enforce_disable_flashinfer_allreduce_fusion: bool = False
     enable_aiter_allreduce_fusion: bool = False
     deepep_mode: Literal["auto", "normal", "low_latency"] = "auto"
@@ -2845,7 +2852,7 @@ class ServerArgs:
 
         # TRTLLM AllReduce Fusion supports SM90/100, enable it by default
         # for models with explicit support (DeepseekV3, GptOss, Glm4Moe,
-        # MistralLarge3, Qwen3/Qwen3Next/Qwen3.5 MoE families)
+        # MistralLarge3, MiniMaxM3, Qwen3/Qwen3Next/Qwen3.5 MoE families)
         # TODO: currently, it is only supported in the single node scenario. https://github.com/flashinfer-ai/flashinfer/issues/2006
 
         if (
@@ -2859,6 +2866,8 @@ class ServerArgs:
                 "Glm4MoeForCausalLM",
                 "Glm4MoeLiteForCausalLM",
                 "MistralLarge3ForCausalLM",
+                "MiniMaxM3SparseForCausalLM",
+                "MiniMaxM3SparseForConditionalGeneration",
                 "Qwen3MoeForCausalLM",
                 "Qwen3NextForCausalLM",
                 "KimiK25ForConditionalGeneration",
@@ -6374,6 +6383,14 @@ class ServerArgs:
             "--enable-flashinfer-allreduce-fusion",
             action="store_true",
             help="Enable FlashInfer allreduce fusion with Residual RMSNorm.",
+        )
+        parser.add_argument(
+            "--disable-flashinfer-allreduce-fusion-fp32-acc",
+            action="store_false",
+            dest="flashinfer_allreduce_fusion_fp32_acc",
+            help="Use bf16 (instead of fp32) accumulation in the FlashInfer "
+            "allreduce fusion. Lower precision; may break stop-token emission "
+            "on sensitive models.",
         )
         parser.add_argument(
             "--enforce-disable-flashinfer-allreduce-fusion",
