@@ -1458,6 +1458,9 @@ class MiniMaxM3DecoderLayer(nn.Module):
                 forward_batch
             )
         )
+        # Match vLLM's M3 path: only dense MLP output is deferred into the next norm.
+        if self.is_layer_sparse:
+            should_allreduce_fusion = False
         if (
             _is_hip
             and self.is_layer_sparse
