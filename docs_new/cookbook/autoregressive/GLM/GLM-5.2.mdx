@@ -104,7 +104,7 @@ import { Playground } from "/src/snippets/_playground.jsx";
 
 ### 3.1 Reasoning
 
-GLM-5.2 is a hybrid-reasoning model. Enable the `glm45` reasoning parser (toggle **Reasoning Parser** in the **Parsers** card of the [Playground above](#playground)) to separate thinking from the final answer — thinking lands in `message.reasoning_content`, the answer in `message.content`. Thinking is on by default; turn it off with `chat_template_kwargs: {"thinking": False}`.
+GLM-5.2 is a hybrid-reasoning model. Enable the `glm45` reasoning parser (toggle **Reasoning Parser** in the **Parsers** card of the [Playground above](#playground)) to separate thinking from the final answer — thinking lands in `message.reasoning_content`, the answer in `message.content`. Thinking is on by default; turn it off with `chat_template_kwargs: {"enable_thinking": False}` (note: the template variable is `enable_thinking`, not `thinking`). **Reasoning effort** is set via `chat_template_kwargs: {"reasoning_effort": ...}`, which injects a `Reasoning Effort: <level>` system line. The template wires only two levels: the default renders **Max** (the highest — used when unset and also for `"low"`/`"medium"`), and `"high"` renders **High** to dial reasoning down. Effort applies only while thinking is on.
 
 <Accordion title="Reasoning Example (Python)">
 
@@ -115,7 +115,7 @@ client = OpenAI(base_url="http://localhost:30000/v1", api_key="EMPTY")
 resp = client.chat.completions.create(
     model="zai-org/GLM-5.2-FP8",
     messages=[{"role": "user", "content": "What is 15% of 240?"}],
-    extra_body={"chat_template_kwargs": {"thinking": True}},
+    extra_body={"chat_template_kwargs": {"enable_thinking": True, "reasoning_effort": "high"}},
 )
 msg = resp.choices[0].message
 print("Reasoning:", getattr(msg, "reasoning_content", None))
