@@ -91,6 +91,7 @@ from sglang.srt.utils import (
     get_device_sm,
     is_cuda,
     is_hip,
+    is_gfx95_supported,
     log_info_on_rank0,
     make_layers,
 )
@@ -204,6 +205,7 @@ class _FusedQKVIndexProj(nn.Module):
         input_size_per_partition: int,
         logical_widths: List[int],
         orig_dtype: torch.dtype,
+        process_scale: bool = True,
     ) -> None:
         super().__init__()
         # Stored as ``_qm`` (not ``quant_method``) so the model loader's
@@ -221,9 +223,10 @@ class _FusedQKVIndexProj(nn.Module):
                 "weight_scale_inv", nn.Parameter(weight_scale_inv, requires_grad=False)
             )
             self.weight_scale_inv.format_ue8m0 = True
-            # Derive the backend scale layout (deep_gemm packed / swizzled) once,
-            # exactly as process_weights_after_loading would for a real linear.
-            quant_method._process_mxfp8_linear_weight_scale(self)
+            if process_scale:
+                # Derive the backend scale layout (deep_gemm packed / swizzled)
+                # once, as process_weights_after_loading would for a real linear.
+                quant_method._process_mxfp8_linear_weight_scale(self)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self._qm.apply(self, x, None)
@@ -388,7 +391,11 @@ class MiniMaxM3MoE(nn.Module):
         else:
             self.shared_experts = None
 
-        self.bf16_router_gemm = envs.SGLANG_OPT_USE_BF16_ROUTER_GEMM.get()
+        # gfx942 (MI300X) fix: the bf16-in/fp32-out router GEMM is only
+        # supported on gfx950 (CDNA4) ROCm; fall back to fp32 elsewhere.
+        self.bf16_router_gemm = envs.SGLANG_OPT_USE_BF16_ROUTER_GEMM.get() and (
+            not _is_hip or is_gfx95_supported()
+        )
         self.gate = ReplicatedLinear(
             config.hidden_size,
             config.num_local_experts,
@@ -953,6 +960,7 @@ class MiniMaxM3Attention(nn.Module):
         # input_size_per_partition / orig_dtype are set by the quant method's
         # create_weights (fp8) but not by UnquantizedLinearMethod; fall back to
         # the always-present linear attrs (input isn't sharded for column TP).
+        is_mxfp8 = scale is not None and getattr(qm, "use_mxfp8", False)
         holder = _FusedQKVIndexProj(
             qm,
             weight,
@@ -960,7 +968,14 @@ class MiniMaxM3Attention(nn.Module):
             getattr(qp, "input_size_per_partition", qp.input_size),
             [qp.output_size_per_partition, ip.output_size_per_partition],
             getattr(qp, "orig_dtype", qp.params_dtype),
+            process_scale=not is_mxfp8,
         )
+        if is_mxfp8:
+            # Run standard post-load processing on the fused weight: native
+            # MXFP8 scale layout on gfx950, or MXFP8->block-fp8 conversion on
+            # gfx942 (no native MXFP8 kernel). Keeps the single fused GEMM on
+            # both archs instead of falling back to two GEMMs.
+            qm.process_weights_after_loading(holder)
         self.add_module("fused_qkv_index_proj", holder)
         self._fused_qkv_index = holder
 
