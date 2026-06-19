@@ -581,6 +581,9 @@ class TokenizerWorker(TokenizerManager):
         port_args: PortArgs,
     ):
         setproctitle.setproctitle(f"sglang::tokenizer_worker:{os.getpid()}")
+        import torch
+
+        torch.set_num_threads(1)
         # prevent init prefill bootstrapserver again
         disaggregation_mode = server_args.disaggregation_mode
         server_args.disaggregation_mode = "null"
@@ -684,9 +687,16 @@ async def print_exception_wrapper(func):
 
 
 def get_main_process_id() -> int:
+    """Get the main process ID.
+
+    Supports override via SGLANG_GRANIAN_PARENT_PID for workers whose
+    multiprocessing parent PID differs from the shared-memory owner.
     """
-    Get the main process ID.
-    """
+    from sglang.srt.environ import envs
+
+    override = envs.SGLANG_GRANIAN_PARENT_PID.get()
+    if override is not None:
+        return override
     return multiprocessing.current_process()._parent_pid
 
 
