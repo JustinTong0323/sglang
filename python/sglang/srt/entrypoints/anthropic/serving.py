@@ -85,6 +85,12 @@ ERROR_TYPE_MAP = {
 }
 
 
+# Claude Code attaches this attribution header to the system prompt as a
+# separate text block. It carries a per-request hash that would defeat
+# prefix caching, so the serving layer strips it before tokenization.
+ANTHROPIC_BILLING_HEADER = "x-anthropic-billing-header"
+
+
 def _cached_prompt_tokens(usage) -> int:
     prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
     return getattr(prompt_tokens_details, "cached_tokens", 0) or 0
@@ -179,6 +185,26 @@ def _scrub_error_message(message: str, status_code: int) -> str:
     if len(cleaned) > 500:
         cleaned = cleaned[:500] + "…"
     return cleaned or "Request failed"
+
+
+def _strip_billing_header(system_text: str) -> str:
+    """Remove ``x-anthropic-billing-header`` lines from a system prompt.
+
+    Other bytes are preserved verbatim. When the header is the final line,
+    its trailing separator is dropped to avoid a dangling ``\r``.
+    """
+    lines = system_text.splitlines(keepends=True)
+    kept = [ln for ln in lines if not ln.startswith(ANTHROPIC_BILLING_HEADER)]
+    if len(kept) == len(lines):
+        return system_text
+    result = "".join(kept)
+    if lines[-1].startswith(ANTHROPIC_BILLING_HEADER):
+        # The header's separator terminator rides on the preceding line.
+        if result.endswith("\r\n"):
+            result = result[:-2]
+        elif result.endswith("\n") or result.endswith("\r"):
+            result = result[:-1]
+    return result
 
 
 class AnthropicServing:
@@ -397,6 +423,8 @@ class AnthropicServing:
             else:
                 for block in anthropic_request.system:
                     if block.type == "text" and block.text:
+                        if block.text.startswith(ANTHROPIC_BILLING_HEADER):
+                            continue
                         system_parts.append(block.text)
 
         if self._merge_inline_system:
@@ -408,9 +436,9 @@ class AnthropicServing:
                     system_parts.append(text)
 
         if system_parts:
-            openai_messages.append(
-                {"role": "system", "content": "\n".join(system_parts)}
-            )
+            system_text = _strip_billing_header("\n".join(system_parts))
+            if system_text:
+                openai_messages.append({"role": "system", "content": system_text})
 
         def _emit_user_message(parts: list[dict]) -> None:
             """Append accumulated parts as a user message, then clear them.
