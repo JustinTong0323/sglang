@@ -147,16 +147,7 @@ class MiniMaxSparseAttnBackend(AttentionBackend):
         # decode graph, which both dereferences extend metadata absent in the capture
         # batch and would record the MSA prefill kernel into a graph. Fail loudly at
         # startup instead of crashing mid-capture.
-        if (
-            self.use_msa
-            and _decode_cuda_graph
-            and getattr(_sa, "speculative_algorithm", None) is not None
-        ):
-            raise NotImplementedError(
-                "MiniMax-M3 MSA attention does not support speculative decoding under "
-                "CUDA graph. Use --disable-cuda-graph, set SGLANG_DISABLE_MSA=1, or "
-                "disable speculative decoding."
-            )
+        # [eagle3-cg] spec+cudagraph guard removed (verify-as-decode is graph-safe)
         # MSA owns the main decode step unless dense-sparse-decode does; the dense
         # path only engages when k_cache.shape[1] == 1 (see forward_decode).
         self._msa_owns_decode = self._use_msa_decode and not (
@@ -316,6 +307,9 @@ class MiniMaxSparseAttnBackend(AttentionBackend):
         else:
             idx_k_cache, idx_v_cache = self.kv_pool.get_index_kv_buffer(layer.layer_id)
 
+        if forward_batch.forward_mode.is_target_verify():  # [eagle3-cg] route verify -> graph-safe decode
+            return self._verify_as_decode_cg(q, idx_q, k_cache, v_cache, idx_k_cache,
+                                             idx_v_cache, disable_value, layer, forward_batch)
         cu_seqlens = torch.cat(
             [
                 torch.zeros(
@@ -429,6 +423,46 @@ class MiniMaxSparseAttnBackend(AttentionBackend):
             )
         raise NotImplementedError(
             "dense sparse decode currently supports trtllm_mha only (fa3 is TODO)"
+        )
+
+    def _verify_as_decode_cg(self, q, idx_q, k_cache, v_cache, idx_k_cache, idx_v_cache,
+                             disable_value, layer, forward_batch):
+        # [eagle3-cg] graph-safe spec verify: flatten bs reqs x dnum draft tokens -> bs*dnum decode elements,
+        # each q=1 with seq_len = prefix+offset+1 (causal among the draft chain), then run the
+        # cuda-graph-safe Triton sparse decode (use_msa=False) instead of the graph-unsafe MSA prefill.
+        bs = forward_batch.seq_lens.shape[0]
+        total = q.shape[0]
+        dnum = total // bs if bs > 0 else 1
+        dev = q.device
+        prefix = forward_batch.seq_lens.to(torch.int64)
+        off = torch.arange(dnum, device=dev, dtype=torch.int64).repeat(bs)
+        seq_lens_flat = (prefix.repeat_interleave(dnum) + off + 1).to(torch.int32)
+        slot_ids_flat = forward_batch.req_pool_indices.repeat_interleave(dnum)
+        sc = getattr(forward_batch, "seq_lens_cpu", None)
+        max_seqlen = (int(sc.max()) + dnum) if sc is not None else int(self._max_seqlen_k)
+        import inspect
+        _params = inspect.signature(minimax_sparse_decode).parameters
+        _kw = dict(score_type=self.score_type, disable_index_value=disable_value)
+        if "page_size" in _params:
+            _kw["page_size"] = self.page_size
+        if "use_msa" in _params:  # newer (gitlab/#27944) backend: force the graph-safe Triton path
+            _kw.update(use_msa=False, msa_kv_indices=None, msa_plan=None)
+        if "dense_main_attn_fn" in _params:
+            attn_fn = None
+            if getattr(self, "use_dense_sparse_decode", False) and k_cache.shape[1] == 1:
+                def attn_fn(main_q, page_table, real_seq_lens):
+                    return self._dense_sparse_main_decode(
+                        main_q, page_table, real_seq_lens, k_cache, v_cache, layer, forward_batch
+                    )
+            _kw["dense_main_attn_fn"] = attn_fn
+        idx_o, o = minimax_sparse_decode(
+            q, None, k_cache, v_cache, idx_q, None, idx_k_cache, idx_v_cache,
+            self.req_to_token, slot_ids_flat, seq_lens_flat, max_seqlen, 1, self.block_size_k,
+            self.topk_blocks, self.init_blocks, self.local_blocks, **_kw,
+        )
+        return (
+            None if idx_o is None else idx_o.reshape(total, -1).contiguous(),
+            o.reshape(total, -1).contiguous(),
         )
 
     def forward_decode(
