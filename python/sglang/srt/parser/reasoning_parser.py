@@ -501,6 +501,20 @@ class Nemotron3Detector(BaseReasoningFormatDetector):
 
 
 class MiniMaxM3Detector(BaseReasoningFormatDetector):
+    """Detector for MiniMax M3.
+
+    M3's chat template (see the model's ``chat_template.jinja``,
+    ``add_generation_prompt`` block) optionally prefills ``<mm:think>`` when
+    ``thinking_mode='enabled'`` or ``</mm:think>`` when ``'disabled'``. In
+    ``'adaptive'`` mode — which is the default whenever ``thinking_mode`` is
+    unset — the template emits no prefix and the model decides per turn. In
+    multi-turn shapes the model may choose not to think and starts the
+    response with a lone ``</mm:think>`` separator. Without handling that
+    here, the closer leaks into ``normal_text`` and ``reasoning_content`` is
+    ``None``. This mirrors vLLM's ``MiniMaxM3ReasoningParser`` which drops the
+    same stray closer.
+    """
+
     def __init__(
         self,
         stream_reasoning: bool = True,
@@ -516,6 +530,27 @@ class MiniMaxM3Detector(BaseReasoningFormatDetector):
             continue_final_message=continue_final_message,
             previous_content=previous_content,
         )
+
+    def detect_and_parse(self, text: str) -> StreamingParseResult:
+        # Drop a lone </mm:think> at the very start (adaptive mode, no
+        # reasoning emitted). Once super() sees the cleaned text, it routes
+        # everything to normal_text correctly.
+        if not self._in_reasoning and text.startswith(self.think_end_token):
+            text = text[len(self.think_end_token) :]
+        return super().detect_and_parse(text)
+
+    def parse_streaming_increment(self, new_text: str) -> StreamingParseResult:
+        # Same drop for the streaming path. The conditions below only hold on
+        # the very first incremental chunk: once anything has been buffered or
+        # the start tag has been stripped, this is a no-op.
+        if (
+            not self._in_reasoning
+            and not self._buffer
+            and not self.stripped_think_start
+            and new_text.startswith(self.think_end_token)
+        ):
+            new_text = new_text[len(self.think_end_token) :]
+        return super().parse_streaming_increment(new_text)
 
 
 class MistralDetector(BaseReasoningFormatDetector):
