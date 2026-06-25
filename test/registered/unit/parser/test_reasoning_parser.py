@@ -1306,6 +1306,71 @@ class TestMiniMaxAppendThinkDetector(CustomTestCase):
         self.assertEqual(result.normal_text, "Second")
 
 
+class TestMiniMaxM3Detector(CustomTestCase):
+    """Test cases for MiniMaxM3Detector.
+
+    In adaptive mode (the chat-template default whenever ``thinking_mode`` is
+    unset) M3 can emit a lone ``</mm:think>`` as the first token of an
+    assistant turn — the chat template would have prefilled that closer in
+    ``thinking_mode='disabled'``, and in adaptive mode the model is free to
+    mirror that shape per turn. These tests pin the drop behavior that
+    prevents the closer from leaking into ``normal_text``. Mirrors vLLM's
+    ``MiniMaxM3ReasoningParser``.
+    """
+
+    def setUp(self):
+        from sglang.srt.parser.reasoning_parser import MiniMaxM3Detector
+
+        self._MiniMaxM3Detector = MiniMaxM3Detector
+
+    def test_stray_closer_at_start_is_dropped(self):
+        """Bug-repro shape: response starts with a lone </mm:think>."""
+        d = self._MiniMaxM3Detector()
+        result = d.detect_and_parse("</mm:think>因为猫咪圆滚滚的")
+        self.assertEqual(result.normal_text, "因为猫咪圆滚滚的")
+        self.assertEqual(result.reasoning_text, "")
+        self.assertNotIn("</mm:think>", result.normal_text)
+
+    def test_normal_full_reasoning_envelope(self):
+        """Regression: <mm:think>...</mm:think>content still parses normally."""
+        d = self._MiniMaxM3Detector()
+        result = d.detect_and_parse("<mm:think>思考</mm:think>答案")
+        self.assertEqual(result.normal_text, "答案")
+        self.assertEqual(result.reasoning_text, "思考")
+
+    def test_plain_content_no_tags(self):
+        """Regression: text with no tags goes entirely to normal_text."""
+        d = self._MiniMaxM3Detector()
+        result = d.detect_and_parse("直接答案没有标签")
+        self.assertEqual(result.normal_text, "直接答案没有标签")
+        self.assertEqual(result.reasoning_text, "")
+
+    def test_force_reasoning_with_immediate_closer(self):
+        """When force_reasoning=True we are already in reasoning; the patch's
+        ``not self._in_reasoning`` guard suppresses itself and the base class
+        exits reasoning on the first </mm:think> as usual."""
+        d = self._MiniMaxM3Detector(force_reasoning=True)
+        result = d.detect_and_parse("</mm:think>内容")
+        self.assertEqual(result.normal_text, "内容")
+        self.assertEqual(result.reasoning_text, "")
+
+    def test_only_first_closer_dropped(self):
+        """Mirrors vLLM: only the leading lone </mm:think> is dropped; any
+        later </mm:think> in the body is left in normal_text as content."""
+        d = self._MiniMaxM3Detector()
+        result = d.detect_and_parse("</mm:think>前面</mm:think>后面")
+        self.assertEqual(result.normal_text, "前面</mm:think>后面")
+        self.assertEqual(result.reasoning_text, "")
+
+    def test_streaming_stray_closer_in_first_chunk(self):
+        """Streaming equivalent of test_stray_closer_at_start_is_dropped:
+        first chunk has the lone closer followed by content."""
+        d = self._MiniMaxM3Detector()
+        result = d.parse_streaming_increment("</mm:think>内容")
+        self.assertEqual(result.normal_text, "内容")
+        self.assertNotIn("</mm:think>", result.normal_text)
+
+
 class TestReasoningParserAdvanced(CustomTestCase):
     """Additional tests for ReasoningParser init edge cases."""
 
