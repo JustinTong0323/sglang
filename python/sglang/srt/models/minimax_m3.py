@@ -1571,7 +1571,7 @@ class MiniMaxM3Model(nn.Module):
                         residual=residual,
                         captured_last_layer_outputs=(
                             aux_hidden_states
-                            if getattr(layer, "_is_layer_to_capture", False)
+                            if i in self.layers_to_capture  # [eagle3-m3-patch]
                             else None
                         ),
                     )
