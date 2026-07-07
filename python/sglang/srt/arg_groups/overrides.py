@@ -45,6 +45,7 @@ from sglang.srt.utils.common import (
     is_cpu,
     is_cuda,
     is_flashinfer_available,
+    is_gfx95_supported,
     is_hip,
     is_musa,
     is_npu,
@@ -1818,20 +1819,29 @@ def _moe_runner_backend_quant_constraints(view: Any) -> dict:
                 "flashinfer_trtllm_routed."
             )
     if view.quantization == "mxfp8":
-        if moe_runner_backend == "auto":
-            moe_runner_backend = "flashinfer_trtllm"
-        elif moe_runner_backend not in [
+        # AMD CDNA4 (gfx950) has a native mxfp8 Triton MoE runner
+        # (moe_runner/triton.py -> fused_experts_mxfp8, guarded by
+        # is_hip() and is_gfx95_supported()); the flashinfer_trtllm path is
+        # CUDA-only. Prefer/keep Triton there instead of forcing flashinfer.
+        gfx95_mxfp8 = is_hip() and is_gfx95_supported()
+        allowed = [
             "cutlass",
             "deep_gemm",
             "flashinfer_trtllm",
             "flashinfer_trtllm_routed",
-        ]:
+        ]
+        if gfx95_mxfp8:
+            allowed.append("triton")
+        if moe_runner_backend == "auto":
+            moe_runner_backend = "triton" if gfx95_mxfp8 else "flashinfer_trtllm"
+        elif moe_runner_backend not in allowed:
             logger.warning(
-                "mxfp8 quantization supports only cutlass, deep_gemm, "
-                "flashinfer_trtllm, or flashinfer_trtllm_routed backends. "
-                f"Overriding {moe_runner_backend!r}."
+                "mxfp8 quantization supports only %s backends. "
+                "Overriding %r.",
+                ", ".join(allowed),
+                moe_runner_backend,
             )
-            moe_runner_backend = "flashinfer_trtllm"
+            moe_runner_backend = "triton" if gfx95_mxfp8 else "flashinfer_trtllm"
     if (
         moe_runner_backend == "auto"
         and view.quantization == "modelopt_fp4"
