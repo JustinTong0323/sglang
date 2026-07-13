@@ -374,6 +374,15 @@ class DSparkDraftMixin:
         self.markov_head = build_markov_head(config)
         self.confidence_head = build_confidence_head(config)
         self.lm_head: Optional[nn.Module] = None
+        # Expose the draft's own layer count so the draft ModelRunner sizes the
+        # draft KV pool correctly. Some DSpark draft checkpoints inherit the
+        # target's ``num_nextn_predict_layers`` (>0) on the config; without this
+        # attribute the runner's MTP heuristic (model_runner.py) would size the
+        # pool to ``num_nextn_predict_layers`` instead of the real draft depth and
+        # the per-layer ``set_kv_buffer`` in ``write_target_hidden_kv`` would go
+        # out of range. DSv4 (MoE) drafts expose this via ``num_stages``; mirror
+        # that convention for dense DSpark drafts.
+        self.num_stages = int(config.num_hidden_layers)
 
     def attach_shared_modules(
         self, *, embed_tokens: nn.Module, lm_head: nn.Module
@@ -609,4 +618,8 @@ class Qwen3DSparkModel(DSparkDraftModel):
     pass
 
 
-EntryClass = [Qwen3DSparkModel, DSparkDraftModel]
+class LingDSparkModel(DSparkDraftModel):
+    pass
+
+
+EntryClass = [Qwen3DSparkModel, LingDSparkModel, DSparkDraftModel]
