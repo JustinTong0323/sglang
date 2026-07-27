@@ -40,7 +40,7 @@ def qwen3_next_config(model_config: ModelConfig):
 
 def hybrid_lightning_config(model_config: ModelConfig):
     config = model_config.hf_config
-    if isinstance(config, BailingHybridConfig):
+    if isinstance(config, BailingHybridConfig) and not config.use_kda:
         return config
     return None
 
@@ -105,6 +105,8 @@ def kimi_linear_config(model_config: ModelConfig):
     text_config = getattr(config, "text_config", None)
     if isinstance(text_config, KimiLinearConfig):
         return text_config
+    if isinstance(config, BailingHybridConfig) and config.use_kda:
+        return config
     return None
 
 
