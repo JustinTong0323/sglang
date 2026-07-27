@@ -451,6 +451,26 @@ def _case_sample_step_tokens(tc):
     )
 
 
+def _case_markov_greedy_step(tc):
+    g = torch.Generator(device=DEVICE).manual_seed(22)
+    cls = dspark_draft_model.MarkovGreedyStep
+    for bs, vocab, rank in ((1, 5003, 64), (8, VOCAB, 32)):
+        kw = dict(
+            base_logits=torch.randn(bs, vocab, device=DEVICE, generator=g),
+            prev_embeds=torch.randn(bs, rank, device=DEVICE, generator=g),
+            w2_weight=torch.randn(vocab, rank, device=DEVICE, generator=g),
+        )
+        tc._eq(cls.triton(**kw), cls.torch(**kw))
+    base_logits = torch.zeros(1, 513, device=DEVICE)
+    base_logits[0, 255] = base_logits[0, 256] = 5.0
+    tokens = cls.triton(
+        base_logits=base_logits,
+        prev_embeds=torch.zeros(1, 32, device=DEVICE),
+        w2_weight=torch.zeros(513, 32, device=DEVICE),
+    )
+    tc.assertEqual(tokens.item(), 255)
+
+
 def _case_scatter_compact_to_strided(tc):
     torch.manual_seed(19)
     t, bs, dim = 6, 8, 4096
@@ -527,6 +547,7 @@ _CASES = [
     ("padded_to_bucket", _case_padded_to_bucket),
     ("page_table_positions", _case_page_table_positions),
     ("qo_indptr", _case_qo_indptr),
+    ("markov_greedy_step", _case_markov_greedy_step),
     ("sample_step_tokens", _case_sample_step_tokens),
     ("scatter_compact_to_strided", _case_scatter_compact_to_strided),
     ("schedule_verify_lens_topk", _case_schedule_verify_lens_topk),
