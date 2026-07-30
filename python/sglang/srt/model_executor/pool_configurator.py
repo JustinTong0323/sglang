@@ -162,9 +162,11 @@ class DefaultPoolConfigurator(MemoryPoolConfigurator):
                     * (1 + int(eagle_draft_num_layers) / int(num_layers))
                 )
 
-        # DFLASH/DSPARK: scale cell_size to account for draft model KV cache
+        # The draft pool uses target capacity but its own KV layout, so reserve
+        # its actual per-token footprint rather than scaling by layer ratio.
         if kvc.spec_algorithm.is_dflash_family() and not kvc.is_draft_worker:
             from sglang.srt.speculative.dflash_utils import (
+                compute_dflash_draft_kv_cell_size_per_token,
                 scale_kv_cell_size_per_token_for_dflash,
             )
 
@@ -178,6 +180,15 @@ class DefaultPoolConfigurator(MemoryPoolConfigurator):
                     target_cell_size_per_token=self._cell_size,
                     target_num_layers=int(num_layers),
                     draft_num_layers=int(draft_num_layers) * kvc.server_args.dcp_size,
+                    draft_cell_size_per_token=(
+                        compute_dflash_draft_kv_cell_size_per_token(
+                            draft_model_config=kvc.spec_aux_config.dflash_draft_model_config,
+                            kv_cache_dtype=kvc.kv_cache_dtype,
+                            draft_num_layers=int(draft_num_layers)
+                            * kvc.server_args.dcp_size,
+                            tp_size=get_parallel().attn_tp_size,
+                        )
+                    ),
                 )
 
     def _compute_cell_size(self, kvc: KVCacheConfigurator, num_layers: int) -> int:

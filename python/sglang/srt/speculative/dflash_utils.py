@@ -9,6 +9,7 @@ from typing import Any, List, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
+from sglang.srt.configs.model_config import AttentionArch
 from sglang.srt.layers.quantization.unquant import UnquantizedLinearMethod
 from sglang.srt.layers.sampler import apply_custom_logit_processor
 from sglang.srt.managers.schedule_batch import Req
@@ -63,6 +64,29 @@ else:
 
 def is_dflash_sampling_verify_available() -> bool:
     return _DFLASH_SAMPLING_VERIFY_AVAILABLE
+
+
+def compute_dflash_draft_kv_cell_size_per_token(
+    *,
+    draft_model_config,
+    kv_cache_dtype,
+    draft_num_layers: int,
+    tp_size: int,
+) -> int:
+    """Return per-token bytes for the draft pool reserved at target capacity."""
+    kv_size = torch._utils._element_size(kv_cache_dtype)
+    if draft_model_config.attention_arch == AttentionArch.MLA:
+        return int(
+            (draft_model_config.kv_lora_rank + draft_model_config.qk_rope_head_dim)
+            * int(draft_num_layers)
+            * kv_size
+        )
+    return int(
+        draft_model_config.get_num_kv_heads(tp_size)
+        * (draft_model_config.head_dim + draft_model_config.v_head_dim)
+        * int(draft_num_layers)
+        * kv_size
+    )
 
 
 def scale_kv_cell_size_per_token_for_dflash(
