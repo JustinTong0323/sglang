@@ -29,6 +29,7 @@ GSM8K_DATA_PATH = "/root/datasets/gsm8k/test.jsonl"
 GSM8K_SCORE_THRESHOLD = 0.90
 STOP_RATE_THRESHOLD = 0.95
 DSPARK_SCORE_DROP_TOLERANCE = 0.02
+MAX_TOKENS = 1024
 
 COMMON_ARGS = [
     "--trust-remote-code",
@@ -54,7 +55,7 @@ def _gsm8k_args(base_url):
         model=TARGET_MODEL,
         eval_name="gsm8k",
         api="completion",
-        max_tokens=512,
+        max_tokens=MAX_TOKENS,
         num_examples=None,
         num_threads=128,
         gsm8k_data_path=GSM8K_DATA_PATH,
@@ -100,7 +101,7 @@ def _greedy_outputs(base_url):
                 "model": TARGET_MODEL,
                 "prompt": prompt,
                 "temperature": 0,
-                "max_tokens": 256,
+                "max_tokens": MAX_TOKENS,
             },
             timeout=300,
         )
