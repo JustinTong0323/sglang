@@ -1,26 +1,8 @@
-"""Fused KDA chain-verify kernel: causal-conv1d update + sigmoid-gating delta rule.
+"""Fused KDA chain verification for causal convolution and delta updates.
 
-Fuses the KDA (Kimi Delta Attention) MTP target_verify hot path
-
-    causal_conv1d_update (chain mode, SAVE_INTERMEDIATE)
-  + fused_sigmoid_gating_delta_rule_update (T-step recurrence,
-    intermediate-state caching, state update disabled)
-
-into a single Triton kernel, removing per-layer-per-verify: one kernel
-launch, the mixed_qkv HBM round-trip between conv and recurrence, and the
-two transpose copies the unfused path needs to feed the conv kernel.
-
-Scope (v1): chain speculation only (``speculative_eagle_topk == 1``, i.e.
-``retrieve_next_token is None``). The tree path keeps the unfused reference
-kernels. Requires ``T >= kernel_width - 1`` (the rolled conv state is then
-exactly the last ``kernel_width - 1`` input tokens, matching the reference
-kernel's store).
-
-Numerics: deliberately bit-aligned with the unfused pair. The conv output is
-rounded to the activation dtype (bf16) before entering the recurrence —
-exactly what the unfused path does through its intermediate tensor — and all
-expressions mirror the reference kernels line by line, with the same
-num_warps so reduction order matches.
+This path requires chain speculation, width-4 convolution, and ``T >= W - 1``.
+It rounds convolution output to the activation dtype so outputs and convolution
+caches align with the unfused path; fp32 rollback states tolerate reduction drift.
 """
 
 from typing import Optional
@@ -358,14 +340,6 @@ def fused_kda_conv_gating_verify(
     softplus_beta: float = 1.0,
     softplus_threshold: float = 20.0,
     use_qk_l2norm_in_kernel: bool = True,
-    # num_warps=4 is ~1.3x faster than the unfused pair in-graph; the output,
-    # conv_state and conv-window caches stay bit-identical to the reference.
-    # Only the fp32 intermediate-ssm rollback cache differs: the tl.sum
-    # reduction-order delta (~1 ulp/step) compounds through the delta-rule
-    # recurrence — measured ~6e-8 at T=4 standard gate (the production MTP
-    # shape), ~1.5e-5 at T=4 safe gate, ~2e-3 at T=8 safe gate. num_warps=1
-    # reproduces the reference reduction order exactly (all buffers
-    # bit-identical) but is ~2.4x slower in-graph — numerics debugging only.
     num_warps: int = 4,
 ) -> torch.Tensor:
     """Chain-verify fast path. Returns ``o`` of shape [1, seq_len, HV, V],
@@ -480,8 +454,6 @@ def fused_kda_conv_gating_verify(
         USE_LOWER_BOUND=lower_bound is not None,
         SAVE_INTERMEDIATE_WINDOW=intermediate_conv_window is not None,
         CACHE_INTERMEDIATE_STATES=intermediate_states_buffer is not None,
-        # num_warps=1 matches the reference kernels' reduction order exactly;
-        # higher values must be re-validated for bit-exactness before use.
         num_warps=num_warps,
         num_stages=3,
         **pdl_kwargs,

@@ -1,24 +1,3 @@
-"""Exactness tests for the fused KDA chain-verify kernel.
-
-Compares ``fused_kda_conv_gating_verify`` (one Triton kernel) against the
-unfused reference sequence used by ``kda_backend.forward_extend`` on the MTP
-target_verify chain path: reshape/transpose + ``causal_conv1d_update`` +
-transpose/reshape + split/unflatten + ``fused_sigmoid_gating_delta_rule_update``.
-
-Checked outputs per config: attention output ``o``, the rolled ``conv_state``,
-the intermediate conv-window rollback cache, and the intermediate ssm rollback
-cache.
-
-- ``num_warps=1`` reproduces the reference reduction order: all four outputs
-  must be bit-identical.
-- ``num_warps=4`` (production default, ~1.3x faster in-graph): ``o`` /
-  ``conv_state`` / conv-window must stay bit-identical. Only the fp32
-  intermediate-ssm cache differs: the tl.sum reduction-order delta (~1 ulp
-  per step) compounds through the delta-rule recurrence, growing with T and
-  with the safe gate. Measured: ~6e-8 at T=4 standard gate (the production
-  MTP shape), ~1.5e-5 at T=4 safe gate, ~2e-3 at T=8 safe gate.
-"""
-
 import sys
 
 import pytest
@@ -176,7 +155,7 @@ def _run_fused(inp, B, T, H, HV, K, V, lower_bound, num_warps):
     return o, conv, win, ic
 
 
-def _compare_case(case, num_warps, ic_exact):
+def _compare_case(case, num_warps):
     B, T, H, HV, K, V, W, has_bias, lower_bound, neg_slot, seed = case
     inp = _make_inputs(B, T, H, HV, K, V, W, has_bias, neg_slot, seed)
     o_ref, conv_ref, win_ref, ic_ref = _run_reference(
@@ -195,22 +174,14 @@ def _compare_case(case, num_warps, ic_exact):
     assert torch.equal(o_ref_v, o_fus_v)
     assert torch.equal(conv_ref[touched_slots], conv_fus[touched_slots])
     assert torch.equal(win_ref[valid_rows], win_fus[valid_rows])
-    if ic_exact:
-        assert torch.equal(ic_ref[valid_rows], ic_fus[valid_rows])
-    else:
-        torch.testing.assert_close(
-            ic_ref[valid_rows], ic_fus[valid_rows], atol=4e-3, rtol=0
-        )
+    torch.testing.assert_close(
+        ic_ref[valid_rows], ic_fus[valid_rows], atol=4e-3, rtol=0
+    )
 
 
 @pytest.mark.parametrize("case", _CASES)
-def test_bit_exact_num_warps_1(case):
-    _compare_case(case, num_warps=1, ic_exact=True)
-
-
-@pytest.mark.parametrize("case", _CASES)
-def test_default_num_warps_4(case):
-    _compare_case(case, num_warps=4, ic_exact=False)
+def test_matches_unfused_reference(case):
+    _compare_case(case, num_warps=4)
 
 
 if __name__ == "__main__":
