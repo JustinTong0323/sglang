@@ -132,6 +132,7 @@ def cutedsl_buffers(inp, num_sms, device):
         total=total,
         num_sms=num_sms,
         h0=torch.zeros(1, H, V, K, device=device, dtype=torch.float32),
+        state_indices=torch.zeros(1, device=device, dtype=torch.int32),
         U=torch.empty(pad_t, H, V, device=device, dtype=torch.bfloat16),
         W=torch.empty(pad_t, H, K, device=device, dtype=torch.bfloat16),
         V_new=torch.empty(pad_t, H, V, device=device, dtype=torch.bfloat16),
@@ -172,6 +173,7 @@ def run_cutedsl_pipeline(inp, buf, scale):
         buf["ht"],
         buf["cu"],
         buf["co"],
+        buf["state_indices"],
     )
     kda_o_cutedsl(
         qg,
@@ -208,8 +210,8 @@ def check_shape(T, H, K, V, device, dtype, num_sms):
         o, ht = run_cutedsl_pipeline(inp, buf, scale)
         torch.cuda.synchronize()
     except Exception as e:  # noqa: BLE001
-        print(f"  [SKIP] {tag}  (cutedsl error: {e})")
-        return True
+        print(f"  [FAIL] {tag}  (cutedsl error: {e})")
+        return False
 
     finite = bool(torch.isfinite(o).all() and torch.isfinite(ht).all())
     o_err = (o.float() - o_ref.float()).abs().max().item()
