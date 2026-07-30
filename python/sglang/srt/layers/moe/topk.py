@@ -1462,6 +1462,7 @@ def biased_grouped_topk_gpu(
         and num_expert_group == 8
         and topk_group == 4
         and topk_routed <= 8
+        and not torch.cuda.is_current_stream_capturing()
     ):
         from sglang.kernels.ops.moe.bailing_moe_topk import (
             bailing_moe_biased_grouped_topk,

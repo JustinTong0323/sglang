@@ -186,5 +186,47 @@ def test_biased_grouped_topk_gpu_dispatches_to_bailing_jit(monkeypatch) -> None:
     assert topk_ids.shape == (3, 9)
 
 
+def test_biased_grouped_topk_gpu_uses_generic_router_during_capture(
+    monkeypatch,
+) -> None:
+    hidden_states, gating_output, correction_bias = _make_inputs(
+        num_tokens=3,
+        seed=4000,
+    )
+    called = {}
+
+    def fake_generic_router(scores, bias, topk, **kwargs):
+        called["args"] = (scores, bias, topk, kwargs)
+        return (
+            torch.empty((scores.shape[0], topk), device="cuda"),
+            torch.empty((scores.shape[0], topk), dtype=torch.int32, device="cuda"),
+        )
+
+    import sglang.kernels.ops.moe.moe_fused_gate as moe_fused_gate
+
+    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: True)
+    monkeypatch.setattr(moe_fused_gate, "moe_fused_gate", fake_generic_router)
+
+    biased_grouped_topk_gpu(
+        hidden_states,
+        gating_output,
+        correction_bias,
+        topk=8,
+        renormalize=True,
+        num_expert_group=8,
+        topk_group=4,
+        num_fused_shared_experts=0,
+        routed_scaling_factor=2.5,
+        apply_routed_scaling_factor_on_output=False,
+    )
+
+    scores, bias, topk, kwargs = called["args"]
+    assert scores is gating_output
+    assert bias is correction_bias
+    assert topk == 8
+    assert kwargs["num_expert_group"] == 8
+    assert kwargs["topk_group"] == 4
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__]))
