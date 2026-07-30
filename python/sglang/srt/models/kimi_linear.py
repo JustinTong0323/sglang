@@ -246,12 +246,16 @@ class KimiDeltaAttention(nn.Module):
             self.num_heads, self.shard_tp_size
         )
 
-        projection_size = self.head_dim * self.num_heads
+        qk_projection_size = self.head_k_dim * self.num_heads
+        v_projection_size = self.head_v_dim * self.num_heads
+        qkv_projection_size = 2 * qk_projection_size + v_projection_size
         self.conv_size = config.linear_attn_config["short_conv_kernel_size"]
         self.no_kda_lora = no_kda_lora
 
         # TODO: support fusion with quant
-        self.do_fuse_qkvbfg = self.no_kda_lora or quant_config is None
+        self.do_fuse_qkvbfg = self.no_kda_lora or (
+            quant_config is None and self.head_v_dim == self.head_k_dim
+        )
         # Beta joins the fused GEMM only when nothing is quantized.
         self.fuse_no_lora_beta = self.no_kda_lora and quant_config is None
 
@@ -259,12 +263,12 @@ class KimiDeltaAttention(nn.Module):
             # No LoRA: f/g are full-rank, so q, k, v, (beta,) f, g all fuse into
             # one column-parallel GEMM and the f_a/g_a/f_b/g_b pairs disappear.
             self.qkvbfg_sizes = [
-                projection_size,
-                projection_size,
-                projection_size,
+                qk_projection_size,
+                qk_projection_size,
+                v_projection_size,
                 *([self.num_heads] if self.fuse_no_lora_beta else []),
-                projection_size,
-                projection_size,
+                qk_projection_size,
+                v_projection_size,
             ]
             self.fused_qkvbfg_proj = MergedColumnParallelLinear(
                 self.hidden_size,
@@ -275,13 +279,13 @@ class KimiDeltaAttention(nn.Module):
                 tp_rank=self.shard_tp_rank,
                 tp_size=self.shard_tp_size,
             )
-            self.split_sizes = [3 * projection_size // self.shard_tp_size]  # qkv
+            self.split_sizes = [qkv_projection_size // self.shard_tp_size]
             if self.fuse_no_lora_beta:
                 self.split_sizes.append(self.num_heads // self.shard_tp_size)  # beta
             self.split_sizes.extend(
                 [
-                    projection_size // self.shard_tp_size,  # f
-                    projection_size // self.shard_tp_size,  # g
+                    qk_projection_size // self.shard_tp_size,
+                    v_projection_size // self.shard_tp_size,
                 ]
             )
             if not self.fuse_no_lora_beta:
@@ -296,9 +300,9 @@ class KimiDeltaAttention(nn.Module):
         elif self.do_fuse_qkvbfg:
             # Fuse: q, k, v, beta (column parallel) + f_a, g_a (replicated)
             self.qkvb_sizes = [
-                projection_size,
-                projection_size,
-                projection_size,
+                qk_projection_size,
+                qk_projection_size,
+                v_projection_size,
                 self.num_heads,
             ]
             self.fg_sizes = [self.head_dim, self.head_dim]
@@ -313,21 +317,20 @@ class KimiDeltaAttention(nn.Module):
                 tp_size=self.shard_tp_size,
             )
             self.split_sizes = [
-                3 * projection_size // self.shard_tp_size,  # qkv
+                qkv_projection_size // self.shard_tp_size,
                 self.num_heads // self.shard_tp_size,  # beta
                 2 * self.head_dim,  # f_a, g_a
             ]
             self.fused_fg_b_proj = ColumnParallelBatchedLinear(
                 2,
                 self.head_dim,
-                projection_size,
+                qk_projection_size,
                 dtype=config.dtype,
                 tp_rank=self.shard_tp_rank,
                 tp_size=self.shard_tp_size,
             )
         else:
             # Unfused path: separate QKVParallelLinear
-            attn_tp_rank = get_parallel().attn_tp_rank
             self.qkv_proj = QKVParallelLinear(
                 self.hidden_size,
                 self.head_dim,
@@ -335,8 +338,8 @@ class KimiDeltaAttention(nn.Module):
                 self.num_k_heads,
                 bias=False,
                 quant_config=quant_config,
-                tp_rank=attn_tp_rank,
-                tp_size=self.attn_tp_size,
+                tp_rank=self.shard_tp_rank,
+                tp_size=self.shard_tp_size,
                 v_head_size=self.head_v_dim,
                 prefix=f"{prefix}.qkv_proj",
             )
@@ -351,7 +354,7 @@ class KimiDeltaAttention(nn.Module):
 
             self.f_b_proj = ColumnParallelLinear(
                 self.head_dim,
-                projection_size,
+                qk_projection_size,
                 bias=False,
                 quant_config=quant_config,
                 prefix=f"{prefix}.f_b_proj",
@@ -378,7 +381,7 @@ class KimiDeltaAttention(nn.Module):
             )
             self.g_b_proj = ColumnParallelLinear(
                 self.head_dim,
-                projection_size,
+                v_projection_size,
                 bias=False,
                 quant_config=quant_config,
                 prefix=f"{prefix}.g_b_proj",
@@ -388,7 +391,7 @@ class KimiDeltaAttention(nn.Module):
 
         self.dt_bias = nn.Parameter(
             torch.empty(
-                divide(projection_size, self.shard_tp_size), dtype=torch.float32
+                divide(qk_projection_size, self.shard_tp_size), dtype=torch.float32
             )
         )
 
@@ -396,7 +399,11 @@ class KimiDeltaAttention(nn.Module):
 
         self.qkv_conv1d = MergedColumnParallelLinear(
             input_size=self.conv_size,
-            output_sizes=[projection_size, projection_size, projection_size],
+            output_sizes=[
+                qk_projection_size,
+                qk_projection_size,
+                v_projection_size,
+            ],
             bias=False,
             params_dtype=torch.float32,
             prefix=f"{prefix}.qkv_conv1d",
@@ -415,10 +422,10 @@ class KimiDeltaAttention(nn.Module):
         set_weight_attrs(self.A_log, {"weight_loader": sharded_weight_loader(2)})
 
         self.o_norm = FusedRMSNormGated(
-            self.head_dim, eps=rms_norm_eps, activation="sigmoid"
+            self.head_v_dim, eps=rms_norm_eps, activation="sigmoid"
         )
         self.o_proj = RowParallelLinear(
-            projection_size,
+            v_projection_size,
             self.hidden_size,
             bias=False,
             quant_config=quant_config,
@@ -433,15 +440,9 @@ class KimiDeltaAttention(nn.Module):
 
         self.attn = RadixLinearAttention(
             layer_id=self.layer_idx,
-            num_q_heads=_get_kda_local_num_heads(
-                self.num_k_heads, self.shard_tp_size
-            ),
-            num_k_heads=_get_kda_local_num_heads(
-                self.num_k_heads, self.shard_tp_size
-            ),
-            num_v_heads=_get_kda_local_num_heads(
-                self.num_v_heads, self.shard_tp_size
-            ),
+            num_q_heads=_get_kda_local_num_heads(self.num_k_heads, self.shard_tp_size),
+            num_k_heads=_get_kda_local_num_heads(self.num_k_heads, self.shard_tp_size),
+            num_v_heads=_get_kda_local_num_heads(self.num_v_heads, self.shard_tp_size),
             head_q_dim=self.head_k_dim,
             head_k_dim=self.head_k_dim,
             head_v_dim=self.head_v_dim,
@@ -546,7 +547,7 @@ class KimiDeltaAttention(nn.Module):
         )
 
         norm_gate = g_proj_states.unflatten(
-            -1, (-1, self.head_dim)
+            -1, (-1, self.head_v_dim)
         )  # ... (h d) -> ... h d
         core_attn_out = self.o_norm(core_attn_out, norm_gate)
         core_attn_out = core_attn_out.squeeze(0).flatten(-2)  # 1 n h d -> n (h d)

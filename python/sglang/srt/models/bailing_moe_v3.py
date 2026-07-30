@@ -70,6 +70,9 @@ from sglang.srt.model_executor.runner import get_is_capture_mode
 from sglang.srt.model_loader.weight_utils import (
     default_weight_loader,
 )
+from sglang.srt.models.deepseek_common.attention_forward_methods.forward_methods import (
+    AttnForwardMethod,
+)
 from sglang.srt.models.deepseek_common.utils import (
     _is_cpu,
     _is_cpu_amx_available,
@@ -96,6 +99,7 @@ from sglang.srt.utils import (
     log_info_on_rank0,
     make_layers,
 )
+from sglang.srt.utils.hf_transformers_utils import get_rope_config
 
 _is_fp8_fnuz = is_fp8_fnuz()
 
@@ -120,6 +124,15 @@ if _is_hip:
 
 _is_flashinfer_available = is_flashinfer_available()
 _is_sm100_supported = is_cuda() and is_sm100_supported()
+
+_GATED_ATTN_FORWARD_METHODS = frozenset(
+    {
+        AttnForwardMethod.MHA,
+        AttnForwardMethod.MLA,
+        AttnForwardMethod.MHA_CHUNKED_KV,
+        AttnForwardMethod.MHA_ONE_SHOT,
+    }
+)
 
 
 class DsV3MLA(DeepseekV2AttentionMLA):
@@ -207,8 +220,24 @@ class DsV3MLA(DeepseekV2AttentionMLA):
             llama_4_scaling=llama_4_scaling,
         )
         gate = self._forward_gated(hidden_states)
-        s = (s[0], s[1], s[2], s[3] + (gate,))
-        return self.forward_core(s)
+        return self.forward_core(self._attach_gate(s, gate))
+
+    @staticmethod
+    def _attach_gate(s, gate: Optional[torch.Tensor]):
+        if gate is None or not isinstance(s, tuple):
+            return s
+        hidden_states, attn_forward_method, forward_batch, inner_state = s
+        if (
+            inner_state is None
+            or attn_forward_method not in _GATED_ATTN_FORWARD_METHODS
+        ):
+            return s
+        return (
+            hidden_states,
+            attn_forward_method,
+            forward_batch,
+            inner_state + (gate,),
+        )
 
     def _forward_gated(self, hidden_states: torch.Tensor):
         if self.g_proj:
@@ -923,12 +952,13 @@ class BailingMoEAttention(nn.Module):
         else:
             self.rotary_dim = self.head_dim
         self.max_position_embeddings = config.max_position_embeddings
+        rope_theta, rope_scaling = get_rope_config(config)
         self.rotary_emb = get_rope(
             self.head_dim,
             rotary_dim=self.rotary_dim,
             max_position=self.max_position_embeddings,
-            base=config.rope_parameters.get("rope_theta", 600000),
-            rope_scaling=config.rope_parameters,
+            base=rope_theta,
+            rope_scaling=rope_scaling,
             dtype=torch.float32,
         )
         self.attn = RadixAttention(
@@ -1001,6 +1031,7 @@ class BailingMoELinearDecoderLayer(nn.Module):
             )
         elif config.attention_type == 1:  # softmax layer
             if self.use_mla:
+                rope_theta, rope_scaling = get_rope_config(config)
                 self.attention = DsV3MLA(
                     config=config,
                     hidden_size=config.hidden_size,
@@ -1012,9 +1043,9 @@ class BailingMoELinearDecoderLayer(nn.Module):
                         config.q_lora_rank if hasattr(config, "q_lora_rank") else None
                     ),
                     kv_lora_rank=config.kv_lora_rank,
-                    rope_theta=config.rope_parameters.get("rope_theta", 600000),
-                    rope_scaling=config.rope_parameters,
-                    max_position_embeddings=262144,
+                    rope_theta=rope_theta,
+                    rope_scaling=rope_scaling,
+                    max_position_embeddings=config.max_position_embeddings,
                     quant_config=quant_config,
                     layer_id=layer_id,
                     reduce_results=False,

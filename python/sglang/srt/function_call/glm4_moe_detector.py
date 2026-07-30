@@ -162,6 +162,10 @@ class Glm4MoeDetector(BaseFormatDetector):
     Uses a streaming state machine to convert XML to JSON incrementally for maximum speed.
     """
 
+    _STREAMING_PARTIAL_PATTERN = re.compile(
+        r"<tool_call>(.*?)(?:\\n|\n)(.*?)(</tool_call>|$)", re.DOTALL
+    )
+
     def __init__(self):
         super().__init__()
         self.bot_token = "<tool_call>"
@@ -474,11 +478,7 @@ class Glm4MoeDetector(BaseFormatDetector):
         calls: list[ToolCallItem] = []
         try:
             # Try to match a partial or complete tool call
-            partial_match = re.search(
-                pattern=r"<tool_call>(.*?)(?:\\n|\n)(.*?)(</tool_call>|$)",
-                string=current_text,
-                flags=re.DOTALL,
-            )
+            partial_match = self._STREAMING_PARTIAL_PATTERN.search(current_text)
             if partial_match:
                 func_name_raw = partial_match.group(1)
                 func_args_raw = partial_match.group(2)
@@ -525,85 +525,75 @@ class Glm4MoeDetector(BaseFormatDetector):
                         "name": func_name,
                         "arguments": {},
                     }
-                else:
-                    # Process XML to JSON streaming
-                    current_raw_length = len(func_args_raw)
-
-                    if current_raw_length > self._streamed_raw_length:
-                        # Get the new raw XML content
-                        raw_increment = func_args_raw[self._streamed_raw_length :]
-
-                        # Convert XML increment to JSON increment using state machine
-                        json_increment = self._process_xml_to_json_streaming(
-                            raw_increment, func_name, tools
+                current_raw_length = len(func_args_raw)
+                if current_raw_length > self._streamed_raw_length:
+                    raw_increment = func_args_raw[self._streamed_raw_length :]
+                    json_increment = self._process_xml_to_json_streaming(
+                        raw_increment, func_name, tools
+                    )
+                    self._streamed_raw_length = current_raw_length
+                    if json_increment:
+                        calls.append(
+                            ToolCallItem(
+                                tool_index=self.current_tool_id,
+                                name=None,
+                                parameters=json_increment,
+                            )
                         )
+                        self._last_arguments += json_increment
+                        self.streamed_args_for_tool[
+                            self.current_tool_id
+                        ] += json_increment
 
-                        # CRITICAL: Update streamed length BEFORE checking json_increment
-                        # Even if json_increment is empty, the input has been consumed by the state machine
-                        self._streamed_raw_length = current_raw_length
-
-                        if json_increment:
-                            calls.append(
-                                ToolCallItem(
-                                    tool_index=self.current_tool_id,
-                                    name=None,
-                                    parameters=json_increment,
-                                )
+                if is_tool_end == self.eot_token:
+                    if self._is_first_param:
+                        empty_object = "{}"
+                        calls.append(
+                            ToolCallItem(
+                                tool_index=self.current_tool_id,
+                                name=None,
+                                parameters=empty_object,
                             )
-                            self._last_arguments += json_increment
-                            self.streamed_args_for_tool[
-                                self.current_tool_id
-                            ] += json_increment
-
-                    if is_tool_end == self.eot_token:
-                        if self._is_first_param:
-                            empty_object = "{}"
-                            calls.append(
-                                ToolCallItem(
-                                    tool_index=self.current_tool_id,
-                                    name=None,
-                                    parameters=empty_object,
-                                )
+                        )
+                        self._last_arguments += empty_object
+                        self.streamed_args_for_tool[
+                            self.current_tool_id
+                        ] += empty_object
+                    elif not self._last_arguments.endswith("}"):
+                        closing_brace = "}"
+                        calls.append(
+                            ToolCallItem(
+                                tool_index=self.current_tool_id,
+                                name=None,
+                                parameters=closing_brace,
                             )
-                            self._last_arguments += empty_object
-                        elif not self._last_arguments.endswith("}"):
-                            closing_brace = "}"
-                            calls.append(
-                                ToolCallItem(
-                                    tool_index=self.current_tool_id,
-                                    name=None,
-                                    parameters=closing_brace,
-                                )
+                        )
+                        self._last_arguments += closing_brace
+                        self.streamed_args_for_tool[
+                            self.current_tool_id
+                        ] += closing_brace
+
+                    try:
+                        pairs = self.func_arg_regex.findall(func_args_raw)
+                        if pairs:
+                            arguments = self._parse_argument_pairs(
+                                pairs, func_name, tools
                             )
-                            self._last_arguments += closing_brace
-                            self.streamed_args_for_tool[
-                                self.current_tool_id
-                            ] += closing_brace
+                            self.prev_tool_call_arr[self.current_tool_id][
+                                "arguments"
+                            ] = arguments
+                    except Exception as e:
+                        logger.debug(f"Failed to parse arguments: {e}", exc_info=True)
 
-                        try:
-                            pairs = self.func_arg_regex.findall(func_args_raw)
-                            if pairs:
-                                arguments = self._parse_argument_pairs(
-                                    pairs, func_name, tools
-                                )
-                                self.prev_tool_call_arr[self.current_tool_id][
-                                    "arguments"
-                                ] = arguments
-                        except Exception as e:
-                            logger.debug(
-                                f"Failed to parse arguments: {e}", exc_info=True
-                            )
+                    self._buffer = current_text[partial_match.end(3) :]
 
-                        # Remove the completed tool call from buffer
-                        self._buffer = current_text[partial_match.end(3) :]
-
-                        result = StreamingParseResult(normal_text="", calls=calls)
-                        self.current_tool_id += 1
-                        self._last_arguments = ""
-                        self.current_tool_name_sent = False
-                        self._streamed_raw_length = 0
-                        self._reset_streaming_state()
-                        return result
+                    result = StreamingParseResult(normal_text="", calls=calls)
+                    self.current_tool_id += 1
+                    self._last_arguments = ""
+                    self.current_tool_name_sent = False
+                    self._streamed_raw_length = 0
+                    self._reset_streaming_state()
+                    return result
 
             return StreamingParseResult(normal_text="", calls=calls)
 
