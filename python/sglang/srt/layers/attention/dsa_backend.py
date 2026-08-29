@@ -1686,14 +1686,11 @@ class DeepseekSparseAttnBackend(
 
                 # Validate indices when logical tokens exceed physical capacity
                 # This is likely to be triggered by PP with high kv reuse & parallelism
-                # Under DCP these are virtual locs in [0, size * dcp_world_size).
+                # Sharded DCP target pools use virtual locs in
+                # [0, size * dcp_world_size).
                 kv_cache_capacity = (
                     self.token_to_kv_pool.size
-                    * (
-                        get_parallel().attn_dcp_size
-                        if get_parallel().dcp_enabled
-                        else 1
-                    )
+                    * (get_parallel().attn_dcp_size if self._dcp_sharded_kv else 1)
                     + self.token_to_kv_pool.page_size
                 )
                 if forward_batch.seq_lens_sum > kv_cache_capacity:
@@ -3146,6 +3143,18 @@ class DeepseekSparseAttnBackend(
         dsa_impl = self._resolve_kpool_tail_backend(topk_indices, dsa_impl)
         self._check_kpool_tail_backend(topk_indices, dsa_impl, phase)
 
+        if (
+            self._dcp_sharded_kv
+            and forward_batch.forward_mode.is_extend_without_speculative()
+            and dsa_impl != "tilelang"
+        ):
+            raise ValueError(
+                f"DCP-sharded sparse extend is only supported for "
+                f"dsa_prefill_backend='tilelang', got {dsa_impl!r}. "
+                f"Other prefill impls read the paged pool with untranslated "
+                f"DCP virtual locs."
+            )
+
         if dsa_impl == "trtllm" and not self.use_mha:
             return self._forward_trtllm(
                 q,
@@ -3224,6 +3233,18 @@ class DeepseekSparseAttnBackend(
             # per-request KV (see get_topk_transform_method).
             assert topk_indices is not None and k is not None
             topk_indices = self._pad_topk_indices(topk_indices, q_nope.shape[0])
+            if not self.use_fused_topk:
+                topk_indices_offset = metadata.topk_indices_offset
+                assert topk_indices_offset is not None
+                mask = topk_indices != -1
+                topk_indices_offset = (
+                    topk_indices_offset.unsqueeze(1)
+                    if topk_indices_offset.ndim == 1
+                    else topk_indices_offset
+                )
+                topk_indices = torch.where(
+                    mask, topk_indices + topk_indices_offset, topk_indices
+                )
             page_table_1, kv_cache = self._dcp_gather_extend_kv_and_indices(
                 layer, forward_batch, k, topk_indices
             )
