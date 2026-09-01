@@ -540,6 +540,10 @@ class Qwen3OmniMoeThinkerForConditionalGeneration(Qwen3VLMoeForConditionalGenera
 
 
 class Qwen3OmniMoeForConditionalGeneration(PreTrainedModel):
+    # The runner reads these off the served top-level model, which wraps
+    # (not subclasses) the thinker, so forward both capability attributes.
+    supports_bcg_deepstack_replay = True
+
     def __init__(
         self,
         config: Qwen3VLMoeConfig,
@@ -555,6 +559,10 @@ class Qwen3OmniMoeForConditionalGeneration(PreTrainedModel):
         self.enable_talker = False
         self.pad_input_ids = self.thinker.pad_input_ids
         self.forward = self.thinker.forward
+
+    @property
+    def num_deepstack_embeddings(self):
+        return self.thinker.num_deepstack_embeddings
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         stacked_params_mapping = [

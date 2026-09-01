@@ -60,6 +60,38 @@ def _grouped_foreach_copy_(dsts: List[torch.Tensor], srcs: List[torch.Tensor]) -
         foreach_copy(group_dsts, group_srcs)
 
 
+def _allocate_pp_proxy_tensors(
+    *,
+    max_num_tokens: int,
+    max_hidden_tokens: int,
+    hidden_size: int,
+    dtype: torch.dtype,
+    hc_hidden_size: Optional[int] = None,
+    pp_proxy_topk_size: Optional[int] = None,
+    pp_proxy_residual_num_blocks: Optional[int] = None,
+) -> Dict[str, torch.Tensor]:
+    """Allocate the stable buffers consumed by an incoming PP proxy."""
+    is_mhc = hc_hidden_size is not None
+    pp_hidden_size = hc_hidden_size if is_mhc else hidden_size
+    pp_proxy_tensors = {
+        "hidden_states": torch.zeros((max_hidden_tokens, pp_hidden_size), dtype=dtype),
+    }
+    if not is_mhc:
+        # Only Kimi K3 supplies num_blocks: its PP bank is token-major
+        # [T, blocks, H]. Other models use the phase-specific hidden-token bound.
+        residual_shape = (
+            (max_num_tokens, pp_proxy_residual_num_blocks, hidden_size)
+            if pp_proxy_residual_num_blocks is not None
+            else (max_hidden_tokens, hidden_size)
+        )
+        pp_proxy_tensors["residual"] = torch.zeros(residual_shape, dtype=dtype)
+    if pp_proxy_topk_size is not None:
+        pp_proxy_tensors["topk_indices"] = torch.zeros(
+            (max_num_tokens, pp_proxy_topk_size), dtype=torch.int32
+        )
+    return pp_proxy_tensors
+
+
 @dataclass
 class DecodeInputBuffers(ForwardInputBuffers):
     input_ids: torch.Tensor
@@ -129,29 +161,19 @@ class DecodeInputBuffers(ForwardInputBuffers):
                 torch.zeros((max_bs,), dtype=torch.bool) if enable_mamba_track else None
             )
 
-            if pp_size > 1:
-                is_mhc = hc_hidden_size is not None
-                hs = hc_hidden_size if is_mhc else hidden_size
-                pp_proxy_tensors = {
-                    "hidden_states": torch.zeros((max_bs, hs), dtype=dtype),
-                }
-                if not is_mhc:
-                    # Only Kimi K3 supplies num_blocks: its PP bank is token-major
-                    # [T, blocks, H]. Other models keep the legacy [max_bs, H].
-                    residual_shape = (
-                        (max_num_token, pp_proxy_residual_num_blocks, hidden_size)
-                        if pp_proxy_residual_num_blocks is not None
-                        else (max_bs, hidden_size)
-                    )
-                    pp_proxy_tensors["residual"] = torch.zeros(
-                        residual_shape, dtype=dtype
-                    )
-                if pp_proxy_topk_size is not None:
-                    pp_proxy_tensors["topk_indices"] = torch.zeros(
-                        (max_num_token, pp_proxy_topk_size), dtype=torch.int32
-                    )
-            else:
-                pp_proxy_tensors = None
+            pp_proxy_tensors = (
+                _allocate_pp_proxy_tensors(
+                    max_num_tokens=max_num_token,
+                    max_hidden_tokens=max_num_token,
+                    hidden_size=hidden_size,
+                    dtype=dtype,
+                    hc_hidden_size=hc_hidden_size,
+                    pp_proxy_topk_size=pp_proxy_topk_size,
+                    pp_proxy_residual_num_blocks=pp_proxy_residual_num_blocks,
+                )
+                if pp_size > 1
+                else None
+            )
 
             if is_encoder_decoder:
                 encoder_lens = torch.full(
@@ -343,6 +365,7 @@ class PrefillInputBuffers(ForwardInputBuffers):
     input_embeds: Optional[torch.Tensor]
     mrope_positions: Optional[torch.Tensor]
     input_deepstack_embeds: Optional[torch.Tensor]
+    pp_proxy_tensors: Optional[Dict[str, torch.Tensor]]
 
     @classmethod
     def create(
@@ -357,6 +380,11 @@ class PrefillInputBuffers(ForwardInputBuffers):
         dtype: torch.dtype,
         enable_mamba_track: bool,
         deepstack_replay_width: int = 0,
+        pp_size: int = 1,
+        is_first_pp_rank: bool = False,
+        hc_hidden_size: Optional[int] = None,
+        pp_proxy_topk_size: Optional[int] = None,
+        pp_proxy_residual_num_blocks: Optional[int] = None,
     ) -> PrefillInputBuffers:
         with torch.device(device):
             input_ids = torch.zeros((max_num_tokens,), dtype=torch.int64)
@@ -380,7 +408,7 @@ class PrefillInputBuffers(ForwardInputBuffers):
             if is_multimodal:
                 input_embeds = torch.zeros((max_num_tokens, hidden_size), dtype=dtype)
                 mrope_positions = torch.zeros((3, max_num_tokens), dtype=torch.int64)
-                if deepstack_replay_width > 0:
+                if deepstack_replay_width > 0 and is_first_pp_rank:
                     input_deepstack_embeds = torch.zeros(
                         (max_num_tokens, deepstack_replay_width), dtype=dtype
                     )
@@ -390,6 +418,20 @@ class PrefillInputBuffers(ForwardInputBuffers):
                 input_embeds = None
                 mrope_positions = None
                 input_deepstack_embeds = None
+
+            pp_proxy_tensors = (
+                _allocate_pp_proxy_tensors(
+                    max_num_tokens=max_num_tokens,
+                    max_hidden_tokens=max_num_tokens,
+                    hidden_size=hidden_size,
+                    dtype=dtype,
+                    hc_hidden_size=hc_hidden_size,
+                    pp_proxy_topk_size=pp_proxy_topk_size,
+                    pp_proxy_residual_num_blocks=pp_proxy_residual_num_blocks,
+                )
+                if pp_size > 1 and not is_first_pp_rank
+                else None
+            )
 
         return cls(
             input_ids=input_ids,
@@ -402,6 +444,7 @@ class PrefillInputBuffers(ForwardInputBuffers):
             input_embeds=input_embeds,
             mrope_positions=mrope_positions,
             input_deepstack_embeds=input_deepstack_embeds,
+            pp_proxy_tensors=pp_proxy_tensors,
         )
 
     def populate_from_forward_batch(

@@ -83,8 +83,16 @@ class TestPrefillInputBuffersDeepStackField(CustomTestCase):
     def test_buffer_allocation_follows_the_gates(self):
         cases = [
             (dict(), False),
-            (dict(deepstack_replay_width=192), True),
-            (dict(deepstack_replay_width=192, is_multimodal=False), False),
+            (dict(deepstack_replay_width=192, is_first_pp_rank=True), True),
+            (dict(deepstack_replay_width=192), False),
+            (
+                dict(
+                    deepstack_replay_width=192,
+                    is_first_pp_rank=True,
+                    is_multimodal=False,
+                ),
+                False,
+            ),
         ]
         for overrides, expected in cases:
             with self.subTest(**overrides):
@@ -98,7 +106,7 @@ class TestPrefillInputBuffersDeepStackField(CustomTestCase):
     def test_registry_adopts_the_buffer_tensor(self):
         # Adoption looks the slot up by name on the source; a field rename
         # silently breaks the wiring without this pin.
-        buf = _buffers(deepstack_replay_width=192)
+        buf = _buffers(deepstack_replay_width=192, is_first_pp_rank=True)
         reg = build_prefill_registry(
             device=_DEVICE,
             max_bs=1,
@@ -119,10 +127,17 @@ class TestPrefillInputBuffersDeepStackField(CustomTestCase):
 class TestQwen3VLCapabilityOptIn(CustomTestCase):
 
     def test_only_deepstack_capable_models_opt_in(self):
+        from sglang.srt.models.interns2_mobius import (
+            InternS2MobiusForConditionalGeneration,
+        )
         from sglang.srt.models.qwen2_5_vl import (
             Qwen2_5_VLForConditionalGeneration,
         )
         from sglang.srt.models.qwen3 import Qwen3ForCausalLM
+        from sglang.srt.models.qwen3_5 import (
+            Qwen3_5ForConditionalGeneration,
+            Qwen3_5MoeForConditionalGeneration,
+        )
         from sglang.srt.models.qwen3_vl import Qwen3VLForConditionalGeneration
         from sglang.srt.models.qwen3_vl_moe import (
             Qwen3VLMoeForConditionalGeneration,
@@ -131,6 +146,9 @@ class TestQwen3VLCapabilityOptIn(CustomTestCase):
         for cls, expected in [
             (Qwen3VLForConditionalGeneration, True),
             (Qwen3VLMoeForConditionalGeneration, True),
+            (Qwen3_5ForConditionalGeneration, True),
+            (Qwen3_5MoeForConditionalGeneration, True),
+            (InternS2MobiusForConditionalGeneration, True),
             (Qwen2_5_VLForConditionalGeneration, False),
             (Qwen3ForCausalLM, False),
         ]:
