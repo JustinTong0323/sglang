@@ -105,6 +105,7 @@ Use the lightest suite that meets your test's needs:
 - **No GPU required** → `base-a-test-cpu`
 - **Most small GPU tests** → `base-b-test-1-gpu-small` (default choice)
 - **Need H100 memory or Hopper features** → `base-b-test-1-gpu-large`
+- **Need a dependency without Python 3.10 wheels (e.g. tml-renderers for Inkling)** → `base-b-test-1-gpu-large-py312`
 - **JIT kernel correctness** → `base-b-kernel-unit-test-1-gpu-large`
 - **JIT kernel correctness for B200 / SM100 paths** → `base-b-kernel-unit-test-4-gpu-b200`
 - **JIT kernel benchmarks** → `base-b-kernel-benchmark-test-1-gpu-large`
