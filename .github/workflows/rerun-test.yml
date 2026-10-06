@@ -36,6 +36,11 @@ on:
         required: false
         type: string
         default: ""
+      python:
+        description: "Python version for a per-job uv venv (cuda only; empty = runner's python3)"
+        required: false
+        type: string
+        default: ""
       pr_head_sha:
         description: "PR head SHA to checkout (for /rerun-test on fork PRs)"
         required: false
@@ -167,6 +172,8 @@ jobs:
           # Public-read-only PAT: the checkout above leaves no job token for the
           # install script's github.com clones. Unset -> anonymous.
           GH_TOKEN: ${{ secrets.GH_PAT_FOR_CI_CLONE }}
+          USE_VENV: ${{ inputs.python && '1' || 'false' }}
+          SGLANG_CI_PYTHON_VERSION: ${{ inputs.python }}
         run: |
           if [[ "${{ inputs.runs_on }}" == "1-gpu-5090" ]]; then
             source /etc/profile.d/sglang-ci.sh
@@ -252,6 +259,12 @@ jobs:
         if: failure()
         with:
           artifact-suffix: ${{ matrix.partition }}
+
+      - name: Cleanup venv
+        if: always() && inputs.python != ''
+        env:
+          USE_VENV: "true"
+        run: bash scripts/ci/cuda/ci_cleanup_venv.sh
 
   rerun-test-multimodal-gen:
     name: rerun-test-multimodal-gen (partition ${{ matrix.partition }})

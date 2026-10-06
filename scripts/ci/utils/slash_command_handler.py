@@ -976,6 +976,7 @@ def _dispatch_err(suite, msg):
         "install_script": "",
         "install_timeout": "",
         "rdma_devices": "",
+        "python": "",
         "is_cpu": False,
         "error": msg,
     }
@@ -1017,6 +1018,7 @@ def _resolve_runner_config(rc, full_path, suite):
         "install_script": install_script,
         "install_timeout": str(cfg["install_timeout"]),
         "rdma_devices": cfg.get("rdma_devices", ""),
+        "python": cfg.get("python", ""),
         "is_cpu": False,
         "error": None,
     }
@@ -1029,8 +1031,8 @@ def detect_suite(file_path_from_test):
 
     A CUDA file can carry multiple `register_cuda_ci(...)` calls — one per
     pool it should run on — so this returns a *list* of dispatch dicts, one
-    per registration. Runner label, install script, timeout, and rdma_devices
-    are all resolved from scripts/ci/runner_configs.yml — the
+    per registration. Runner label, install script, timeout, rdma_devices and
+    python are all resolved from scripts/ci/runner_configs.yml — the
     same single source of truth that drives the main PR test pipeline. Every
     dispatchable CUDA suite, per-commit and scheduled alike, goes through that
     one path; the legacy single-string `suite=` carries no runner_config and is
@@ -1041,7 +1043,7 @@ def detect_suite(file_path_from_test):
     `error` set.
 
     Each dict has keys: suite, runner_label, install_script,
-    install_timeout, rdma_devices, is_cpu, error.
+    install_timeout, rdma_devices, python, is_cpu, error.
     """
     full_path = f"test/{file_path_from_test}"
     with open(full_path, "r") as f:
@@ -1082,6 +1084,7 @@ def detect_suite(file_path_from_test):
                 "install_script": "",
                 "install_timeout": "",
                 "rdma_devices": "",
+                "python": "",
                 "is_cpu": True,
                 "error": None,
             }
@@ -1169,6 +1172,7 @@ def _resolve_test_spec(test_spec):
             "install_script": "",
             "install_timeout": "",
             "rdma_devices": "",
+            "python": "",
             "error": None,
         }
         err = _too_long_for_rerun(entry, resolved_path)
@@ -1189,6 +1193,7 @@ def _resolve_test_spec(test_spec):
             f"suite={info['suite']}, mode={mode}, runs_on={info['runner_label']}, "
             f"install={info['install_script']}, "
             f"rdma={info['rdma_devices']}, "
+            f"python={info['python'] or 'system'}, "
             f"command='{test_command}'"
         )
         entry = {
@@ -1199,6 +1204,7 @@ def _resolve_test_spec(test_spec):
             "install_script": info["install_script"],
             "install_timeout": info["install_timeout"],
             "rdma_devices": info["rdma_devices"],
+            "python": info["python"],
             "error": None,
         }
         err = _too_long_for_rerun(entry, f"test/{resolved_path}")
@@ -1232,7 +1238,7 @@ def _dispatch_batch(
     """
     Dispatch a single workflow run for a batch of resolved test specs that
     share the same dispatch shape (mode + runs_on + install_script +
-    install_timeout + rdma_devices).
+    install_timeout + rdma_devices + python).
 
     Returns a dict with keys: specs, success, test_commands, runner_label, run_url, error.
     """
@@ -1242,6 +1248,7 @@ def _dispatch_batch(
     install_script = batch[0]["install_script"]
     install_timeout = batch[0]["install_timeout"]
     rdma_devices = batch[0]["rdma_devices"]
+    python = batch[0]["python"]
 
     # Join multiple commands with newlines for the workflow to iterate over
     combined_command = "\n".join(test_commands)
@@ -1274,6 +1281,7 @@ def _dispatch_batch(
             "install_script": install_script,
             "install_timeout": install_timeout or "20",
             "rdma_devices": rdma_devices,
+            "python": python,
             "reply_comment_id": str(reply_comment_id) if reply_comment_id else "",
             "reply_marker": reply_marker,
             "refresh_precision_baseline": str(refresh_precision_baseline).lower(),
@@ -1398,7 +1406,7 @@ def handle_rerun_test(
     """
     Handles the /rerun-test command. Resolves all test specs, groups them by
     dispatch shape (mode + runs_on + install_script + install_timeout +
-    rdma_devices), and dispatches one workflow per group.
+    rdma_devices + python), and dispatches one workflow per group.
     """
     if not skip_permission_check and not _check_rerun_test_permissions(
         gh_repo, pr, comment, user_perms, "rerun-test"
@@ -1526,6 +1534,7 @@ def handle_rerun_test(
             r["install_script"],
             r["install_timeout"],
             r["rdma_devices"],
+            r["python"],
         )
         groups.setdefault(key, []).append(r)
 
