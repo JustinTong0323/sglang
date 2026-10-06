@@ -102,7 +102,7 @@ Use the lightest suite that meets your test's needs. Full suite tables are in th
 | No GPU required | `base-a-test-cpu` |
 | Small GPU (fits 5090, 32GB) | `base-b-test-1-gpu-small` (most tests go here) |
 | Large GPU memory or Hopper features | `base-b-test-1-gpu-large` |
-| A dependency without Python 3.10 wheels | `base-b-test-1-gpu-large-py312` |
+| A dependency without Python 3.10 wheels | a `-py312` runner_config, e.g. `base-b-test-1-gpu-large-py312` |
 | JIT kernel correctness | `base-b-kernel-unit-test-1-gpu-large` |
 | JIT kernel benchmarks | `base-b-kernel-benchmark-test-1-gpu-large` |
 | Multi-GPU (2/4/8) | `base-b-test-2-gpu-large`, `base-c-test-*` |

@@ -101,9 +101,12 @@ PER_COMMIT_SUITES = {
         # (tests still tagged per-commit but skipped on default PR runs).
         "extra-a-test-1-gpu-small",
         "extra-a-test-1-gpu-large",
+        "extra-a-test-1-gpu-large-py312",
         "extra-a-test-2-gpu-large",
+        "extra-a-test-2-gpu-large-py312",
         "extra-b-test-4-gpu-h100",
         "extra-b-test-4-gpu-b200",
+        "extra-b-test-4-gpu-b200-py312",
         "extra-b-test-8-gpu-h200",
         "extra-b-test-8-gpu-b300",
     ],
@@ -155,6 +158,7 @@ NIGHTLY_SUITES = {
         "nightly-test-4-gpu-gb300",
         "nightly-test-8-gpu-h200",
         "nightly-test-8-gpu-b200",
+        "nightly-test-8-gpu-b200-py312",
     ],
     HWBackend.AMD: [
         "nightly-amd",

@@ -22,13 +22,16 @@ _anchors:
 runner_configs:
   1-gpu-small:       { install: *default, artifact_version: v4, install_timeout: "20", runs_on: 1-gpu-5090 }
   1-gpu-large:       { install: *default, artifact_version: v4, install_timeout: "20", runs_on: 1-gpu-h100 }
-  # tml-renderers (Inkling chat rendering) ships cp311-abi3 wheels only.
+  # *-py312: tml-renderers (Inkling chat rendering) ships cp311-abi3 wheels only.
   1-gpu-large-py312: { install: *default, artifact_version: v4, install_timeout: "20", runs_on: 1-gpu-h100, python: "3.12" }
   2-gpu-large:       { install: *default, artifact_version: v4, install_timeout: "20", runs_on: 2-gpu-h100 }
+  2-gpu-large-py312: { install: *default, artifact_version: v4, install_timeout: "20", runs_on: 2-gpu-h100, python: "3.12" }
   4-gpu-b200:        { install: *default, artifact_version: v6, install_timeout: "20", runs_on: $b200_runner }
+  4-gpu-b200-py312:  { install: *default, artifact_version: v6, install_timeout: "20", runs_on: $b200_runner, python: "3.12" }
   4-gpu-gb300:       { install: *default, artifact_version: v6, install_timeout: "20", runs_on: 4-gpu-gb300 }
   4-gpu-h100:        { install: *default, artifact_version: v4, install_timeout: "20", runs_on: 4-gpu-h100 }
   8-gpu-h200:        { install: *default, artifact_version: v4, install_timeout: "20", runs_on: 8-gpu-h200 }
   8-gpu-b200:        { install: *default, artifact_version: v6, install_timeout: "20", runs_on: 8-gpu-b200 }
+  8-gpu-b200-py312:  { install: *default, artifact_version: v6, install_timeout: "20", runs_on: 8-gpu-b200, python: "3.12" }
   8-gpu-b300:        { install: *default, artifact_version: v6, install_timeout: "20", runs_on: 8-gpu-b300 }
   8-gpu-h20:         { install: *default, artifact_version: v4, install_timeout: "20", runs_on: 8-gpu-h20, rdma_devices: "mlx5_1,mlx5_2,mlx5_3,mlx5_4" }
