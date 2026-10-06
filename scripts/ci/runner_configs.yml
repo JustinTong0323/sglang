@@ -13,6 +13,8 @@
 #     b200 runner tag from check-changes (see runner_configs.py --map).
 #   - rdma_devices (optional): exported as SGLANG_CI_RDMA_ALL_DEVICES env
 #     to the stage job; absent means unset.
+#   - python (optional): the stage installs into a per-job uv venv on this
+#     interpreter version instead of the runner's system python3.
 
 _anchors:
   default_install: &default scripts/ci/cuda/ci_install_dependency.sh
@@ -20,6 +22,8 @@ _anchors:
 runner_configs:
   1-gpu-small:       { install: *default, artifact_version: v4, install_timeout: "20", runs_on: 1-gpu-5090 }
   1-gpu-large:       { install: *default, artifact_version: v4, install_timeout: "20", runs_on: 1-gpu-h100 }
+  # tml-renderers (Inkling chat rendering) ships cp311-abi3 wheels only.
+  1-gpu-large-py312: { install: *default, artifact_version: v4, install_timeout: "20", runs_on: 1-gpu-h100, python: "3.12" }
   2-gpu-large:       { install: *default, artifact_version: v4, install_timeout: "20", runs_on: 2-gpu-h100 }
   4-gpu-b200:        { install: *default, artifact_version: v6, install_timeout: "20", runs_on: $b200_runner }
   4-gpu-gb300:       { install: *default, artifact_version: v6, install_timeout: "20", runs_on: 4-gpu-gb300 }

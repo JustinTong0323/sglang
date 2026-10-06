@@ -64,7 +64,7 @@ configure_environment() {
 
     if [ "$USE_VENV" = "1" ]; then
         UV_VENV="/tmp/sglang-ci-${GITHUB_RUN_ID:-norun}-${GITHUB_JOB:-nojob}-$$"
-        uv venv "$UV_VENV" --python "python${SYS_PYTHON_VER}" --seed
+        uv venv "$UV_VENV" --python "${SGLANG_CI_PYTHON_VERSION:-python${SYS_PYTHON_VER}}" --seed
         # shellcheck disable=SC1091
         source "$UV_VENV/bin/activate"
         [ "${VIRTUAL_ENV:-}" = "$UV_VENV" ] || { echo "FATAL: venv activation did not set VIRTUAL_ENV correctly"; exit 1; }
