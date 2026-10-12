@@ -1406,6 +1406,7 @@ class MiniCPMV4_6(MiniCPMBaseModel):
     ):
         super().__init__(config=config, quant_config=quant_config, prefix=prefix)
         assert self.version in ((4, 6), (4, 7))
+        self.capture_aux_hidden_states = False
         # ``Qwen3_5ForCausalLM`` returns plain hidden states (body only, no LM
         # head, no LogitsProcessor). Add them here so the downstream sampler
         # sees a ``LogitsProcessorOutput``. With ``tie_word_embeddings=True``
@@ -1454,9 +1455,21 @@ class MiniCPMV4_6(MiniCPMBaseModel):
             forward_batch=forward_batch,
             **kwargs,
         )
+        aux_hidden_states = None
+        if self.capture_aux_hidden_states:
+            hidden_states, aux_hidden_states = hidden_states
         return self.logits_processor(
-            input_ids, hidden_states, self.lm_head, forward_batch
+            input_ids, hidden_states, self.lm_head, forward_batch, aux_hidden_states
         )
+
+    def set_dflash_layers_to_capture(self, layer_ids: List[int]):
+        if layer_ids is None:
+            raise ValueError(
+                "DFLASH requires explicit layer_ids for aux hidden capture."
+            )
+        self.capture_aux_hidden_states = True
+        # Qwen3.5 layers capture their input, i.e. the previous layer's output.
+        self.llm.set_dflash_layers_to_capture([val + 1 for val in layer_ids])
 
     def init_vision_module(
         self,
