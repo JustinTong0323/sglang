@@ -518,6 +518,7 @@ class MiniCPMV4_6MultimodalProcessor(BaseMultimodalProcessor):
             mm_items=mm_items,
             input_ids=input_ids,
             im_token_id=self.image_token_id,
+            video_token_id=self.video_token_id,
             im_start_id=self.image_start_id,
             im_end_id=self.image_end_id,
             slice_start_id=self.slice_start_id,

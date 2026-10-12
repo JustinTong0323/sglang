@@ -51,6 +51,7 @@ from sglang.srt.layers.linear import ReplicatedLinear
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.managers.mm_utils import (
+    MultiModalityDataPaddingPatternMultimodalTokens,
     MultiModalityDataPaddingPatternTokenPairs,
     general_mm_embed_routine,
 )
@@ -1571,15 +1572,8 @@ class MiniCPMV4_6(MiniCPMBaseModel):
     get_video_feature = get_image_feature
 
     def pad_input_ids(self, input_ids: array, image_inputs: MultimodalInputs) -> array:
-        im_start_id: int = image_inputs.im_start_id
-        im_end_id: int = image_inputs.im_end_id
-        slice_start_id: int = image_inputs.slice_start_id
-        slice_end_id: int = image_inputs.slice_end_id
-
-        media_token_pairs = [(im_start_id, im_end_id), (slice_start_id, slice_end_id)]
-        pattern = MultiModalityDataPaddingPatternTokenPairs(
-            media_token_pairs, data_start_token_ids=[im_start_id]
-        )
+        # Every thumbnail / slice is its own item; pad each span with its own value.
+        pattern = MultiModalityDataPaddingPatternMultimodalTokens()
         return pattern.pad_input_tokens(input_ids, image_inputs)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):

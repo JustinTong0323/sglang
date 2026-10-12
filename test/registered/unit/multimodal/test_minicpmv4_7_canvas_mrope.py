@@ -4,19 +4,29 @@ The expected tensors were produced by the checkpoints' reference
 ``mrope_minicpmv4_7.py`` and pin the port to it.
 """
 
+import asyncio
+import re
 import unittest
+from array import array
+from functools import partial
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import torch
 from PIL import Image
 from torch import nn
 
 from sglang.srt.configs.minicpmv4_7 import MiniCPMV4_7Config
-from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
+from sglang.srt.managers.mm_utils import duplicate_pad_mm_input_ids
+from sglang.srt.managers.schedule_batch import (
+    Modality,
+    MultimodalDataItem,
+    MultimodalInputs,
+)
 from sglang.srt.model_executor import forward_batch_info
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.models import minicpmv
+from sglang.srt.multimodal.processors.base_processor import BaseMultimodalProcessor
 from sglang.srt.multimodal.processors.minicpmv4_6 import MiniCPMV4_6ImageProcessor
 from sglang.srt.multimodal.processors.minicpmv4_7 import (
     MiniCPMV4_7MultimodalProcessor,
@@ -331,6 +341,77 @@ class TestCacheIdentity(CustomTestCase):
             self._pad_values(image, {}),
             self._pad_values(image, {"downsample_mode": "4x"}),
         )
+
+
+class _Tokenizer:
+    VOCAB = {
+        "<|image_pad|>": PAD,
+        "<|video_pad|>": 906,
+        "<image>": IM_START,
+        "</image>": IM_END,
+        "<slice>": SLICE_START,
+        "</slice>": SLICE_END,
+        "<image_id>": 907,
+        "</image_id>": 908,
+        "\n": NEWLINE,
+    }
+    PATTERN = re.compile("|".join(map(re.escape, VOCAB)) + "|.", re.S)
+
+    def convert_tokens_to_ids(self, tokens):
+        return [self.VOCAB.get(token) for token in tokens]
+
+    def encode(self, text, add_special_tokens):
+        return [self.VOCAB.get(p) or ord(p) for p in self.PATTERN.findall(text)]
+
+
+class TestRadixCacheReuse(CustomTestCase):
+    def _processor(self):
+        hf_config = MiniCPMV4_7Config(
+            text_config={"model_type": "qwen3_5_text"},
+            vision_config={},
+            mrope_mode="canvas",
+        )
+        with patch.object(BaseMultimodalProcessor, "__init__", lambda *args: None):
+            return MiniCPMV4_7MultimodalProcessor(hf_config, None, _Tokenizer())
+
+    def _scheduled_request(self, processor, images):
+        """Prompt tokens as padded by the scheduler, and their M-RoPE positions."""
+        prompt = "q" + "<|image_pad|>-" * len(images)
+        loaded = SimpleNamespace(input_text=prompt, images=images, videos=[])
+        with patch.object(processor, "load_mm_data", AsyncMock(return_value=loaded)):
+            output = asyncio.run(
+                processor.process_mm_data_async(
+                    image_data=images,
+                    audio_data=[],
+                    input_text=prompt,
+                    request_obj=SimpleNamespace(mm_processor_kwargs=None),
+                )
+            )
+        mm_inputs = MultimodalInputs.from_processor_output(output)
+        padded = duplicate_pad_mm_input_ids(
+            array("q", output.input_ids),
+            mm_inputs,
+            partial(minicpmv.MiniCPMV4_6.pad_input_ids, None),
+        )
+        positions, _ = processor.compute_mrope_positions(padded, mm_inputs.mm_items)
+        return list(padded), positions
+
+    def test_reused_prefix_keeps_its_positions(self):
+        # The radix cache reuses KV for a matching token prefix, so every shared
+        # token must sit at the same M-RoPE position in both requests.
+        processor = self._processor()
+        sliced = Image.new("RGB", (1456, 224))
+        ids_a, positions_a = self._scheduled_request(
+            processor, [sliced, Image.new("RGB", (896, 224))]
+        )
+        ids_b, positions_b = self._scheduled_request(
+            processor, [sliced, Image.new("RGB", (224, 896))]
+        )
+
+        shared = next(
+            (i for i, (a, b) in enumerate(zip(ids_a, ids_b)) if a != b), len(ids_a)
+        )
+        self.assertTrue(torch.equal(positions_a[:, :shared], positions_b[:, :shared]))
 
 
 if __name__ == "__main__":
