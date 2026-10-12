@@ -317,6 +317,13 @@ class TestCacheIdentity(CustomTestCase):
                     self._pad_values(Image.new("RGB", (224, 896)), kwargs),
                 )
 
+    def test_thumbnail_and_slices_do_not_share_cache_identity(self):
+        # 12x80 thumbnail and 20x48 slices pack to the same 60-token pixel tensor.
+        pad_values = self._pad_values(Image.new("RGB", (1456, 224)), {})
+
+        self.assertGreater(len(pad_values), 1)
+        self.assertNotIn(pad_values[0], pad_values[1:])
+
     def test_downsample_mode_changes_cache_identity(self):
         image = Image.new("RGB", (448, 448))
 

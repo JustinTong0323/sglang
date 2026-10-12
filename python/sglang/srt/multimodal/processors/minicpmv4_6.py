@@ -133,11 +133,14 @@ def _reshape_by_patch(image: torch.Tensor, patch_size: int) -> torch.Tensor:
 
 
 def _layout_namespace(
-    downsample_mode: str, tgt_sizes: List[List[int]], grids: List[List[int]]
+    downsample_mode: str,
+    tgt_size: List[int],
+    media_tgt_sizes: List[List[int]],
+    media_grids: List[List[int]],
 ) -> str:
-    # Pixels alone omit the layout: a transposed or differently sliced image can
-    # pack to the same tensor while its embeddings and M-RoPE positions differ.
-    layout = f"{downsample_mode}|{tgt_sizes}|{grids}"
+    # Pixels alone omit the layout: patches of different shape can pack to the
+    # same tensor while their embeddings and M-RoPE positions differ.
+    layout = f"{downsample_mode}|{tgt_size}|{media_tgt_sizes}|{media_grids}"
     return CONTENT_HASH_PREFIX + hashlib.sha256(layout.encode()).hexdigest()
 
 
@@ -568,10 +571,11 @@ class MiniCPMV4_6MultimodalProcessor(BaseMultimodalProcessor):
     ) -> List[MultimodalDataItem]:
         """``media``: per image / video, its patches' pixel values, tgt sizes
         and slice grids (source patch first, slices row-major)."""
-        patches = []
-        for pvs, tss, grids in media:
-            namespace = _layout_namespace(image_processor.downsample_mode, tss, grids)
-            patches.extend((pv, ts, namespace) for pv, ts in zip(pvs, tss))
+        patches = [
+            (pv, ts, _layout_namespace(image_processor.downsample_mode, ts, tss, grids))
+            for pvs, tss, grids in media
+            for pv, ts in zip(pvs, tss)
+        ]
         runs = self.get_mm_items_offset(input_ids, pad_token_id)
         if len(runs) != len(patches):
             raise RuntimeError(
