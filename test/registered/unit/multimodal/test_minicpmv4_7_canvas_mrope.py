@@ -6,10 +6,17 @@ The expected tensors were produced by the checkpoints' reference
 
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
+from PIL import Image
+from torch import nn
 
+from sglang.srt.configs.minicpmv4_7 import MiniCPMV4_7Config
 from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
+from sglang.srt.model_executor import forward_batch_info
+from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+from sglang.srt.models import minicpmv
 from sglang.srt.multimodal.processors.minicpmv4_6 import MiniCPMV4_6ImageProcessor
 from sglang.srt.multimodal.processors.minicpmv4_7 import (
     MiniCPMV4_7MultimodalProcessor,
@@ -39,6 +46,14 @@ def _canvas(input_ids, target_sizes):
     return compute_canvas_positions(
         ids, build_image_bounds(ids, SPECIAL_IDS), target_sizes, SPECIAL_IDS
     )
+
+
+def _default_processor():
+    processor = MiniCPMV4_7MultimodalProcessor.__new__(MiniCPMV4_7MultimodalProcessor)
+    processor.image_processor = MiniCPMV4_6ImageProcessor(
+        max_slice_nums=9, patch_size=14, downsample_mode="16x"
+    )
+    return processor
 
 
 def _item(modality, start, tgt_size):
@@ -129,6 +144,83 @@ class TestMiniCPMV4_7MRoPEPositions(CustomTestCase):
         self.assertEqual(delta.item(), 0)
 
 
+class TestMiniCPMV4_7ForwardPositions(CustomTestCase):
+    INPUT_IDS = [10, 11, IM_START] + [PAD] * 16 + [IM_END, 12, 13]
+
+    def _model(self):
+        config = MiniCPMV4_7Config(
+            text_config={
+                "model_type": "qwen3_5_text",
+                "rope_parameters": {
+                    "rope_type": "default",
+                    "mrope_section": [11, 11, 10],
+                },
+            },
+            vision_config={},
+        )
+        with patch.object(
+            minicpmv.MiniCPMV4_6,
+            "__init__",
+            lambda self, **kwargs: nn.Module.__init__(self),
+        ):
+            model = minicpmv.MiniCPMV4_7(config=config)
+        model.llm = model.lm_head = None
+        model.logits_processor = lambda input_ids, hidden, lm_head, batch: hidden
+        return model
+
+    def _backbone_positions(self, positions, forward_batch):
+        with patch.object(
+            minicpmv, "general_mm_embed_routine", lambda **kwargs: kwargs["positions"]
+        ):
+            return self._model()(
+                input_ids=torch.zeros_like(positions[-1]),
+                positions=positions,
+                forward_batch=forward_batch,
+            )
+
+    def _canvas_request(self):
+        processor = MiniCPMV4_7MultimodalProcessor.__new__(
+            MiniCPMV4_7MultimodalProcessor
+        )
+        processor.canvas_token_ids = dict(SPECIAL_IDS)
+        return processor.compute_mrope_positions(
+            self.INPUT_IDS, [_item(Modality.IMAGE, 3, (4, 4))]
+        )
+
+    def test_prefill_uses_canvas_positions(self):
+        canvas, _ = self._canvas_request()
+        sequential = torch.arange(len(self.INPUT_IDS))
+
+        received = self._backbone_positions(
+            sequential, SimpleNamespace(mrope_positions=canvas)
+        )
+
+        self.assertIs(received, canvas)
+
+    def test_decode_continues_past_the_canvas(self):
+        canvas, delta = self._canvas_request()
+        seq_len = len(self.INPUT_IDS) + 1
+        forward_batch = SimpleNamespace(
+            seq_lens=torch.tensor([seq_len]), seq_lens_cpu=torch.tensor([seq_len])
+        )
+        batch = SimpleNamespace(
+            multimodal_inputs=[
+                SimpleNamespace(mrope_positions=None, mrope_position_delta=delta)
+            ]
+        )
+        exec_config = SimpleNamespace(
+            deterministic=SimpleNamespace(rl_on_policy_target=None)
+        )
+        with patch.object(forward_batch_info, "get_exec", lambda: exec_config):
+            ForwardBatch._compute_mrope_positions_decode(
+                forward_batch, SimpleNamespace(device="cpu"), batch
+            )
+
+        received = self._backbone_positions(torch.tensor([seq_len - 1]), forward_batch)
+
+        self.assertEqual(received.tolist(), [[canvas.max().item() + 1]] * 3)
+
+
 class TestCanvasTokenIds(CustomTestCase):
     def test_missing_config_ids_are_filled_from_a_byte_level_tokenizer(self):
         # Byte-level BPE stores "\n" as a different vocab entry, so a literal
@@ -154,15 +246,6 @@ class TestCanvasTokenIds(CustomTestCase):
 
 
 class TestPerRequestProcessorKwargs(CustomTestCase):
-    def _processor(self):
-        processor = MiniCPMV4_7MultimodalProcessor.__new__(
-            MiniCPMV4_7MultimodalProcessor
-        )
-        processor.image_processor = MiniCPMV4_6ImageProcessor(
-            max_slice_nums=9, patch_size=14, downsample_mode="16x"
-        )
-        return processor
-
     def test_hf_style_modality_keys_are_flattened(self):
         flat = _parse_mm_processor_kwargs(
             {"images_kwargs": {"max_slice_nums": 1}, "downsample_mode": "4x"}
@@ -175,7 +258,7 @@ class TestPerRequestProcessorKwargs(CustomTestCase):
         self.assertEqual(_parse_mm_processor_kwargs("downsample_mode=4x"), {})
 
     def test_absent_or_invalid_kwargs_keep_the_default(self):
-        processor = self._processor()
+        processor = _default_processor()
 
         for kwargs in (None, {}, {"downsample_mode": "8x", "max_slice_nums": "x"}):
             with self.subTest(kwargs=kwargs):
@@ -187,7 +270,7 @@ class TestPerRequestProcessorKwargs(CustomTestCase):
                 )
 
     def test_kwargs_build_a_request_scoped_image_processor(self):
-        processor = self._processor()
+        processor = _default_processor()
 
         image_processor = processor._image_processor_for(
             SimpleNamespace(
@@ -202,24 +285,45 @@ class TestPerRequestProcessorKwargs(CustomTestCase):
         self.assertEqual(processor.image_processor.downsample_mode, "16x")
         self.assertEqual(processor.image_processor.max_slice_nums, 9)
 
-    def test_request_scoped_settings_change_the_cache_identity(self):
-        # The pixels are identical under 16x and 4x, but the embeddings are not;
-        # sharing a pad value would let the radix cache reuse 16x state for 4x.
-        processor = self._processor()
-        input_ids = torch.tensor([IM_START, PAD, PAD, IM_END])
-        patch = ([torch.ones(3, 14, 28)], [torch.tensor([1, 2], dtype=torch.int32)])
-        pad_values = []
-        for kwargs in ({}, {"downsample_mode": "4x"}, {"max_slice_nums": 4}):
-            image_processor = processor._image_processor_for(
-                SimpleNamespace(mm_processor_kwargs=kwargs)
-            )
-            (item,) = processor._build_items(
-                input_ids, PAD, patch, Modality.IMAGE, image_processor
-            )
-            item.set_pad_value()
-            pad_values.append(item.pad_value)
 
-        self.assertEqual(len(set(pad_values)), 3)
+class TestCacheIdentity(CustomTestCase):
+    # Pad values key the radix and embedding caches; requests whose pixels match
+    # but whose embeddings or M-RoPE positions differ must not share them.
+
+    def _pad_values(self, image, mm_processor_kwargs):
+        processor = _default_processor()
+        image_processor = processor._image_processor_for(
+            SimpleNamespace(mm_processor_kwargs=mm_processor_kwargs)
+        )
+        pvs, tss, grids = processor._preprocess_images([image], image_processor)
+        input_ids = torch.tensor([IM_START, PAD, IM_END] * len(pvs[0]))
+        items = processor._build_items(
+            input_ids,
+            PAD,
+            [(pvs[0], tss[0], [grids[0]])],
+            Modality.IMAGE,
+            image_processor,
+        )
+        for item in items:
+            item.set_pad_value()
+        return [item.pad_value for item in items]
+
+    def test_transposed_images_do_not_share_cache_identity(self):
+        # Both pack to the same pixel tensor; only the 16x64 vs 64x16 grid differs.
+        for kwargs in ({}, {"downsample_mode": "4x"}, {"max_slice_nums": 1}):
+            with self.subTest(kwargs=kwargs):
+                self.assertNotEqual(
+                    self._pad_values(Image.new("RGB", (896, 224)), kwargs),
+                    self._pad_values(Image.new("RGB", (224, 896)), kwargs),
+                )
+
+    def test_downsample_mode_changes_cache_identity(self):
+        image = Image.new("RGB", (448, 448))
+
+        self.assertNotEqual(
+            self._pad_values(image, {}),
+            self._pad_values(image, {"downsample_mode": "4x"}),
+        )
 
 
 if __name__ == "__main__":

@@ -132,16 +132,13 @@ def _reshape_by_patch(image: torch.Tensor, patch_size: int) -> torch.Tensor:
     return patches
 
 
-def _flatten_patches(
-    per_item_pv: List[List[torch.Tensor]],
-    per_item_ts: List[List[List[int]]],
-) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
-    """Per-item per-patch -> flat per-patch (source first, slices row-major)."""
-    flat_pv = list(chain.from_iterable(per_item_pv))
-    flat_ts = [
-        torch.tensor(ts, dtype=torch.int32) for ts in chain.from_iterable(per_item_ts)
-    ]
-    return flat_pv, flat_ts
+def _layout_namespace(
+    downsample_mode: str, tgt_sizes: List[List[int]], grids: List[List[int]]
+) -> str:
+    # Pixels alone omit the layout: a transposed or differently sliced image can
+    # pack to the same tensor while its embeddings and M-RoPE positions differ.
+    layout = f"{downsample_mode}|{tgt_sizes}|{grids}"
+    return CONTENT_HASH_PREFIX + hashlib.sha256(layout.encode()).hexdigest()
 
 
 class MiniCPMV4_6ImageProcessor:
@@ -488,20 +485,27 @@ class MiniCPMV4_6MultimodalProcessor(BaseMultimodalProcessor):
             self._build_items(
                 input_ids_tensor,
                 self.image_token_id,
-                _flatten_patches(img_per_pv, img_per_ts),
+                [
+                    (pvs, tss, [grid])
+                    for pvs, tss, grid in zip(img_per_pv, img_per_ts, img_grids)
+                ],
                 Modality.IMAGE,
                 image_processor,
             )
         )
-        # Video: extra ``per-frame -> per-patch`` nesting; pre-flatten one
-        # level so ``_flatten_patches`` sees the same shape as image.
-        vid_pv_flat = [list(chain.from_iterable(v)) for v in vid_per_pv]
-        vid_ts_flat = [list(chain.from_iterable(v)) for v in vid_per_ts]
+        # Video: one media unit per video, its frames' patches flattened in order.
         mm_items.extend(
             self._build_items(
                 input_ids_tensor,
                 self.video_token_id,
-                _flatten_patches(vid_pv_flat, vid_ts_flat),
+                [
+                    (
+                        list(chain.from_iterable(pvs)),
+                        list(chain.from_iterable(tss)),
+                        grids,
+                    )
+                    for pvs, tss, grids in zip(vid_per_pv, vid_per_ts, vid_grids)
+                ],
                 Modality.VIDEO,
                 image_processor,
             )
@@ -558,42 +562,32 @@ class MiniCPMV4_6MultimodalProcessor(BaseMultimodalProcessor):
         self,
         input_ids: torch.Tensor,
         pad_token_id: int,
-        flat: Tuple[List[torch.Tensor], List[torch.Tensor]],
+        media: List[Tuple[List[torch.Tensor], List[List[int]], List[List[int]]]],
         modality: Modality,
         image_processor: MiniCPMV4_6ImageProcessor,
     ) -> List[MultimodalDataItem]:
-        flat_pv, flat_ts = flat
+        """``media``: per image / video, its patches' pixel values, tgt sizes
+        and slice grids (source patch first, slices row-major)."""
+        patches = []
+        for pvs, tss, grids in media:
+            namespace = _layout_namespace(image_processor.downsample_mode, tss, grids)
+            patches.extend((pv, ts, namespace) for pv, ts in zip(pvs, tss))
         runs = self.get_mm_items_offset(input_ids, pad_token_id)
-        if len(runs) != len(flat_pv):
+        if len(runs) != len(patches):
             raise RuntimeError(
                 f"[minicpmv4_6] {modality} pad run / feature count mismatch: "
-                f"{len(runs)} runs vs {len(flat_pv)} patches"
+                f"{len(runs)} runs vs {len(patches)} patches"
             )
-        items = [
+        return [
             MultimodalDataItem(
                 feature=[pv],
+                hash=resolve_multimodal_item_hash(feature=[pv], namespace=namespace),
                 offsets=[run],
                 model_specific_data={
-                    "tgt_size": [ts],
+                    "tgt_size": [torch.tensor(ts, dtype=torch.int32)],
                     "use_vit_merger": image_processor.use_vit_merger,
                 },
                 modality=modality,
             )
-            for run, pv, ts in zip(runs, flat_pv, flat_ts)
+            for run, (pv, ts, namespace) in zip(runs, patches)
         ]
-        if image_processor is not self.image_processor:
-            # Pixels don't encode the downsample mode or slice grid, which change
-            # the embeddings and positions; key the radix / embedding caches on them.
-            settings = (
-                f"{image_processor.downsample_mode}:{image_processor.max_slice_nums}"
-            )
-            namespace = (
-                CONTENT_HASH_PREFIX + hashlib.sha256(settings.encode()).hexdigest()
-            )
-            for item in items:
-                item.set_hash(
-                    resolve_multimodal_item_hash(
-                        feature=item.feature, namespace=namespace
-                    )
-                )
-        return items
