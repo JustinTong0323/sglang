@@ -129,6 +129,30 @@ class TestMiniCPMV4_7MRoPEPositions(CustomTestCase):
         self.assertEqual(delta.item(), 0)
 
 
+class TestCanvasTokenIds(CustomTestCase):
+    def test_missing_config_ids_are_filled_from_a_byte_level_tokenizer(self):
+        # Byte-level BPE stores "\n" as a different vocab entry, so a literal
+        # lookup misses it; ids pinned in the config must still win.
+        processor = MiniCPMV4_7MultimodalProcessor.__new__(
+            MiniCPMV4_7MultimodalProcessor
+        )
+        processor.image_start_id = processor.image_end_id = 1
+        processor.slice_start_id = processor.slice_end_id = 1
+        processor.tokenizer = SimpleNamespace(
+            convert_tokens_to_ids=lambda tokens: [None] * len(tokens),
+            encode=lambda text, add_special_tokens: [NEWLINE] if text == "\n" else [],
+        )
+        hf_config = SimpleNamespace(
+            mrope_mode="canvas",
+            image_start_id=IM_START,
+            image_end_id=IM_END,
+            slice_start_id=SLICE_START,
+            slice_end_id=SLICE_END,
+        )
+
+        self.assertEqual(processor._resolve_canvas_token_ids(hf_config), SPECIAL_IDS)
+
+
 class TestPerRequestProcessorKwargs(CustomTestCase):
     def _processor(self):
         processor = MiniCPMV4_7MultimodalProcessor.__new__(
@@ -177,6 +201,25 @@ class TestPerRequestProcessorKwargs(CustomTestCase):
         # Requests are preprocessed concurrently; the shared default must not move.
         self.assertEqual(processor.image_processor.downsample_mode, "16x")
         self.assertEqual(processor.image_processor.max_slice_nums, 9)
+
+    def test_request_scoped_settings_change_the_cache_identity(self):
+        # The pixels are identical under 16x and 4x, but the embeddings are not;
+        # sharing a pad value would let the radix cache reuse 16x state for 4x.
+        processor = self._processor()
+        input_ids = torch.tensor([IM_START, PAD, PAD, IM_END])
+        patch = ([torch.ones(3, 14, 28)], [torch.tensor([1, 2], dtype=torch.int32)])
+        pad_values = []
+        for kwargs in ({}, {"downsample_mode": "4x"}, {"max_slice_nums": 4}):
+            image_processor = processor._image_processor_for(
+                SimpleNamespace(mm_processor_kwargs=kwargs)
+            )
+            (item,) = processor._build_items(
+                input_ids, PAD, patch, Modality.IMAGE, image_processor
+            )
+            item.set_pad_value()
+            pad_values.append(item.pad_value)
+
+        self.assertEqual(len(set(pad_values)), 3)
 
 
 if __name__ == "__main__":

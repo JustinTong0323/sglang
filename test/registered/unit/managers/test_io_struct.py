@@ -735,6 +735,20 @@ class TestGenerateReqInputNormalization(CustomTestCase):
             ["batch_0", "batch_1", "batch_2", "batch_3"],
         )
 
+    def test_mm_processor_kwargs_reach_every_sub_request(self):
+        req = GenerateReqInput(
+            text=["Hello", "World"],
+            rid="batch",
+            sampling_params={"n": 2},
+            mm_processor_kwargs={"downsample_mode": "4x"},
+        )
+        req.normalize_batch_and_arguments()
+
+        self.assertEqual(
+            [req[i].mm_processor_kwargs for i in range(4)],
+            [{"downsample_mode": "4x"}] * 4,
+        )
+
     def test_audio_data_handling(self):
         """Test handling of audio_data."""
         req = copy.deepcopy(self.base_req)

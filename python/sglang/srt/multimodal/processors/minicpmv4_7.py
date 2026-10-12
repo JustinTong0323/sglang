@@ -292,6 +292,15 @@ class MiniCPMV4_7MultimodalProcessor(MiniCPMV4_6MultimodalProcessor):
         ):
             return None
 
+        # Byte-level BPE vocabularies store "\n" as "\u010a", so encode it.
+        newline_ids = self.tokenizer.encode("\n", add_special_tokens=False)
+        from_tokenizer = {
+            "im_start_id": self.image_start_id,
+            "im_end_id": self.image_end_id,
+            "slice_start_id": self.slice_start_id,
+            "slice_end_id": self.slice_end_id,
+            "newline_id": newline_ids[0] if len(newline_ids) == 1 else None,
+        }
         token_ids = {
             "im_start_id": getattr(hf_config, "image_start_id", None),
             "im_end_id": getattr(hf_config, "image_end_id", None),
@@ -299,33 +308,29 @@ class MiniCPMV4_7MultimodalProcessor(MiniCPMV4_6MultimodalProcessor):
             "slice_end_id": getattr(hf_config, "slice_end_id", None),
             "newline_id": getattr(hf_config, "newline_id", None),
         }
+        token_ids = {
+            k: from_tokenizer[k] if v is None else v for k, v in token_ids.items()
+        }
         if None in token_ids.values():
-            token_ids = {
-                "im_start_id": self.image_start_id,
-                "im_end_id": self.image_end_id,
-                "slice_start_id": self.slice_start_id,
-                "slice_end_id": self.slice_end_id,
-                "newline_id": self._token_id("\n"),
-            }
-        if any(token_ids[k] is None for k in _STRUCTURAL_KEYS):
-            logger.warning(
-                "Canvas M-RoPE disabled: structural token ids missing (%s)", token_ids
-            )
+            logger.warning("Canvas M-RoPE disabled: token ids missing (%s)", token_ids)
             return None
         return {k: int(v) for k, v in token_ids.items()}
 
     def compute_mrope_positions(self, input_ids, mm_items):
-        if self.canvas_token_ids is None:
-            return None, None
-
         ids = torch.tensor(list(input_ids), dtype=torch.long)
+        positions = self._canvas_positions(ids, mm_items)
+        # The Qwen3.5 backbone reads mrope_positions for every multimodal request.
+        if positions is None:
+            positions = _sequential_positions(len(ids))
+        return positions, _rope_delta(positions)
+
+    def _canvas_positions(self, ids, mm_items) -> Optional[torch.Tensor]:
+        if self.canvas_token_ids is None:
+            return None
         # Items are appended images-first; the canvas walk needs them in prompt order.
         ordered = sorted(mm_items, key=lambda item: item.offsets[0][0])
         target_sizes = [torch.as_tensor(item.tgt_size[0]).tolist() for item in ordered]
         image_bounds = build_image_bounds(ids, self.canvas_token_ids)
-
-        # The Qwen3.5 backbone reads mrope_positions for every multimodal request,
-        # so an unusable layout degrades to sequential positions instead of None.
         if len(image_bounds) != len(target_sizes):
             logger.warning(
                 "Canvas M-RoPE: %d image bounds vs %d patch grids; "
@@ -333,12 +338,10 @@ class MiniCPMV4_7MultimodalProcessor(MiniCPMV4_6MultimodalProcessor):
                 len(image_bounds),
                 len(target_sizes),
             )
-            positions = _sequential_positions(len(ids))
-        else:
-            positions = compute_canvas_positions(
-                ids, image_bounds, target_sizes, self.canvas_token_ids
-            )
-        return positions, _rope_delta(positions)
+            return None
+        return compute_canvas_positions(
+            ids, image_bounds, target_sizes, self.canvas_token_ids
+        )
 
 
 __all__ = ["MiniCPMV4_7MultimodalProcessor"]

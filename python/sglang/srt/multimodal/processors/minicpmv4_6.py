@@ -17,6 +17,7 @@ module collapses to a thin wrapper that delegates to it.
 
 from __future__ import annotations
 
+import hashlib
 import math
 from itertools import chain
 from typing import Any, List, Optional, Sequence, Tuple, Union
@@ -31,6 +32,10 @@ from sglang.srt.managers.schedule_batch import (
     MultimodalProcessorOutput,
 )
 from sglang.srt.models.minicpmv import MiniCPMV4_6ForConditionalGeneration
+from sglang.srt.multimodal.cache import (
+    CONTENT_HASH_PREFIX,
+    resolve_multimodal_item_hash,
+)
 from sglang.srt.multimodal.processors.base_processor import (
     BaseMultimodalProcessor,
     MultimodalSpecialTokens,
@@ -564,7 +569,7 @@ class MiniCPMV4_6MultimodalProcessor(BaseMultimodalProcessor):
                 f"[minicpmv4_6] {modality} pad run / feature count mismatch: "
                 f"{len(runs)} runs vs {len(flat_pv)} patches"
             )
-        return [
+        items = [
             MultimodalDataItem(
                 feature=[pv],
                 offsets=[run],
@@ -576,3 +581,19 @@ class MiniCPMV4_6MultimodalProcessor(BaseMultimodalProcessor):
             )
             for run, pv, ts in zip(runs, flat_pv, flat_ts)
         ]
+        if image_processor is not self.image_processor:
+            # Pixels don't encode the downsample mode or slice grid, which change
+            # the embeddings and positions; key the radix / embedding caches on them.
+            settings = (
+                f"{image_processor.downsample_mode}:{image_processor.max_slice_nums}"
+            )
+            namespace = (
+                CONTENT_HASH_PREFIX + hashlib.sha256(settings.encode()).hexdigest()
+            )
+            for item in items:
+                item.set_hash(
+                    resolve_multimodal_item_hash(
+                        feature=item.feature, namespace=namespace
+                    )
+                )
+        return items

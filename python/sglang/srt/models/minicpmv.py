@@ -1652,6 +1652,32 @@ def _v4_7_to_v4_6_weight_name(name: str) -> str:
 
 
 class MiniCPMV4_7(MiniCPMV4_6):
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ):
+        super().__init__(config=config, quant_config=quant_config, prefix=prefix)
+        rope_parameters = config.text_config.rope_parameters or {}
+        self.is_mrope_enabled = "mrope_section" in rope_parameters
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor,
+        forward_batch: ForwardBatch,
+        **kwargs: Any,
+    ) -> torch.Tensor:
+        if self.is_mrope_enabled:
+            positions = forward_batch.mrope_positions
+        return super().forward(
+            input_ids=input_ids,
+            positions=positions,
+            forward_batch=forward_batch,
+            **kwargs,
+        )
+
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         return super().load_weights(
             (_v4_7_to_v4_6_weight_name(name), weight) for name, weight in weights
