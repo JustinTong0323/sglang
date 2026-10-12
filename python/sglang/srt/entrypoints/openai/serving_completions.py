@@ -140,7 +140,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
             custom_labels=custom_labels,
             custom_logit_processor=request.custom_logit_processor,
             images_config=getattr(request, "images_config", None),
-            mm_processor_kwargs=getattr(request, "mm_processor_kwargs", None),
+            mm_processor_kwargs=request.mm_processor_kwargs,
         )
 
         return adapted_request, request

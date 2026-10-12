@@ -54,16 +54,14 @@ class MiniCPMV4_6VisionConfig(PretrainedConfig):
 
 
 def _resolve_text_config_class(model_type: Optional[str]) -> type:
-    """``model_type`` -> registered config class. sglang's ``Qwen3_5TextConfig``
-    wins over the stock entry when both exist (it carries ``layers_block_type``
-    etc. that the model code reads); ``AutoConfig.register`` doesn't replace
-    existing entries so we have to short-circuit here. Note that
+    """``model_type`` -> registered config class. sglang's Qwen3.5 dense / MoE
+    text configs win over the stock entries when both exist (they carry
+    ``layers_block_type`` etc. that the model code reads);
+    ``AutoConfig.register`` doesn't replace existing entries so we have to
+    short-circuit here. Note that
     ``CONFIG_MAPPING.get`` returns ``None`` even on hit — go through
     ``__getitem__`` to trigger the lazy class import.
     """
-    # transformers ships both backbone configs natively, so the registration
-    # above never takes effect for them and the sglang classes have to win
-    # explicitly — the dense and MoE backbones are distinct model_types.
     for cls in (Qwen3_5TextConfig, Qwen3_5MoeTextConfig):
         if model_type == cls.model_type:
             return cls
