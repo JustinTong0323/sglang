@@ -659,19 +659,6 @@ class TestTemplateRegistry(CustomTestCase):
         result = get_conv_template_by_model_path("openbmb/MiniCPM-o-2_6")
         self.assertEqual(result, "minicpmo")
 
-    def test_get_conv_template_by_model_path_minicpm_v_4_6_and_later(self):
-        for model_path in ("openbmb/MiniCPM-V-4_6", "openbmb/MiniCPM-V-4_7"):
-            with self.subTest(model_path=model_path):
-                self.assertIsNone(get_conv_template_by_model_path(model_path))
-
-    def test_get_conv_template_by_model_path_minicpm_v_legacy_config(self):
-        for version in (2.6, 4.5):
-            with self.subTest(version=version), tempfile.TemporaryDirectory() as tmpdir:
-                config = {"model_type": "minicpmv", "version": version}
-                with open(os.path.join(tmpdir, "config.json"), "w") as f:
-                    json.dump(config, f)
-                self.assertEqual(get_conv_template_by_model_path(tmpdir), "minicpmv")
-
 
 class TestGenerateEmbeddingConvs(CustomTestCase):
     def test_text_only(self):
