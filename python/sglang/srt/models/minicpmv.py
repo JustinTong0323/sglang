@@ -1836,7 +1836,8 @@ class MiniCPMV:
 # ``__name__`` — resolves the canonical 4.6 architecture name through
 # ``MiniCPMV``'s version-dispatch factory.
 class MiniCPMV4_6ForConditionalGeneration(MiniCPMV):
-    # Only for the quant config: its ``ignore`` list uses HF module names, while
+    # Only for the quant config: its ``ignore`` list names modules in either the
+    # HF or the native 4.7 layout (see _V4_7_WEIGHT_PREFIXES), while
     # load_weights remaps checkpoint names itself.
     hf_to_sglang_mapper = WeightsMapper(
         orig_to_new_substr={"self_attn.out_proj": "self_attn.proj"},
@@ -1844,7 +1845,11 @@ class MiniCPMV4_6ForConditionalGeneration(MiniCPMV):
             "model.language_model.": "llm.",
             "model.vision_tower.": "vpm.",
             "model.merger.": "resampler.",
+            "llm.model.": "llm.",
+            "llm.lm_head": "lm_head",
+            "vit_merger.": "vpm.vit_merger.",
         },
+        orig_to_new_suffix={".mlp.0": ".linear_1", ".mlp.2": ".linear_2"},
     )
     packed_modules_mapping = Qwen3_5ForCausalLM.packed_modules_mapping
 
