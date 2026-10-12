@@ -72,6 +72,7 @@ from sglang.srt.models.minicpmv_vit import (
 from sglang.srt.models.qwen2 import Qwen2Config, Qwen2ForCausalLM
 from sglang.srt.models.qwen3 import Qwen3Config, Qwen3ForCausalLM
 from sglang.srt.models.qwen3_5 import Qwen3_5ForCausalLM, Qwen3_5MoeForCausalLM
+from sglang.srt.models.utils import WeightsMapper
 from sglang.srt.utils import add_prefix, flatten_nested_list, get_device
 
 RawImageType = Union[Image.Image, torch.Tensor]
@@ -1835,10 +1836,20 @@ class MiniCPMV:
 # ``__name__`` — resolves the canonical 4.6 architecture name through
 # ``MiniCPMV``'s version-dispatch factory.
 class MiniCPMV4_6ForConditionalGeneration(MiniCPMV):
-    pass
+    # Only for the quant config: its ``ignore`` list uses HF module names, while
+    # load_weights remaps checkpoint names itself.
+    hf_to_sglang_mapper = WeightsMapper(
+        orig_to_new_substr={"self_attn.out_proj": "self_attn.proj"},
+        orig_to_new_prefix={
+            "model.language_model.": "llm.",
+            "model.vision_tower.": "vpm.",
+            "model.merger.": "resampler.",
+        },
+    )
+    packed_modules_mapping = Qwen3_5ForCausalLM.packed_modules_mapping
 
 
-class MiniCPMV4_7ForConditionalGeneration(MiniCPMV):
+class MiniCPMV4_7ForConditionalGeneration(MiniCPMV4_6ForConditionalGeneration):
     pass
 
 
