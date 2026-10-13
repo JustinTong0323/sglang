@@ -1719,8 +1719,8 @@ class MiniCPMV:
 
     @staticmethod
     def shared_experts_fusion_disable_reason(hf_config, quant_config):
-        # 4.6 nests a Qwen3.5 LLM under ``text_config``; every other version
-        # builds a dense LLM, for which the Qwen3.5 gate answers None.
+        # 4.6/4.7 nest a Qwen3.5 config (dense or MoE) under ``text_config``;
+        # older versions are dense, for which the Qwen3.5 gate answers None.
         return Qwen3_5ForCausalLM.shared_experts_fusion_disable_reason(
             getattr(hf_config, "text_config", hf_config), quant_config
         )
