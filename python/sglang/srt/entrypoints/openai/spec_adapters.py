@@ -119,7 +119,12 @@ class SpecAdapterContext(msgspec.Struct, frozen=True, kw_only=True):
 def _build_inkling(ctx: SpecAdapterContext) -> SpecAdapter:
     from sglang.srt.entrypoints.openai.serving_inkling import InklingSpecAdapter
 
-    return InklingSpecAdapter(tokenizer=ctx.tokenizer)
+    return InklingSpecAdapter(
+        tokenizer=ctx.tokenizer,
+        reasoning_parser=ctx.reasoning_parser,
+        tool_call_parser=ctx.tool_call_parser,
+        chat_hooks=ctx.chat_hooks,
+    )
 
 
 _BUILDERS: dict[
