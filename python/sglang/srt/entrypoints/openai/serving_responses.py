@@ -584,7 +584,11 @@ class OpenAIServingResponses(OpenAIServingChat):
                 processed_messages is not None
                 and processed_messages.uses_response_template
             ):
-                self._set_response_parser_context(request, adapted_request)
+                self._set_response_parser_context(
+                    request,
+                    adapted_request,
+                    tool_call_constraint=processed_messages.tool_call_constraint,
+                )
 
             # Store the input messages
             persist = self.enable_response_store and bool(request.store)
@@ -1057,9 +1061,8 @@ class OpenAIServingResponses(OpenAIServingChat):
                 request=request,
                 tokenizer=self.tokenizer_manager.tokenizer,
                 tool_call_parser_active=bool(
-                    chat_tools
-                    and self.tool_call_parser
-                    and request.tool_choice != "none"
+                    self.tool_call_parser
+                    and self._tool_parsing_active(request, chat_tools)
                 ),
             )
             reasoning_content, content = reasoning_parser.parse_non_stream(final_output)
@@ -1088,9 +1091,8 @@ class OpenAIServingResponses(OpenAIServingChat):
         detector_owns_format = False
         if (
             content
-            and chat_tools
             and self.tool_call_parser
-            and request.tool_choice != "none"
+            and self._tool_parsing_active(request, chat_tools)
         ):
             parser = FunctionCallParser(
                 chat_tools,
@@ -1180,6 +1182,14 @@ class OpenAIServingResponses(OpenAIServingChat):
         if last_items:
             output_items.extend(last_items)
         return output_items
+
+    @staticmethod
+    def _tool_parsing_active(request: ResponsesRequest, chat_tools: list) -> bool:
+        return bool(
+            chat_tools
+            and request.tool_choice != "none"
+            and not request._response_parser_json_response_format
+        )
 
     @staticmethod
     def _tool_parser_owns_format(parser: FunctionCallParser) -> bool:
@@ -2022,7 +2032,7 @@ class OpenAIServingResponses(OpenAIServingChat):
         tool_choice = request.effective_tool_choice()
         is_required = tool_choice == "required" or isinstance(tool_choice, dict)
         tool_parser: Optional[Union[FunctionCallParser, JsonArrayParser]] = None
-        if chat_tools and request.tool_choice != "none":
+        if self._tool_parsing_active(request, chat_tools):
             detector_owns_format = False
             if self.tool_call_parser:
                 probe = FunctionCallParser(
