@@ -65,6 +65,7 @@ from pydantic import (
     Field,
     PrivateAttr,
     StrictBool,
+    StrictInt,
     field_serializer,
     field_validator,
     model_serializer,
@@ -931,13 +932,13 @@ class ChatCompletionRequest(PDRoutingFields):
     logit_bias: Optional[Dict[str, float]] = None
     logprobs: bool = False
     top_logprobs: Optional[int] = Field(default=None, ge=0)
-    max_tokens: Optional[int] = Field(
+    max_tokens: Optional[StrictInt] = Field(
         default=None,
         ge=0,
         deprecated="max_tokens is deprecated in favor of the max_completion_tokens field",
         description="The maximum number of tokens that can be generated in the chat completion. ",
     )
-    max_completion_tokens: Optional[int] = Field(
+    max_completion_tokens: Optional[StrictInt] = Field(
         default=None,
         ge=0,
         description="The maximum number of completion tokens for a chat completion request, "
